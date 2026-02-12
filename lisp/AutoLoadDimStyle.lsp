@@ -7,8 +7,8 @@
 ;;; 2. In den AutoCAD Support-Ordner kopieren
 ;;; 3. AutoCAD neu starten
 ;;;
-;;; Version: 2.2.1
-;;; Datum: 2026-02-09
+;;; Version: 2.3.0
+;;; Datum: 2026-02-12
 
 ;;; ============================================================================
 ;;; KONFIGURATION
@@ -148,7 +148,32 @@
 ;;; ============================================================================
 
 ;;; Lädt alle Bemaßungsstile aus konfigurierten Master-Dateien
-(defun c:LoadDimStyles ( / master-files loaded-count failed-count selected-file)
+(defun c:LoadDimStyles ( / *error* master-files loaded-count failed-count selected-file 
+                           old-cmdecho old-attreq)
+  
+  ;; Lokaler Error-Handler
+  (defun *error* (msg)
+    ;; ESC und ENTER unterdrücken
+    (if (not (member msg '("Function cancelled" "quit / exit abort")))
+      (progn
+        (princ "\n*** Fehler beim Laden der Bemaßungsstile ***")
+        (princ (strcat "\nFehlermeldung: " msg))
+      )
+    )
+    ;; Systemvariablen wiederherstellen
+    (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
+    (if old-attreq (setvar "ATTREQ" old-attreq))
+    (princ)
+  )
+  
+  ;; Systemvariablen sichern
+  (setq old-cmdecho (getvar "CMDECHO"))
+  (setq old-attreq (getvar "ATTREQ"))
+  
+  ;; Setzen für optimale Performance
+  (setvar "CMDECHO" 0)  ; Keine Command-Ausgaben
+  (setvar "ATTREQ" 0)   ; Keine Attribut-Dialoge
+  
   (setq loaded-count 0)
   (setq failed-count 0)
   
@@ -206,6 +231,10 @@
       (princ "\nKeine Master-Dateien konfiguriert.")
     )
   )
+  
+  ;; Cleanup (normales Ende)
+  (setvar "CMDECHO" old-cmdecho)
+  (setvar "ATTREQ" old-attreq)
   (princ)
 )
 
@@ -242,7 +271,20 @@
 )
 
 ;;; Löscht alle gespeicherten Pfade
-(defun c:ResetDimStylePath ( / )
+(defun c:ResetDimStylePath ( / *error*)
+  
+  ;; Lokaler Error-Handler
+  (defun *error* (msg)
+    ;; ESC und ENTER unterdrücken
+    (if (not (member msg '("Function cancelled" "quit / exit abort")))
+      (progn
+        (princ "\n*** Fehler beim Zurücksetzen der Pfade ***")
+        (princ (strcat "\nFehlermeldung: " msg))
+      )
+    )
+    (princ)
+  )
+  
   (if (findfile *config-file*)
     (progn
       (vl-file-delete *config-file*)
@@ -255,7 +297,20 @@
 )
 
 ;;; Fügt eine weitere Master-Datei hinzu
-(defun c:AddMasterFile ( / new-file master-files)
+(defun c:AddMasterFile ( / *error* new-file master-files)
+  
+  ;; Lokaler Error-Handler
+  (defun *error* (msg)
+    ;; ESC und ENTER unterdrücken
+    (if (not (member msg '("Function cancelled" "quit / exit abort")))
+      (progn
+        (princ "\n*** Fehler beim Hinzufügen der Master-Datei ***")
+        (princ (strcat "\nFehlermeldung: " msg))
+      )
+    )
+    (princ)
+  )
+  
   (princ "\n=== Master-Datei hinzufügen ===")
   
   ;; Zeige aktuelle Liste
@@ -285,7 +340,20 @@
 )
 
 ;;; Entfernt eine Master-Datei aus der Liste
-(defun c:RemoveMasterFile ( / master-files selection idx removed-file)
+(defun c:RemoveMasterFile ( / *error* master-files selection idx removed-file)
+  
+  ;; Lokaler Error-Handler
+  (defun *error* (msg)
+    ;; ESC und ENTER unterdrücken
+    (if (not (member msg '("Function cancelled" "quit / exit abort")))
+      (progn
+        (princ "\n*** Fehler beim Entfernen der Master-Datei ***")
+        (princ (strcat "\nFehlermeldung: " msg))
+      )
+    )
+    (princ)
+  )
+  
   (setq master-files (read-master-files))
   
   (if (null master-files)
@@ -344,7 +412,7 @@
 ;;; INITIALISIERUNG
 ;;; ============================================================================
 
-(princ "\nAutoLoadDimStyle.lsp v2.2.1 geladen.")
+(princ "\nAutoLoadDimStyle.lsp v2.3.0 geladen.")
 (princ "\nBefehle: LoadDimStyles, ShowDimStylePath, ResetDimStylePath")
 (princ "\n         AddMasterFile, RemoveMasterFile")
 (princ)
