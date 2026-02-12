@@ -1,0 +1,137 @@
+# ============================================================================
+# .gitignore für AutoCAD-Tools Repository
+# ============================================================================
+# Erstellt: 2026-02-12
+# Zweck: Ausschluss von AutoCAD-Dateien und temporären Files
+# ============================================================================
+
+# ============================================================================
+# AUTOCAD DATEIEN
+# ============================================================================
+
+# AutoCAD Zeichnungen (DWG)
+*.dwg
+*.DWG
+
+# AutoCAD Backups
+*.bak
+*.BAK
+*.dwl
+*.dwl2
+*.sv$
+
+# AutoCAD Temporary Files
+*.ac$
+*.dwk
+
+# AutoCAD Plot Files
+*.plt
+
+# AutoCAD Standards Files (optional - auskommentieren wenn du sie brauchst)
+# *.dws
+
+# AutoCAD Templates (optional - auskommentieren wenn du sie brauchst)
+# *.dwt
+
+
+# ============================================================================
+# AUTOCAD PROJEKT-DATEIEN
+# ============================================================================
+
+# AutoCAD Project Files
+*.apj
+
+# AutoCAD Log Files
+*.log
+
+
+# ============================================================================
+# VISUAL STUDIO CODE
+# ============================================================================
+
+.vscode/
+*.code-workspace
+
+
+# ============================================================================
+# WINDOWS
+# ============================================================================
+
+# Windows Thumbnails
+Thumbs.db
+ehthumbs.db
+
+# Windows Shortcuts
+*.lnk
+
+# Windows Folder Config
+Desktop.ini
+
+# Recycle Bin
+$RECYCLE.BIN/
+
+
+# ============================================================================
+# MACOS
+# ============================================================================
+
+.DS_Store
+.AppleDouble
+.LSOverride
+
+
+# ============================================================================
+# TEMPORÄRE DATEIEN
+# ============================================================================
+
+# Temp Files
+*.tmp
+*.temp
+*~
+
+# Swap Files
+*.swp
+*.swo
+
+
+# ============================================================================
+# BACKUP DATEIEN
+# ============================================================================
+
+# Backup Files (allgemein)
+*.backup
+*_BACKUP.*
+*_backup.*
+
+
+# ============================================================================
+# NODE.JS (falls du GitHub MCP nutzt)
+# ============================================================================
+
+node_modules/
+package-lock.json
+npm-debug.log*
+
+
+# ============================================================================
+# AUSNAHMEN (Dateien die TROTZDEM getrackt werden sollen)
+# ============================================================================
+
+# Template/Master DWG Dateien KÖNNEN getrackt werden (optional)
+# Auskommentieren um spezifische DWG-Templates zu erlauben:
+# !templates/**/*.dwg
+# !Master_*.dwg
+
+
+# ============================================================================
+# LOKALE KONFIGURATION
+# ============================================================================
+
+# Lokale Config-Dateien (falls vorhanden)
+config.local.*
+*.local
+
+
+# ============================================================================
+# ENDE
+# ============================================================================
