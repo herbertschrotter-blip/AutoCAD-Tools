@@ -12,7 +12,7 @@
 ;;; - Punkt wählen, Höhe eingeben
 ;;; - Block wird automatisch mit Attributen eingefügt
 ;;;
-;;; Version: 1.1.5
+;;; Version: 1.2.0
 ;;; Datum: 2026-02-13
 ;;; Autor: Herbert Schrotter
 
@@ -26,17 +26,27 @@
 ;;; Liest gespeicherten BlockImport.lsp Pfad aus Config
 (defun read-blockimport-path ( / file path version)
   (setq path nil)
-  (if (and (findfile *sethk-config-file*)
-           (setq file (open *sethk-config-file* "r")))
-    (progn
-      ;; Erste Zeile: Version
-      (setq version (read-line file))
-      ;; Zweite Zeile: Pfad
-      (setq path (read-line file))
-      (close file)
+  
+  ;; Prüfe ob Config-Datei existiert
+  (if (not (findfile *sethk-config-file*))
+    nil  ;; Datei existiert nicht
+    ;; Versuche Datei zu öffnen mit Error-Handling
+    (if (vl-catch-all-error-p
+          (setq file (vl-catch-all-apply 'open (list *sethk-config-file* "r"))))
+      (progn
+        (princ (strcat "\n*** Fehler beim Öffnen der Config-Datei: " *sethk-config-file* " ***"))
+        nil
+      )
+      (progn
+        ;; Erste Zeile: Version
+        (setq version (read-line file))
+        ;; Zweite Zeile: Pfad
+        (setq path (read-line file))
+        (close file)
+        path
+      )
     )
   )
-  path
 )
 
 ;;; Speichert BlockImport.lsp Pfad in Config
@@ -44,23 +54,36 @@
   ;; Erstelle Verzeichnis falls nicht vorhanden
   (setq dir (vl-filename-directory *sethk-config-file*))
   (if (not (vl-file-directory-p dir))
-    (vl-mkdir dir)
+    (if (vl-catch-all-error-p (vl-catch-all-apply 'vl-mkdir (list dir)))
+      (progn
+        (princ (strcat "\n*** Fehler beim Erstellen des Config-Verzeichnis: " dir " ***"))
+        nil
+      )
+      ;; Verzeichnis erfolgreich erstellt
+      T
+    )
   )
   
-  ;; Speichere Pfad
-  (if (setq file (open *sethk-config-file* "w"))
+  ;; Speichere Pfad mit Error-Handling
+  (if (vl-catch-all-error-p
+        (setq file (vl-catch-all-apply 'open (list *sethk-config-file* "w"))))
+    (progn
+      (princ (strcat "\n*** Fehler beim Schreiben der Config-Datei: " *sethk-config-file* " ***"))
+      nil
+    )
     (progn
       (write-line "1.0" file)
       (write-line filepath file)
       (close file)
       T
     )
-    nil
   )
 )
 
 ;; Lade gemeinsame Block-Import Bibliothek
 ;; Intelligente Pfad-Suche mit mehreren Fallbacks
+
+(setq default-start-dir nil)  ;; Lokale Variable für File-Dialog
 
 ;; Versuche gespeicherten Pfad zu laden
 (setq *blockimport-lib-path* (read-blockimport-path))
@@ -89,10 +112,24 @@
     (princ "\n*** BlockImport.lsp wird nicht im Support-Pfad gefunden ***")
     (princ "\nBitte wählen Sie die Datei lib/BlockImport.lsp aus...")
     
+    ;; Bestimme sinnvollen Start-Ordner
+    (setq default-start-dir
+      (cond
+        ;; 1. Zeichnungs-Verzeichnis
+        ((getvar "DWGPREFIX"))
+        
+        ;; 2. Benutzer-Dokumente
+        ((getenv "USERPROFILE"))
+        
+        ;; 3. Fallback: Leer
+        (T "")
+      )
+    )
+    
     ;; Öffne File-Dialog
     (if (setq *blockimport-lib-path* 
           (getfiled "BlockImport.lsp auswählen" 
-                    "D:/OneDrive/Dokumente/02 Arbeit/05 Vorlagen - Scripte/02_AutoCAD Tools/lisp/lib/" 
+                    default-start-dir
                     "lsp" 
                     0))
       (progn
@@ -123,16 +160,6 @@
 
 ;; Name des Höhenkoten-Blocks
 (setq *hoehenkote-blockname* "BLK_Hoehenkote")
-
-;; Standard-Pfad zur Block-Datei (wird von BlockImport.lsp verwendet)
-(if (not *default-block-file*)
-  (setq *default-block-file* "D:/OneDrive/Dokumente/02 Arbeit/05 Vorlagen - Scripte/02_AutoCAD Tools/templates/Blöcke/BLK_Hoehenkote.dwg")
-)
-
-;; Pfad zur Konfigurationsdatei (wird von BlockImport.lsp verwendet)
-(if (not *block-config-file*)
-  (setq *block-config-file* (strcat (getenv "APPDATA") "/AutoCAD/HoehenkoteBlockConfig.txt"))
-)
 
 ;;; ============================================================================
 ;;; GLOBALE VARIABLEN
@@ -381,7 +408,7 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nSetHoehenkote.lsp v1.1.5 geladen.")
+(princ "\nSetHoehenkote.lsp v1.2.0 geladen.")
 (princ "\nBefehle: SetHK - Höhenkote an Punkt setzen")
 (princ "\n         ShowBlockPath - Zeigt konfigurierten Block-Pfad")
 (princ "\n         ResetBlockPath - Löscht gespeicherten Pfad")
