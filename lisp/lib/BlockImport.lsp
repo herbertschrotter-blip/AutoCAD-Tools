@@ -11,7 +11,7 @@
 ;;; (load "lib/BlockImport.lsp")
 ;;; (ensure-block-available "BLK_Hoehenkote")
 ;;;
-;;; Version: 1.3.1
+;;; Version: 1.3.3
 ;;; Datum: 2026-02-13
 ;;; Autor: Herbert Schrotter
 
@@ -498,29 +498,54 @@
 )
 
 ;;; Fügt neuen Block hinzu
-(defun add-new-block ( / blockname filepath)
+(defun add-new-block ( / filepath blockname filename default-dir result)
   (princ "\n")
   (princ "\n=== Neuen Block hinzufügen ===")
   
-  ;; Block-Name abfragen
-  (setq blockname (getstring T "\nBlock-Name (z.B. BLK_MeinBlock): "))
+  ;; Bestimme sinnvollen Start-Ordner
+  (setq default-dir
+    (cond
+      ;; 1. Zeichnungs-Verzeichnis
+      ((getvar "DWGPREFIX"))
+      
+      ;; 2. Benutzer-Dokumente
+      ((getenv "USERPROFILE"))
+      
+      ;; 3. Fallback: Leer
+      (T "")
+    )
+  )
   
-  (if (or (null blockname) (eq blockname ""))
+  ;; Datei auswählen (ZUERST!)
+  (princ "\nBitte wählen Sie die DWG-Datei aus...")
+  (setq filepath (getfiled "Block-Datei wählen" default-dir "dwg" 0))
+  
+  (if (null filepath)
     (progn
       (princ "\nAbgebrochen.")
       nil
     )
     (progn
-      ;; Datei auswählen
-      (setq filepath (select-block-file blockname))
+      ;; Block-Name aus Dateinamen extrahieren (ohne .dwg)
+      (setq blockname (vl-filename-base filepath))
       
-      (if filepath
+      (princ (strcat "\nGewählte Datei: " filepath))
+      (princ (strcat "\nBlock-Name: " blockname))
+      
+      ;; Speichere Pfad in Config
+      (save-block-path blockname filepath)
+      
+      ;; Block sofort importieren (wie beim ersten Mal!)
+      (princ "\nImportiere Block...")
+      (setq result (ensure-block-available blockname))
+      
+      (if (car result)
         (progn
-          (princ (strcat "\n✓ Block hinzugefügt: " blockname))
+          (princ (strcat "\n✓ Block hinzugefügt und importiert: " blockname))
           T
         )
         (progn
-          (princ "\nAbgebrochen.")
+          (princ (strcat "\n*** FEHLER: Block konnte nicht importiert werden ***"))
           nil
         )
       )
@@ -723,7 +748,7 @@
 (vl-load-com)
 
 ;; Lade-Meldung
-(princ "\nBlockImport.lsp v1.3.1 geladen.")
+(princ "\nBlockImport.lsp v1.3.3 geladen.")
 (princ "\nBefehle: ManageBlockImport - Block-Verwaltung")
 (princ "\n         ShowBlockPath - Zeigt konfigurierte Pfade")
 (princ "\n         ResetBlockPath - Löscht alle Pfade")
