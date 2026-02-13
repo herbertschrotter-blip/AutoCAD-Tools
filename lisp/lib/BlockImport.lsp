@@ -11,7 +11,7 @@
 ;;; (load "lib/BlockImport.lsp")
 ;;; (ensure-block-available "BLK_Hoehenkote")
 ;;;
-;;; Version: 1.4.2
+;;; Version: 1.4.3
 ;;; Datum: 2026-02-13
 ;;; Autor: Herbert Schrotter
 
@@ -71,23 +71,19 @@
               
               ;; Context-Filterung
               (if context-prefix
-                ;; MIT Context: Nur "Context:BlockName" oder "*STANDARD:Context*" Einträge
-                (if (or 
-                      ;; Standard-Eintrag für diesen Context
-                      (eq key (strcat "*STANDARD:" *block-import-context* "*"))
-                      ;; Block-Eintrag für diesen Context
-                      (and (> (strlen key) (strlen context-prefix))
-                           (eq (substr key 1 (strlen context-prefix)) context-prefix)))
+                ;; MIT Context: Nur "Context:BlockName" Einträge (NICHT *STANDARD*)
+                (if (and (> (strlen key) (strlen context-prefix))
+                         (eq (substr key 1 (strlen context-prefix)) context-prefix)
+                         (not (wcmatch key "*STANDARD*")))
                   (progn
-                    ;; Bei Block-Einträgen: Entferne Context-Präfix
-                    (if (not (wcmatch key "*STANDARD*"))
-                      (setq key (substr key (+ (strlen context-prefix) 1)))
-                    )
+                    ;; Entferne Context-Präfix
+                    (setq key (substr key (+ (strlen context-prefix) 1)))
                     (setq result (cons (cons key value) result))
                   )
                 )
-                ;; OHNE Context: Nur Einträge ohne ":" (legacy Support)
-                (if (not (vl-string-search ":" key))
+                ;; OHNE Context: Nur Einträge ohne ":" (legacy Support, NICHT *STANDARD*)
+                (if (and (not (vl-string-search ":" key))
+                         (not (wcmatch key "*STANDARD*")))
                   (setq result (cons (cons key value) result))
                 )
               )
@@ -890,7 +886,7 @@
 (vl-load-com)
 
 ;; Lade-Meldung
-(princ "\nBlockImport.lsp v1.4.2 geladen.")
+(princ "\nBlockImport.lsp v1.4.3 geladen.")
 (princ "\nBefehle: ManageBlockImport - Block-Verwaltung")
 (princ "\n         ShowBlockPath - Zeigt konfigurierte Pfade")
 (princ "\n         ResetBlockPath - Löscht alle Pfade")
