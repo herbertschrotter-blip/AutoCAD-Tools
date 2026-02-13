@@ -7,7 +7,7 @@
 ;;; 3. AutoLoadDimStyle.lsp auswählen und laden
 ;;; 4. Optional: In Startup Suite hinzufügen für automatisches Laden
 ;;;
-;;; Version: 2.4.0
+;;; Version: 2.5.0
 ;;; Datum: 2026-02-12
 
 ;;; ============================================================================
@@ -33,21 +33,24 @@
   (if (and (findfile *config-file*)
            (setq file (open *config-file* "r")))
     (progn
-      ;; Erste Zeile: Version (für zukünftige Kompatibilität)
+      ;; Erste Zeile: Version
       (setq version (read-line file))
       
-      ;; Restliche Zeilen: Dateipfade
+      ;; Restliche Zeilen: Dateipfade (cons statt append für Performance)
       (while (setq line (read-line file))
         (if (and line (> (strlen line) 0))
-          (setq files (append files (list line)))
+          (setq files (cons line files))
         )
       )
       
-      ;; File-Handle immer schließen (auch bei Fehler)
+      ;; Reverse weil cons in umgekehrter Reihenfolge einfügt
+      (setq files (reverse files))
+      
+      ;; File-Handle immer schließen
       (if file 
         (progn
           (close file)
-          (setq file nil)  ; Handle freigeben
+          (setq file nil)
         )
       )
     )
@@ -67,18 +70,18 @@
   (if (setq file (open *config-file* "w"))
     (progn
       ;; Erste Zeile: Version
-      (write-line "2.4" file)
+      (write-line "2.5" file)
       
       ;; Dateipfade
       (foreach filepath filepaths
         (write-line filepath file)
       )
       
-      ;; File-Handle immer schließen (auch bei Fehler)
+      ;; File-Handle immer schließen
       (if file
         (progn
           (close file)
-          (setq file nil)  ; Handle freigeben
+          (setq file nil)
         )
       )
       T
@@ -176,7 +179,7 @@
 
 ;;; Lädt alle Bemaßungsstile aus konfigurierten Master-Dateien
 (defun c:LoadDimStyles ( / *error* master-files loaded-count failed-count selected-file 
-                           old-cmdecho old-attreq)
+                           old-cmdecho old-attreq file-count)
   
   ;; Lokaler Error-Handler
   (defun *error* (msg)
@@ -220,10 +223,13 @@
   ;; Lade alle konfigurierten Dateien
   (if master-files
     (progn
+      ;; Berechne Anzahl nur einmal (Performance)
+      (setq file-count (length master-files))
+      
       (if (not *dimstyle-silent-mode*)
         (progn
           (princ "\n=== Lade Bemaßungsstile ===")
-          (princ (strcat "\nAnzahl Master-Dateien: " (itoa (length master-files))))
+          (princ (strcat "\nAnzahl Master-Dateien: " (itoa file-count)))
         )
       )
       
@@ -262,6 +268,12 @@
   ;; Cleanup (normales Ende)
   (setvar "CMDECHO" old-cmdecho)
   (setvar "ATTREQ" old-attreq)
+  
+  ;; Memory freigeben
+  (setq master-files nil)
+  (setq old-cmdecho nil)
+  (setq old-attreq nil)
+  
   (princ)
 )
 
@@ -367,11 +379,16 @@
     )
     (princ "\n✗ Keine Datei ausgewählt.")
   )
+  
+  ;; Memory freigeben
+  (setq master-files nil)
+  (setq new-file nil)
+  
   (princ)
 )
 
 ;;; Entfernt eine Master-Datei aus der Liste
-(defun c:RemoveMasterFile ( / *error* master-files selection idx removed-file input)
+(defun c:RemoveMasterFile ( / *error* master-files selection idx removed-file input max-files)
   
   ;; Lokaler Error-Handler
   (defun *error* (msg)
@@ -396,6 +413,9 @@
       (princ "\n=== Master-Datei entfernen ===")
       (princ "\n\nKonfigurierte Dateien:")
       
+      ;; Berechne Anzahl nur einmal (Performance)
+      (setq max-files (length master-files))
+      
       ;; Liste anzeigen
       (setq idx 1)
       (foreach mf master-files
@@ -406,9 +426,10 @@
       ;; Auswahl mit Validierung und Wiederholung
       (setq selection nil)
       (while (not selection)
-        (princ "\n\nWelche Datei soll entfernt werden? (Nummer 1-")
-        (princ (itoa (length master-files)))
-        (princ ", 0 = Abbruch): ")
+        ;; Ein princ statt mehrere (effizienter)
+        (princ (strcat "\n\nWelche Datei soll entfernt werden? (Nummer 1-"
+                       (itoa max-files)
+                       ", 0 = Abbruch): "))
         (setq input (getint))
         
         (cond
@@ -416,22 +437,20 @@
           ((equal input 0)
             (progn
               (princ "\n✗ Abgebrochen.")
-              (setq selection 0)  ; Beende Schleife
+              (setq selection 0)
             )
           )
           ;; Gültige Nummer
           ((and input 
                 (>= input 1) 
-                (<= input (length master-files)))
-            (setq selection input)  ; OK, beende Schleife
+                (<= input max-files))
+            (setq selection input)
           )
           ;; Ungültige Eingabe
           (T
-            (progn
-              (princ "\n✗ Ungültige Auswahl. Bitte Zahl zwischen 1 und ")
-              (princ (itoa (length master-files)))
-              (princ " eingeben, oder 0 für Abbruch.")
-            )
+            (princ (strcat "\n✗ Ungültige Auswahl. Bitte Zahl zwischen 1 und "
+                           (itoa max-files)
+                           " eingeben, oder 0 für Abbruch."))
           )
         )
       )
@@ -444,6 +463,11 @@
           (princ (strcat "\n✓ Entfernt: " (vl-filename-base removed-file)))
         )
       )
+      
+      ;; Memory freigeben
+      (setq master-files nil)
+      (setq removed-file nil)
+      
       (princ)
     )
   )
@@ -470,7 +494,7 @@
 ;;; INITIALISIERUNG
 ;;; ============================================================================
 
-(princ "\nAutoLoadDimStyle.lsp v2.4.0 geladen.")
+(princ "\nAutoLoadDimStyle.lsp v2.5.0 geladen.")
 (princ "\nBefehle: LoadDimStyles, ShowDimStylePath, ResetDimStylePath")
 (princ "\n         AddMasterFile, RemoveMasterFile")
 (princ)
