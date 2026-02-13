@@ -11,7 +11,7 @@
 ;;; (load "lib/BlockImport.lsp")
 ;;; (ensure-block-available "BLK_Hoehenkote")
 ;;;
-;;; Version: 1.4.0
+;;; Version: 1.4.1
 ;;; Datum: 2026-02-13
 ;;; Autor: Herbert Schrotter
 
@@ -737,9 +737,11 @@
     
     (cond
       ((eq option "Liste")
+       (textscr)  ;; Aktiviere Textfenster
        (list-all-blocks)
        (princ "\nDrücken Sie eine beliebige Taste zum Fortfahren...")
-       (grread T))  ;; Wartet auf Tastendruck
+       (grread T)  ;; Wartet auf Tastendruck
+       (setq continue nil))  ;; Beende Menü nach Liste!
       
       ((eq option "Standard")
        (select-standard-block))
@@ -836,7 +838,7 @@
 (vl-load-com)
 
 ;; Lade-Meldung
-(princ "\nBlockImport.lsp v1.4.0 geladen.")
+(princ "\nBlockImport.lsp v1.4.1 geladen.")
 (princ "\nBefehle: ManageBlockImport - Block-Verwaltung")
 (princ "\n         ShowBlockPath - Zeigt konfigurierte Pfade")
 (princ "\n         ResetBlockPath - Löscht alle Pfade")
