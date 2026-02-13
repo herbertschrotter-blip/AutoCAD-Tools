@@ -11,7 +11,7 @@
 ;;; (load "lib/BlockImport.lsp")
 ;;; (ensure-block-available "BLK_Hoehenkote")
 ;;;
-;;; Version: 1.5.0
+;;; Version: 1.5.1
 ;;; Datum: 2026-02-13
 ;;; Autor: Herbert Schrotter
 
@@ -652,15 +652,55 @@
 )
 
 ;;; Entfernt Block aus Config
-(defun remove-block ( / all-paths block-list choice selected-block new-paths file dir standard-block was-standard remaining-blocks)
-  (setq all-paths (read-all-block-paths))
-  (setq standard-block (get-standard-block))
+(defun remove-block ( / all-paths block-list choice selected-block new-paths file dir standard-block was-standard remaining-blocks line pos key value version context-prefix selected-block-with-context)
+  ;; Lese ALLE Pfade UNGEFILTERT (wie in save-block-path)
+  (setq all-paths '())
+  (if (findfile *block-config-file*)
+    (if (not (vl-catch-all-error-p
+               (setq file (vl-catch-all-apply 'open (list *block-config-file* "r")))))
+      (progn
+        (setq version (read-line file))
+        (while (setq line (read-line file))
+          (if (setq pos (vl-string-search "=" line))
+            (progn
+              (setq key (substr line 1 pos))
+              (setq value (substr line (+ pos 2)))
+              (setq all-paths (cons (cons key value) all-paths))
+            )
+          )
+        )
+        (close file)
+      )
+    )
+  )
   
-  ;; Erstelle Liste ohne *STANDARD* Eintrag
+  (setq standard-block (get-standard-block))
+  (setq context-prefix
+    (if *block-import-context*
+      (strcat *block-import-context* ":")
+      nil
+    )
+  )
+  
+  ;; Erstelle Anzeige-Liste (OHNE Context-Präfix und OHNE *STANDARD*)
   (setq block-list '())
   (foreach pair all-paths
-    (if (not (wcmatch (car pair) "*STANDARD*"))
-      (setq block-list (cons pair block-list))
+    ;; Filtere für aktuellen Context
+    (if context-prefix
+      ;; MIT Context: Nur "Context:BlockName" (nicht *STANDARD*)
+      (if (and (> (strlen (car pair)) (strlen context-prefix))
+               (eq (substr (car pair) 1 (strlen context-prefix)) context-prefix)
+               (not (wcmatch (car pair) "*STANDARD*")))
+        (progn
+          ;; Entferne Context-Präfix für Anzeige
+          (setq block-list (cons (substr (car pair) (+ (strlen context-prefix) 1)) block-list))
+        )
+      )
+      ;; OHNE Context: Nur Einträge ohne ":" (nicht *STANDARD*)
+      (if (and (not (vl-string-search ":" (car pair)))
+               (not (wcmatch (car pair) "*STANDARD*")))
+        (setq block-list (cons (car pair) block-list))
+      )
     )
   )
   
@@ -674,12 +714,12 @@
       (princ "\n=== Block entfernen ===")
       (princ "\n")
       
-      ;; Zeige nummerierte Liste
+      ;; Zeige nummerierte Liste (OHNE Context-Präfix)
       (setq counter 1)
-      (foreach pair block-list
-        (princ (strcat "\n  " (itoa counter) ". " (car pair)))
+      (foreach blockname block-list
+        (princ (strcat "\n  " (itoa counter) ". " blockname))
         ;; Markiere Standard-Block
-        (if (eq (car pair) standard-block)
+        (if (eq blockname standard-block)
           (princ " [STANDARD]")
         )
         (setq counter (+ counter 1))
@@ -690,7 +730,16 @@
       
       (if (and choice (> choice 0) (<= choice (length block-list)))
         (progn
-          (setq selected-block (car (nth (- choice 1) block-list)))
+          ;; selected-block OHNE Context-Präfix
+          (setq selected-block (nth (- choice 1) block-list))
+          
+          ;; selected-block-with-context MIT Context-Präfix (für Löschen)
+          (setq selected-block-with-context
+            (if context-prefix
+              (strcat context-prefix selected-block)
+              selected-block
+            )
+          )
           
           ;; Prüfe ob Standard-Block entfernt wird
           (setq was-standard (eq selected-block standard-block))
@@ -698,7 +747,7 @@
           ;; Erstelle neue Liste ohne den gewählten Block
           (setq new-paths '())
           (foreach pair all-paths
-            (if (not (eq (car pair) selected-block))
+            (if (not (eq (car pair) selected-block-with-context))
               (setq new-paths (cons pair new-paths))
             )
           )
@@ -953,7 +1002,7 @@
 (vl-load-com)
 
 ;; Lade-Meldung
-(princ "\nBlockImport.lsp v1.5.0 geladen.")
+(princ "\nBlockImport.lsp v1.5.1 geladen.")
 (princ "\nBefehle: ManageBlockImport - Block-Verwaltung")
 (princ "\n         ShowBlockPath - Zeigt konfigurierte Pfade")
 (princ "\n         ResetBlockPath - Löscht alle Pfade")
