@@ -12,7 +12,7 @@
 ;;; - Punkt wählen, Höhe eingeben
 ;;; - Block wird automatisch mit Attributen eingefügt
 ;;;
-;;; Version: 1.2.0
+;;; Version: 1.3.0
 ;;; Datum: 2026-02-13
 ;;; Autor: Herbert Schrotter
 
@@ -168,6 +168,9 @@
 ;; Speichert die zuletzt eingegebene Höhe
 (setq g_lastHeight nil)
 
+;; Speichert die zuletzt eingegebene XY-Skalierung
+(setq g_lastScale nil)
+
 ;;; ============================================================================
 ;;; HILFSFUNKTIONEN - FORMATIERUNG
 ;;; ============================================================================
@@ -252,16 +255,47 @@
   heightValue
 )
 
+;;; Fragt Benutzer nach XY-Skalierung mit Memory-Funktion
+(defun getScale ( / scaleValue prompt)
+  (setq prompt (strcat "\nGeben Sie die XY-Skalierung ein" 
+                       (if g_lastScale 
+                         (strcat " <" (rtos g_lastScale 2 2) ">") 
+                         " <1.0>") 
+                       ": "))
+  
+  (setq scaleValue (getreal prompt))
+  
+  ;; Wenn ENTER gedrückt
+  (if (null scaleValue)
+    (if g_lastScale
+      (setq scaleValue g_lastScale)  ;; Nutze letzte Skalierung
+      (setq scaleValue 1.0)           ;; Standard: 1.0
+    )
+  )
+  
+  ;; Validierung: Skalierung muss > 0 sein
+  (if (<= scaleValue 0.0)
+    (progn
+      (princ "\n*** Skalierung muss größer als 0 sein! Verwende 1.0 ***")
+      (setq scaleValue 1.0)
+    )
+  )
+  
+  ;; Neue Skalierung speichern
+  (setq g_lastScale scaleValue)
+  scaleValue
+)
+
 ;;; ============================================================================
 ;;; HAUPTFUNKTIONEN
 ;;; ============================================================================
 
-;;; Fügt Höhenkoten-Block an gegebenem Punkt mit Höhe ein
-(defun CopyBlockAutomatisch (einfügepunkt höhe / blockName heightStr intPart decPart height2DecStr attdia ent attribs insertionPoint block-available importEnt)
+;;; Fügt Höhenkoten-Block an gegebenem Punkt mit Höhe und Skalierung ein
+(defun CopyBlockAutomatisch (einfügepunkt höhe scale / blockName heightStr intPart decPart height2DecStr attdia ent attribs insertionPoint block-available importEnt)
   (setq blockName *hoehenkote-blockname*)
   
   ;; Parameter-Prüfung
-  (if (and einfügepunkt höhe)
+  (if (and einfügepunkt höhe scale)
     (progn
       ;; Block verfügbar machen (nutzt BlockImport.lsp Bibliothek)
       ;; Rückgabe: (T importEnt) oder (nil nil)
@@ -296,8 +330,8 @@
           (setq attdia (getvar "ATTDIA"))
           (setvar "ATTDIA" 0)
           
-          ;; Block einfügen
-          (command "._-insert" blockName einfügepunkt "" "" "" "")
+          ;; Block einfügen mit XY-Skalierung (Z bleibt 1.0)
+          (command "._-insert" blockName einfügepunkt scale scale "" "")
           
           ;; ATTDIA-Variable auf den ursprünglichen Wert zurücksetzen
           (setvar "ATTDIA" attdia)
@@ -332,7 +366,9 @@
             (entdel importEnt)
           )
           
-          (princ (strcat "\n✓ Höhenkote gesetzt: " height2DecStr " auf Z=" (rtos höhe 2 3)))
+          (princ (strcat "\n✓ Höhenkote gesetzt: " height2DecStr 
+                        " | Z=" (rtos höhe 2 3) 
+                        " | XY-Scale=" (rtos scale 2 2)))
         )
         (princ "\n*** FEHLER: Block konnte nicht geladen werden ***")
       )
@@ -347,7 +383,7 @@
 ;;; ============================================================================
 
 ;;; Hauptbefehl: Höhenkote setzen
-(defun c:SetHK ( / *error* pt höhe old-cmdecho)
+(defun c:SetHK ( / *error* pt höhe scale old-cmdecho)
   
   ;; Lokaler Error-Handler
   (defun *error* (msg)
@@ -375,9 +411,16 @@
       ;; Höhe abfragen
       (setq höhe (getHöhe))
       
-      ;; Block einfügen
+      ;; Skalierung abfragen
       (if höhe
-        (CopyBlockAutomatisch pt höhe)
+        (progn
+          (setq scale (getScale))
+          
+          ;; Block einfügen
+          (if scale
+            (CopyBlockAutomatisch pt höhe scale)
+          )
+        )
       )
     )
   )
@@ -408,7 +451,7 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nSetHoehenkote.lsp v1.2.0 geladen.")
+(princ "\nSetHoehenkote.lsp v1.3.0 geladen.")
 (princ "\nBefehle: SetHK - Höhenkote an Punkt setzen")
 (princ "\n         ShowBlockPath - Zeigt konfigurierten Block-Pfad")
 (princ "\n         ResetBlockPath - Löscht gespeicherten Pfad")
