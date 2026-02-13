@@ -1,13 +1,13 @@
 ;;; AutoLoadDimStyle.lsp
 ;;; Automatisches Laden von Bemaßungsstilen für AutoCAD
-;;; Speziell für Leica-Vermessungsarbeiten (Meter-Bemaßungen)
 ;;;
 ;;; Installation:
-;;; 1. Diese Datei in "acaddoc.lsp" umbenennen
-;;; 2. In den AutoCAD Support-Ordner kopieren
-;;; 3. AutoCAD neu starten
+;;; 1. Datei speichern (z.B. in AutoCAD-Tools Ordner)
+;;; 2. In AutoCAD: APPLOAD ausführen
+;;; 3. AutoLoadDimStyle.lsp auswählen und laden
+;;; 4. Optional: In Startup Suite hinzufügen für automatisches Laden
 ;;;
-;;; Version: 2.3.0
+;;; Version: 2.4.0
 ;;; Datum: 2026-02-12
 
 ;;; ============================================================================
@@ -42,7 +42,14 @@
           (setq files (append files (list line)))
         )
       )
-      (close file)
+      
+      ;; File-Handle immer schließen (auch bei Fehler)
+      (if file 
+        (progn
+          (close file)
+          (setq file nil)  ; Handle freigeben
+        )
+      )
     )
   )
   files
@@ -60,13 +67,20 @@
   (if (setq file (open *config-file* "w"))
     (progn
       ;; Erste Zeile: Version
-      (write-line "2.2" file)
+      (write-line "2.4" file)
       
       ;; Dateipfade
       (foreach filepath filepaths
         (write-line filepath file)
       )
-      (close file)
+      
+      ;; File-Handle immer schließen (auch bei Fehler)
+      (if file
+        (progn
+          (close file)
+          (setq file nil)  ; Handle freigeben
+        )
+      )
       T
     )
     nil
@@ -93,6 +107,19 @@
   (setq files (read-master-files))
   (setq files (vl-remove filepath files))
   (save-master-files files)
+)
+
+;;; Prüft ob Pfad eine gültige DWG-Datei ist
+(defun valid-dwg-file-p (filepath / ext)
+  (if (and filepath 
+           (> (strlen filepath) 0))
+    (progn
+      (setq ext (strcase (vl-filename-extension filepath)))
+      (or (equal ext ".DWG")
+          (equal ext ".dwg"))
+    )
+    nil
+  )
 )
 
 ;;; ============================================================================
@@ -327,12 +354,16 @@
   
   ;; Wähle neue Datei
   (if (setq new-file (getfiled "Weitere Master-Datei hinzufügen" "" "dwg" 0))
-    (if (add-master-file new-file)
-      (progn
-        (princ (strcat "\n✓ Hinzugefügt: " new-file))
-        (princ "\nDie Datei wird beim nächsten Laden automatisch verwendet.")
+    ;; Validiere DWG-Datei
+    (if (valid-dwg-file-p new-file)
+      (if (add-master-file new-file)
+        (progn
+          (princ (strcat "\n✓ Hinzugefügt: " new-file))
+          (princ "\nDie Datei wird beim nächsten Laden automatisch verwendet.")
+        )
+        (princ "\n✗ Diese Datei ist bereits in der Liste.")
       )
-      (princ "\n✗ Diese Datei ist bereits in der Liste.")
+      (princ "\n✗ Keine gültige DWG-Datei ausgewählt.")
     )
     (princ "\n✗ Keine Datei ausgewählt.")
   )
@@ -340,7 +371,7 @@
 )
 
 ;;; Entfernt eine Master-Datei aus der Liste
-(defun c:RemoveMasterFile ( / *error* master-files selection idx removed-file)
+(defun c:RemoveMasterFile ( / *error* master-files selection idx removed-file input)
   
   ;; Lokaler Error-Handler
   (defun *error* (msg)
@@ -372,19 +403,46 @@
         (setq idx (1+ idx))
       )
       
-      ;; Auswahl
-      (princ "\n\nWelche Datei soll entfernt werden? (Nummer eingeben): ")
-      (setq selection (getint))
+      ;; Auswahl mit Validierung und Wiederholung
+      (setq selection nil)
+      (while (not selection)
+        (princ "\n\nWelche Datei soll entfernt werden? (Nummer 1-")
+        (princ (itoa (length master-files)))
+        (princ ", 0 = Abbruch): ")
+        (setq input (getint))
+        
+        (cond
+          ;; User will abbrechen
+          ((equal input 0)
+            (progn
+              (princ "\n✗ Abgebrochen.")
+              (setq selection 0)  ; Beende Schleife
+            )
+          )
+          ;; Gültige Nummer
+          ((and input 
+                (>= input 1) 
+                (<= input (length master-files)))
+            (setq selection input)  ; OK, beende Schleife
+          )
+          ;; Ungültige Eingabe
+          (T
+            (progn
+              (princ "\n✗ Ungültige Auswahl. Bitte Zahl zwischen 1 und ")
+              (princ (itoa (length master-files)))
+              (princ " eingeben, oder 0 für Abbruch.")
+            )
+          )
+        )
+      )
       
-      (if (and selection 
-               (>= selection 1) 
-               (<= selection (length master-files)))
+      ;; Nur ausführen wenn nicht abgebrochen
+      (if (> selection 0)
         (progn
           (setq removed-file (nth (1- selection) master-files))
           (remove-master-file removed-file)
           (princ (strcat "\n✓ Entfernt: " (vl-filename-base removed-file)))
         )
-        (princ "\n✗ Ungültige Auswahl.")
       )
       (princ)
     )
@@ -412,7 +470,7 @@
 ;;; INITIALISIERUNG
 ;;; ============================================================================
 
-(princ "\nAutoLoadDimStyle.lsp v2.3.0 geladen.")
+(princ "\nAutoLoadDimStyle.lsp v2.4.0 geladen.")
 (princ "\nBefehle: LoadDimStyles, ShowDimStylePath, ResetDimStylePath")
 (princ "\n         AddMasterFile, RemoveMasterFile")
 (princ)
