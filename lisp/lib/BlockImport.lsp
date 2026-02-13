@@ -11,7 +11,7 @@
 ;;; (load "lib/BlockImport.lsp")
 ;;; (ensure-block-available "BLK_Hoehenkote")
 ;;;
-;;; Version: 1.4.5
+;;; Version: 1.4.6
 ;;; Datum: 2026-02-13
 ;;; Autor: Herbert Schrotter
 
@@ -549,7 +549,7 @@
   ;; Erstelle Liste ohne *STANDARD* Eintrag
   (setq block-list '())
   (foreach pair all-paths
-    (if (not (eq (car pair) "*STANDARD*"))
+    (if (not (wcmatch (car pair) "*STANDARD*"))
       (setq block-list (cons (car pair) block-list))
     )
   )
@@ -748,11 +748,29 @@
                   (princ "\n")
                   (princ "\n*** Der Standard-Block wurde entfernt! ***")
                   
-                  ;; Prüfe ob noch andere Blocks vorhanden
+                  ;; Prüfe ob noch andere Blocks vorhanden (im aktuellen Context!)
                   (setq remaining-blocks '())
+                  (setq context-prefix
+                    (if *block-import-context*
+                      (strcat *block-import-context* ":")
+                      nil
+                    )
+                  )
+                  
                   (foreach pair new-paths
-                    (if (not (wcmatch (car pair) "*STANDARD*"))
-                      (setq remaining-blocks (cons pair remaining-blocks))
+                    ;; Nur Blocks im aktuellen Context zählen
+                    (if context-prefix
+                      ;; MIT Context: Prüfe auf "Context:BlockName" (nicht *STANDARD*)
+                      (if (and (> (strlen (car pair)) (strlen context-prefix))
+                               (eq (substr (car pair) 1 (strlen context-prefix)) context-prefix)
+                               (not (wcmatch (car pair) "*STANDARD*")))
+                        (setq remaining-blocks (cons pair remaining-blocks))
+                      )
+                      ;; OHNE Context: Nur Einträge ohne ":" und nicht *STANDARD*
+                      (if (and (not (vl-string-search ":" (car pair)))
+                               (not (wcmatch (car pair) "*STANDARD*")))
+                        (setq remaining-blocks (cons pair remaining-blocks))
+                      )
                     )
                   )
                   
@@ -780,8 +798,21 @@
 )
 
 ;;; Hauptmenü für Block-Import Management
-(defun manage-block-import ( / option continue standard-block)
+(defun manage-block-import ( / option continue standard-block all-blocks)
   (setq continue T)
+  
+  ;; Prüfe beim Start: Blocks vorhanden aber kein Standard?
+  (setq standard-block (get-standard-block))
+  (setq all-blocks (read-all-block-paths))
+  
+  (if (and all-blocks (not standard-block))
+    (progn
+      (princ "\n*** Blocks konfiguriert aber kein Standard-Block gesetzt! ***")
+      (princ "\nMöchten Sie einen Standard-Block wählen?")
+      (select-standard-block)
+      (princ "\n")
+    )
+  )
   
   (while continue
     (setq standard-block (get-standard-block))
@@ -909,7 +940,7 @@
 (vl-load-com)
 
 ;; Lade-Meldung
-(princ "\nBlockImport.lsp v1.4.5 geladen.")
+(princ "\nBlockImport.lsp v1.4.6 geladen.")
 (princ "\nBefehle: ManageBlockImport - Block-Verwaltung")
 (princ "\n         ShowBlockPath - Zeigt konfigurierte Pfade")
 (princ "\n         ResetBlockPath - Löscht alle Pfade")
