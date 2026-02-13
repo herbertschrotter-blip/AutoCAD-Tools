@@ -11,7 +11,7 @@
 ;;; (load "lib/BlockImport.lsp")
 ;;; (ensure-block-available "BLK_Hoehenkote")
 ;;;
-;;; Version: 1.0.1
+;;; Version: 1.1.0
 ;;; Datum: 2026-02-13
 ;;; Autor: Herbert Schrotter
 
@@ -19,9 +19,9 @@
 ;;; KONFIGURATION
 ;;; ============================================================================
 
-;; Standard-Pfad zur Block-Datei
+;; Standard-Pfad zur Block-Datei (nil = User wird beim ersten Mal gefragt)
 (if (not *default-block-file*)
-  (setq *default-block-file* "D:/OneDrive/Dokumente/02 Arbeit/05 Vorlagen - Scripte/02_AutoCAD Tools/templates/Blöcke/BLK_Hoehenkote.dwg")
+  (setq *default-block-file* nil)
 )
 
 ;; Pfad zur Konfigurationsdatei (speichert Block-Dateipfad)
@@ -80,12 +80,31 @@
 
 ;;; Fordert Benutzer auf, Block-Datei auszuwählen
 ;;; Rückgabe: Gewählter Pfad oder nil
-(defun select-block-file ( / filepath)
+(defun select-block-file ( / filepath default-dir)
   (princ "\n*** Block-Datei nicht gefunden ***")
-  (princ (strcat "\nStandard-Pfad: " *default-block-file*))
-  (princ "\nBitte wählen Sie die Block-Datei aus (BLK_Hoehenkote.dwg)...")
   
-  (if (setq filepath (getfiled "Block-Datei wählen" *default-block-file* "dwg" 0))
+  ;; Versuche sinnvollen Start-Ordner zu finden
+  (setq default-dir
+    (cond
+      ;; 1. Wenn *default-block-file* gesetzt und Verzeichnis existiert
+      ((and *default-block-file*
+            (vl-file-directory-p (vl-filename-directory *default-block-file*)))
+       (vl-filename-directory *default-block-file*))
+      
+      ;; 2. Zeichnungs-Verzeichnis
+      ((getvar "DWGPREFIX"))
+      
+      ;; 3. Benutzer-Dokumente
+      ((getenv "USERPROFILE"))
+      
+      ;; 4. Fallback: Leer
+      (T "")
+    )
+  )
+  
+  (princ "\nBitte wählen Sie die Block-Datei aus (z.B. BLK_Hoehenkote.dwg)...")
+  
+  (if (setq filepath (getfiled "Block-Datei wählen" default-dir "dwg" 0))
     (progn
       (princ (strcat "\nGewählte Datei: " filepath))
       
@@ -250,19 +269,8 @@
       ;; Prüfe ob Pfad existiert UND Datei erreichbar ist
       (if (or (null block-path) 
               (not (findfile block-path)))
-        (progn
-          ;; Gespeicherter Pfad ungültig - versuche Standard-Pfad
-          (if (findfile *default-block-file*)
-            (progn
-              (princ (strcat "\n  Verwende Standard-Pfad: " *default-block-file*))
-              (setq block-path *default-block-file*)
-              ;; Speichere als neuen Config-Pfad
-              (save-block-path block-path)
-            )
-            ;; Auch Standard-Pfad nicht gefunden - frage Benutzer
-            (setq block-path (select-block-file))
-          )
-        )
+        ;; Kein gültiger Pfad - frage Benutzer
+        (setq block-path (select-block-file))
       )
       
       ;; Falls noch immer kein Pfad: Abbruch
@@ -303,15 +311,7 @@
         (princ " [✗ Nicht gefunden!]")
       )
     )
-    (progn
-      (princ "\nKein Block-Pfad konfiguriert.")
-      (princ "\n\nStandard-Pfad:")
-      (princ (strcat "\n  " *default-block-file*))
-      (if (findfile *default-block-file*)
-        (princ " [✓ Existiert]")
-        (princ " [✗ Nicht gefunden]")
-      )
-    )
+    (princ "\nKein Block-Pfad konfiguriert.")
   )
   (princ "\n")
   (princ)
@@ -339,7 +339,7 @@
 (vl-load-com)
 
 ;; Lade-Meldung
-(princ "\nBlockImport.lsp v1.0.1 geladen.")
+(princ "\nBlockImport.lsp v1.1.0 geladen.")
 (princ "\nFunktionen: ensure-block-available, show-block-path, reset-block-path")
 (princ)
 
