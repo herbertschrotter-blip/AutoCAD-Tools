@@ -11,7 +11,7 @@
 ;;; (load "lib/BlockImport.lsp")
 ;;; (ensure-block-available "BLK_Hoehenkote")
 ;;;
-;;; Version: 1.1.0
+;;; Version: 1.2.0
 ;;; Datum: 2026-02-13
 ;;; Autor: Herbert Schrotter
 
@@ -24,52 +24,85 @@
   (setq *default-block-file* nil)
 )
 
-;; Pfad zur Konfigurationsdatei (speichert Block-Dateipfad)
+;; Pfad zur Konfigurationsdatei (speichert alle Block-Dateipfade)
 (if (not *block-config-file*)
-  (setq *block-config-file* (strcat (getenv "APPDATA") "/AutoCAD/HoehenkoteBlockConfig.txt"))
+  (setq *block-config-file* (strcat (getenv "APPDATA") "/AutoCAD/BlockImportConfig.txt"))
 )
 
 ;;; ============================================================================
 ;;; CONFIG MANAGEMENT
 ;;; ============================================================================
 
-;;; Liest gespeicherten Block-Pfad aus Konfigurationsdatei
-;;; Rückgabe: Pfad als String oder nil
-(defun read-block-path ( / file path version)
-  (setq path nil)
+;;; Liest alle gespeicherten Block-Pfade aus Konfigurationsdatei
+;;; Rückgabe: Association-Liste ((blockname . filepath) ...) oder nil
+(defun read-all-block-paths ( / file line pos key value result version)
+  (setq result '())
   (if (and (findfile *block-config-file*)
            (setq file (open *block-config-file* "r")))
     (progn
-      ;; Erste Zeile: Version (für zukünftige Kompatibilität)
+      ;; Erste Zeile: Version (überspringen)
       (setq version (read-line file))
       
-      ;; Zweite Zeile: Dateipfad
-      (setq path (read-line file))
-      
+      ;; Alle weiteren Zeilen: key=value
+      (while (setq line (read-line file))
+        (if (setq pos (vl-string-search "=" line))
+          (progn
+            ;; Blockname (vor =)
+            (setq key (substr line 1 pos))
+            ;; Pfad (nach =)
+            (setq value (substr line (+ pos 2)))
+            ;; Zur Liste hinzufügen
+            (setq result (cons (cons key value) result))
+          )
+        )
+      )
       (close file)
     )
   )
-  path
+  result
 )
 
-;;; Speichert Block-Pfad in Konfigurationsdatei
-;;; Parameter: filepath - Pfad zur Block-Datei
+;;; Liest gespeicherten Pfad für einen spezifischen Block
+;;; Parameter: blockname - Name des Blocks
+;;; Rückgabe: Pfad als String oder nil
+(defun read-block-path (blockname / all-paths)
+  (setq all-paths (read-all-block-paths))
+  (cdr (assoc blockname all-paths))
+)
+
+;;; Speichert Block-Pfad in Konfigurationsdatei (fügt hinzu oder aktualisiert)
+;;; Parameter: blockname - Name des Blocks, filepath - Pfad zur Block-Datei
 ;;; Rückgabe: T bei Erfolg, nil bei Fehler
-(defun save-block-path (filepath / file dir)
+(defun save-block-path (blockname filepath / file dir all-paths updated)
   ;; Erstelle Verzeichnis falls nicht vorhanden
   (setq dir (vl-filename-directory *block-config-file*))
   (if (not (vl-file-directory-p dir))
     (vl-mkdir dir)
   )
   
-  ;; Speichere Pfad
+  ;; Alle existierenden Pfade lesen
+  (setq all-paths (read-all-block-paths))
+  
+  ;; Blockname aktualisieren oder hinzufügen
+  (if (assoc blockname all-paths)
+    ;; Existiert bereits - aktualisieren
+    (setq all-paths (subst (cons blockname filepath) 
+                            (assoc blockname all-paths) 
+                            all-paths))
+    ;; Neu hinzufügen
+    (setq all-paths (cons (cons blockname filepath) all-paths))
+  )
+  
+  ;; Zurück in Datei schreiben
   (if (setq file (open *block-config-file* "w"))
     (progn
       ;; Erste Zeile: Version
       (write-line "1.0" file)
       
-      ;; Zweite Zeile: Dateipfad
-      (write-line filepath file)
+      ;; Alle Block-Pfade schreiben
+      (foreach pair all-paths
+        (write-line (strcat (car pair) "=" (cdr pair)) file)
+      )
       
       (close file)
       T
@@ -79,37 +112,33 @@
 )
 
 ;;; Fordert Benutzer auf, Block-Datei auszuwählen
+;;; Parameter: blockname - Name des Blocks (für Meldung und Speicherung)
 ;;; Rückgabe: Gewählter Pfad oder nil
-(defun select-block-file ( / filepath default-dir)
-  (princ "\n*** Block-Datei nicht gefunden ***")
+(defun select-block-file (blockname / filepath default-dir)
+  (princ (strcat "\n*** Block-Datei für '" blockname "' nicht gefunden ***"))
   
   ;; Versuche sinnvollen Start-Ordner zu finden
   (setq default-dir
     (cond
-      ;; 1. Wenn *default-block-file* gesetzt und Verzeichnis existiert
-      ((and *default-block-file*
-            (vl-file-directory-p (vl-filename-directory *default-block-file*)))
-       (vl-filename-directory *default-block-file*))
-      
-      ;; 2. Zeichnungs-Verzeichnis
+      ;; 1. Zeichnungs-Verzeichnis
       ((getvar "DWGPREFIX"))
       
-      ;; 3. Benutzer-Dokumente
+      ;; 2. Benutzer-Dokumente
       ((getenv "USERPROFILE"))
       
-      ;; 4. Fallback: Leer
+      ;; 3. Fallback: Leer
       (T "")
     )
   )
   
-  (princ "\nBitte wählen Sie die Block-Datei aus (z.B. BLK_Hoehenkote.dwg)...")
+  (princ (strcat "\nBitte wählen Sie die DWG-Datei für Block '" blockname "' aus..."))
   
   (if (setq filepath (getfiled "Block-Datei wählen" default-dir "dwg" 0))
     (progn
       (princ (strcat "\nGewählte Datei: " filepath))
       
-      ;; Speichere Pfad in Config
-      (save-block-path filepath)
+      ;; Speichere Pfad in Config (mit blockname)
+      (save-block-path blockname filepath)
       
       (princ "\nPfad wurde gespeichert für zukünftige Sitzungen.")
       filepath
@@ -263,14 +292,14 @@
       ;; Block muss geladen werden
       (princ (strcat "\nBlock '" blockname "' wird geladen..."))
       
-      ;; Hole konfigurierten Pfad
-      (setq block-path (read-block-path))
+      ;; Hole konfigurierten Pfad für diesen Block
+      (setq block-path (read-block-path blockname))
       
       ;; Prüfe ob Pfad existiert UND Datei erreichbar ist
       (if (or (null block-path) 
               (not (findfile block-path)))
         ;; Kein gültiger Pfad - frage Benutzer
-        (setq block-path (select-block-file))
+        (setq block-path (select-block-file blockname))
       )
       
       ;; Falls noch immer kein Pfad: Abbruch
@@ -296,23 +325,27 @@
 ;;; VERWALTUNGS-FUNKTIONEN
 ;;; ============================================================================
 
-;;; Zeigt aktuell konfigurierten Block-Pfad
+;;; Zeigt alle konfigurierten Block-Pfade
 ;;; Kann als Befehl verwendet werden: (defun c:ShowBlockPath () (show-block-path))
-(defun show-block-path ( / block-path)
-  (setq block-path (read-block-path))
+(defun show-block-path ( / all-paths)
+  (setq all-paths (read-all-block-paths))
   
-  (princ "\n=== Konfigurierter Block-Pfad ===")
+  (princ "\n=== Konfigurierte Block-Pfade ===")
   
-  (if block-path
+  (if all-paths
     (progn
-      (princ (strcat "\n" block-path))
-      (if (findfile block-path)
-        (princ " [✓ Existiert]")
-        (princ " [✗ Nicht gefunden!]")
+      (foreach pair all-paths
+        (princ (strcat "\n" (car pair) ": " (cdr pair)))
+        (if (findfile (cdr pair))
+          (princ " [✓ Existiert]")
+          (princ " [✗ Nicht gefunden!]")
+        )
       )
     )
-    (princ "\nKein Block-Pfad konfiguriert.")
+    (princ "\nKeine Block-Pfade konfiguriert.")
   )
+  
+  (princ (strcat "\n\nConfig-Datei: " *block-config-file*))
   (princ "\n")
   (princ)
 )
@@ -339,7 +372,7 @@
 (vl-load-com)
 
 ;; Lade-Meldung
-(princ "\nBlockImport.lsp v1.1.0 geladen.")
+(princ "\nBlockImport.lsp v1.2.0 geladen.")
 (princ "\nFunktionen: ensure-block-available, show-block-path, reset-block-path")
 (princ)
 
