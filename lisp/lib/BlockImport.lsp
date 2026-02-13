@@ -11,7 +11,7 @@
 ;;; (load "lib/BlockImport.lsp")
 ;;; (ensure-block-available "BLK_Hoehenkote")
 ;;;
-;;; Version: 1.4.3
+;;; Version: 1.4.4
 ;;; Datum: 2026-02-13
 ;;; Autor: Herbert Schrotter
 
@@ -100,9 +100,7 @@
 ;;; Liest Standard-Block aus Config
 ;;; Berücksichtigt Context (*block-import-context*)
 ;;; Rückgabe: Blockname (String) oder nil
-(defun get-standard-block ( / all-paths standard-key standard-entry)
-  (setq all-paths (read-all-block-paths))
-  
+(defun get-standard-block ( / file line pos key value version standard-key)
   ;; Standard-Key bestimmen (mit oder ohne Context)
   (setq standard-key
     (if *block-import-context*
@@ -111,10 +109,33 @@
     )
   )
   
-  (setq standard-entry (assoc standard-key all-paths))
-  (if standard-entry
-    (cdr standard-entry)
+  ;; Lese DIREKT aus Config-Datei (ungefiltert!)
+  (if (not (findfile *block-config-file*))
     nil
+    (if (not (vl-catch-all-error-p
+               (setq file (vl-catch-all-apply 'open (list *block-config-file* "r")))))
+      (progn
+        (setq version (read-line file))
+        (while (setq line (read-line file))
+          (if (setq pos (vl-string-search "=" line))
+            (progn
+              (setq key (substr line 1 pos))
+              ;; Wenn Standard-Key gefunden: Gib Wert zurück
+              (if (eq key standard-key)
+                (progn
+                  (setq value (substr line (+ pos 2)))
+                  (close file)
+                  (setq line nil)  ;; Beende while-Schleife
+                )
+              )
+            )
+          )
+        )
+        (if file (close file))
+        value  ;; Rückgabe
+      )
+      nil
+    )
   )
 )
 
@@ -886,7 +907,7 @@
 (vl-load-com)
 
 ;; Lade-Meldung
-(princ "\nBlockImport.lsp v1.4.3 geladen.")
+(princ "\nBlockImport.lsp v1.4.4 geladen.")
 (princ "\nBefehle: ManageBlockImport - Block-Verwaltung")
 (princ "\n         ShowBlockPath - Zeigt konfigurierte Pfade")
 (princ "\n         ResetBlockPath - Löscht alle Pfade")
