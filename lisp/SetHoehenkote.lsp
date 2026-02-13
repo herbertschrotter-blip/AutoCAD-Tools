@@ -12,7 +12,7 @@
 ;;; - Punkt wählen, Höhe eingeben
 ;;; - Block wird automatisch mit Attributen eingefügt
 ;;;
-;;; Version: 1.1.4
+;;; Version: 1.1.5
 ;;; Datum: 2026-02-13
 ;;; Autor: Herbert Schrotter
 
@@ -20,28 +20,70 @@
 ;;; BIBLIOTHEKEN LADEN
 ;;; ============================================================================
 
-;; Lade gemeinsame Block-Import Bibliothek
-;; Intelligente Pfad-Suche mit mehreren Fallbacks
+;; Config-Datei für BlockImport.lsp Pfad
+(setq *sethk-config-file* (strcat (getenv "APPDATA") "/AutoCAD/SetHoehenkoteConfig.txt"))
 
-;; Bestimme Verzeichnis dieser Datei (funktioniert nur wenn per voller Pfad geladen)
-(setq *this-script-dir* 
-  (if (setq *temp-dwg* (getvar "DWGPREFIX"))
-    *temp-dwg*
+;;; Liest gespeicherten BlockImport.lsp Pfad aus Config
+(defun read-blockimport-path ( / file path version)
+  (setq path nil)
+  (if (and (findfile *sethk-config-file*)
+           (setq file (open *sethk-config-file* "r")))
+    (progn
+      ;; Erste Zeile: Version
+      (setq version (read-line file))
+      ;; Zweite Zeile: Pfad
+      (setq path (read-line file))
+      (close file)
+    )
+  )
+  path
+)
+
+;;; Speichert BlockImport.lsp Pfad in Config
+(defun save-blockimport-path (filepath / file dir)
+  ;; Erstelle Verzeichnis falls nicht vorhanden
+  (setq dir (vl-filename-directory *sethk-config-file*))
+  (if (not (vl-file-directory-p dir))
+    (vl-mkdir dir)
+  )
+  
+  ;; Speichere Pfad
+  (if (setq file (open *sethk-config-file* "w"))
+    (progn
+      (write-line "1.0" file)
+      (write-line filepath file)
+      (close file)
+      T
+    )
     nil
   )
 )
 
-(setq *blockimport-lib-path*
-  (cond
-    ;; 1. Versuch: lib/ Unterordner im Support-Ordner
-    ((findfile "lib/BlockImport.lsp"))
-    
-    ;; 2. Versuch: Direkt im Support-Ordner
-    ((findfile "BlockImport.lsp"))
+;; Lade gemeinsame Block-Import Bibliothek
+;; Intelligente Pfad-Suche mit mehreren Fallbacks
+
+;; Versuche gespeicherten Pfad zu laden
+(setq *blockimport-lib-path* (read-blockimport-path))
+
+;; Wenn gespeicherter Pfad existiert, prüfe ob Datei noch da ist
+(if (and *blockimport-lib-path* (not (findfile *blockimport-lib-path*)))
+  (setq *blockimport-lib-path* nil)  ;; Pfad ungültig
+)
+
+;; Wenn kein gültiger Pfad: Suche in Standard-Orten
+(if (null *blockimport-lib-path*)
+  (setq *blockimport-lib-path*
+    (cond
+      ;; 1. Versuch: lib/ Unterordner im Support-Ordner
+      ((findfile "lib/BlockImport.lsp"))
+      
+      ;; 2. Versuch: Direkt im Support-Ordner
+      ((findfile "BlockImport.lsp"))
+    )
   )
 )
 
-;; Falls nicht gefunden: Bitte User um Auswahl
+;; Wenn immer noch nicht gefunden: Bitte User um Auswahl
 (if (null *blockimport-lib-path*)
   (progn
     (princ "\n*** BlockImport.lsp wird nicht im Support-Pfad gefunden ***")
@@ -53,7 +95,12 @@
                     "D:/OneDrive/Dokumente/02 Arbeit/05 Vorlagen - Scripte/02_AutoCAD Tools/lisp/lib/" 
                     "lsp" 
                     0))
-      (princ (strcat "\nGewählte Datei: " *blockimport-lib-path*))
+      (progn
+        (princ (strcat "\nGewählte Datei: " *blockimport-lib-path*))
+        ;; Speichere Pfad für nächstes Mal
+        (save-blockimport-path *blockimport-lib-path*)
+        (princ "\nPfad wurde gespeichert für zukünftige Sitzungen.")
+      )
       (progn
         (alert "FEHLER: Keine Datei ausgewählt!")
         (exit)
@@ -334,7 +381,7 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nSetHoehenkote.lsp v1.1.4 geladen.")
+(princ "\nSetHoehenkote.lsp v1.1.5 geladen.")
 (princ "\nBefehle: SetHK - Höhenkote an Punkt setzen")
 (princ "\n         ShowBlockPath - Zeigt konfigurierten Block-Pfad")
 (princ "\n         ResetBlockPath - Löscht gespeicherten Pfad")
