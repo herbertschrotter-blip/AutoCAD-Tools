@@ -12,7 +12,7 @@
 ;;; - Punkt wählen, Höhe eingeben
 ;;; - Block wird automatisch mit Attributen eingefügt
 ;;;
-;;; Version: 1.1.1
+;;; Version: 1.1.2
 ;;; Datum: 2026-02-13
 ;;; Autor: Herbert Schrotter
 
@@ -24,15 +24,16 @@
 ;; Intelligente Pfad-Suche mit mehreren Fallbacks
 (setq *blockimport-lib-path*
   (cond
-    ;; 1. Versuch: Relativ zum aktuellen Script (lisp/lib/BlockImport.lsp)
-    ((findfile (strcat (vl-filename-directory (findfile "SetHoehenkote.lsp")) 
-                       "/lib/BlockImport.lsp")))
-    
-    ;; 2. Versuch: lib/ Unterordner im Support-Ordner
+    ;; 1. Versuch: lib/ Unterordner im Support-Ordner
     ((findfile "lib/BlockImport.lsp"))
     
-    ;; 3. Versuch: Direkt im Support-Ordner (falls lib/ dort kopiert wurde)
+    ;; 2. Versuch: Direkt im Support-Ordner
     ((findfile "BlockImport.lsp"))
+    
+    ;; 3. Versuch: Relativ zum Script-Verzeichnis (falls via voller Pfad geladen)
+    ((and (setq *temp-script-path* (findfile "SetHoehenkote.lsp"))
+          (setq *temp-dir* (vl-filename-directory *temp-script-path*))
+          (findfile (strcat *temp-dir* "/lib/BlockImport.lsp"))))
   )
 )
 
@@ -41,9 +42,9 @@
   (progn
     (alert (strcat "FEHLER: BlockImport.lsp nicht gefunden!\n\n"
                    "Bitte stelle sicher, dass eine der folgenden Dateien existiert:\n"
-                   "1. lisp/lib/BlockImport.lsp (neben diesem Script)\n"
-                   "2. lib/BlockImport.lsp (im Support-Ordner)\n"
-                   "3. BlockImport.lsp (im Support-Ordner)"))
+                   "1. lib/BlockImport.lsp (im Support-Ordner)\n"
+                   "2. BlockImport.lsp (im Support-Ordner)\n"
+                   "3. lib/BlockImport.lsp (neben diesem Script)"))
     (exit)
   )
   (progn
@@ -321,7 +322,7 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nSetHoehenkote.lsp v1.1.1 geladen.")
+(princ "\nSetHoehenkote.lsp v1.1.2 geladen.")
 (princ "\nBefehle: SetHK - Höhenkote an Punkt setzen")
 (princ "\n         ShowBlockPath - Zeigt konfigurierten Block-Pfad")
 (princ "\n         ResetBlockPath - Löscht gespeicherten Pfad")
