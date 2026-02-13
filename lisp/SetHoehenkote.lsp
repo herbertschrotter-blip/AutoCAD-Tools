@@ -12,7 +12,7 @@
 ;;; - Punkt wählen, Höhe eingeben
 ;;; - Block wird automatisch mit Attributen eingefügt
 ;;;
-;;; Version: 1.3.0
+;;; Version: 1.3.1
 ;;; Datum: 2026-02-13
 ;;; Autor: Herbert Schrotter
 
@@ -161,15 +161,56 @@
 ;; Name des Höhenkoten-Blocks
 (setq *hoehenkote-blockname* "BLK_Hoehenkote")
 
+;; Config-Datei für XY-Skalierung
+(setq *scale-config-file* (strcat (getenv "APPDATA") "/AutoCAD/SetHoehenkoteScale.txt"))
+
+;;; Liest gespeicherte XY-Skalierung aus Config
+(defun read-scale-config ( / file scale version)
+  (setq scale nil)
+  
+  (if (not (findfile *scale-config-file*))
+    nil
+    (if (vl-catch-all-error-p
+          (setq file (vl-catch-all-apply 'open (list *scale-config-file* "r"))))
+      nil
+      (progn
+        (setq version (read-line file))
+        (setq scale (read-line file))
+        (close file)
+        (if scale
+          (atof scale)
+          nil
+        )
+      )
+    )
+  )
+)
+
+;;; Speichert XY-Skalierung in Config
+(defun save-scale-config (scale-value / file dir)
+  (setq dir (vl-filename-directory *scale-config-file*))
+  (if (not (vl-file-directory-p dir))
+    (vl-catch-all-apply 'vl-mkdir (list dir))
+  )
+  
+  (if (vl-catch-all-error-p
+        (setq file (vl-catch-all-apply 'open (list *scale-config-file* "w"))))
+    nil
+    (progn
+      (write-line "1.0" file)
+      (write-line (rtos scale-value 2 6) file)
+      (close file)
+      T
+    )
+  )
+)
+
 ;;; ============================================================================
 ;;; GLOBALE VARIABLEN
 ;;; ============================================================================
 
 ;; Speichert die zuletzt eingegebene Höhe
 (setq g_lastHeight nil)
-
-;; Speichert die zuletzt eingegebene XY-Skalierung
-(setq g_lastScale nil)
 
 ;;; ============================================================================
 ;;; HILFSFUNKTIONEN - FORMATIERUNG
@@ -226,6 +267,45 @@
   )
 )
 
+;;; Fragt Benutzer nach Einfügepunkt mit Keyword für Skalierung
+;;; Rückgabe: Liste (punkt scale) oder nil bei Abbruch
+(defun getEinfügepunktMitScale ( / pt scale current-scale)
+  ;; Aktuelle Skalierung aus Config lesen
+  (setq current-scale (read-scale-config))
+  
+  ;; Wenn keine Skalierung gespeichert: Zuerst fragen
+  (if (null current-scale)
+    (progn
+      (princ "\n*** Keine Skalierung konfiguriert ***")
+      (setq scale (getScale))
+    )
+    (setq scale current-scale)
+  )
+  
+  ;; Punkt mit Keyword-Option abfragen
+  (initget "Skalierung")
+  (setq pt (getpoint (strcat "\nPunkt wählen (oder [S]kalierung <" (rtos scale 2 2) ">): ")))
+  
+  ;; Prüfe ob Keyword "Skalierung" gewählt wurde
+  (while (= pt "Skalierung")
+    ;; Skalierung ändern
+    (setq scale (getScale))
+    
+    ;; Nochmal Punkt abfragen
+    (initget "Skalierung")
+    (setq pt (getpoint (strcat "\nPunkt wählen (oder [S]kalierung <" (rtos scale 2 2) ">): ")))
+  )
+  
+  ;; Wenn pt = nil (ESC) → Abbruch
+  (if (null pt)
+    (progn
+      (princ "\n*** Abbruch: Kein Punkt gewählt ***")
+      nil
+    )
+    (list pt scale)  ;; Rückgabe: (punkt scale)
+  )
+)
+
 ;;; Fragt Benutzer nach Höhe mit Wiederholung bei fehlender Eingabe
 (defun getHöhe ( / heightValue prompt)
   (setq prompt (strcat "\nGeben Sie die Höhe ein" 
@@ -255,11 +335,14 @@
   heightValue
 )
 
-;;; Fragt Benutzer nach XY-Skalierung mit Memory-Funktion
-(defun getScale ( / scaleValue prompt)
-  (setq prompt (strcat "\nGeben Sie die XY-Skalierung ein" 
-                       (if g_lastScale 
-                         (strcat " <" (rtos g_lastScale 2 2) ">") 
+;;; Fragt Benutzer nach XY-Skalierung und speichert in Config
+(defun getScale ( / scaleValue prompt current-scale)
+  ;; Aktuelle Skalierung aus Config lesen
+  (setq current-scale (read-scale-config))
+  
+  (setq prompt (strcat "\nNeue XY-Skalierung" 
+                       (if current-scale 
+                         (strcat " <" (rtos current-scale 2 2) ">") 
                          " <1.0>") 
                        ": "))
   
@@ -267,9 +350,9 @@
   
   ;; Wenn ENTER gedrückt
   (if (null scaleValue)
-    (if g_lastScale
-      (setq scaleValue g_lastScale)  ;; Nutze letzte Skalierung
-      (setq scaleValue 1.0)           ;; Standard: 1.0
+    (if current-scale
+      (setq scaleValue current-scale)
+      (setq scaleValue 1.0)
     )
   )
   
@@ -281,8 +364,10 @@
     )
   )
   
-  ;; Neue Skalierung speichern
-  (setq g_lastScale scaleValue)
+  ;; Skalierung in Config speichern
+  (save-scale-config scaleValue)
+  (princ (strcat "\n✓ Skalierung gespeichert: " (rtos scaleValue 2 2)))
+  
   scaleValue
 )
 
@@ -383,7 +468,7 @@
 ;;; ============================================================================
 
 ;;; Hauptbefehl: Höhenkote setzen
-(defun c:SetHK ( / *error* pt höhe scale old-cmdecho)
+(defun c:SetHK ( / *error* result pt scale höhe old-cmdecho)
   
   ;; Lokaler Error-Handler
   (defun *error* (msg)
@@ -402,25 +487,22 @@
   ;; Systemvariablen setzen für Command
   (setvar "CMDECHO" 0)     ;; Command-Echo aus
   
-  ;; Einfügepunkt abfragen
-  (setq pt (getEinfügepunkt))
+  ;; Einfügepunkt mit Skalierungs-Option abfragen
+  ;; Rückgabe: (punkt scale) oder nil
+  (setq result (getEinfügepunktMitScale))
   
   ;; Nur weitermachen wenn Punkt gewählt
-  (if pt
+  (if result
     (progn
+      (setq pt (car result))     ;; Punkt
+      (setq scale (cadr result)) ;; Skalierung
+      
       ;; Höhe abfragen
       (setq höhe (getHöhe))
       
-      ;; Skalierung abfragen
+      ;; Block einfügen
       (if höhe
-        (progn
-          (setq scale (getScale))
-          
-          ;; Block einfügen
-          (if scale
-            (CopyBlockAutomatisch pt höhe scale)
-          )
-        )
+        (CopyBlockAutomatisch pt höhe scale)
       )
     )
   )
@@ -451,8 +533,8 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nSetHoehenkote.lsp v1.3.0 geladen.")
-(princ "\nBefehle: SetHK - Höhenkote an Punkt setzen")
+(princ "\nSetHoehenkote.lsp v1.3.1 geladen.")
+(princ "\nBefehle: SetHK - Höhenkote setzen (S für Skalierung)")
 (princ "\n         ShowBlockPath - Zeigt konfigurierten Block-Pfad")
 (princ "\n         ResetBlockPath - Löscht gespeicherten Pfad")
 (princ "\n         CopyBlock (veraltet) - Alias für SetHK")
