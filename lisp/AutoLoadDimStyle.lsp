@@ -7,7 +7,7 @@
 ;;; 3. AutoLoadDimStyle.lsp auswählen und laden
 ;;; 4. Optional: In Startup Suite hinzufügen für automatisches Laden
 ;;;
-;;; Version: 2.6.2
+;;; Version: 2.7.0
 ;;; Datum: 2026-02-13
 
 ;;; ============================================================================
@@ -23,9 +23,6 @@
 ;;; ============================================================================
 ;;; KONFIGURATION
 ;;; ============================================================================
-
-;; Standard-Pfad (wird verwendet wenn noch keine Konfiguration existiert)
-(setq *default-master-file* "D:/OneDrive/Dokumente/02 Arbeit/05 Vorlagen - Scripte/02_AutoCAD Tools/templates/Bemaßungs_Stile/Master_BemStile.dwg")
 
 ;; Pfad zur Konfigurationsdatei (speichert Liste der Master-Dateien)
 (setq *config-file* (strcat (getenv "APPDATA") "/AutoCAD/DimStyleConfig.txt"))
@@ -77,7 +74,7 @@
   (if (setq file (open *config-file* "w"))
     (progn
       ;; Erste Zeile: Version
-      (write-line "2.6" file)
+      (write-line "2.7" file)
       
       ;; Dateipfade
       (foreach filepath filepaths
@@ -133,6 +130,40 @@
 )
 
 ;;; ============================================================================
+;;; HILFSFUNKTIONEN - ERST-KONFIGURATION
+;;; ============================================================================
+
+;;; Führt Erst-Konfiguration durch (beim ersten Aufruf)
+(defun first-time-setup ( / selected-file)
+  (princ "\n+===========================================================+")
+  (princ "\n|  WILLKOMMEN BEI AUTOLOADDIMSTYLE                          |")
+  (princ "\n+===========================================================+")
+  (princ "\n\nKeine Konfiguration gefunden.")
+  (princ "\nBitte waehlen Sie Ihre erste Master-Datei mit Bemassungsstilen.")
+  (princ "\n")
+  
+  (if (setq selected-file (getfiled "Master-Datei mit Bemassungsstilen auswaehlen" "" "dwg" 0))
+    (if (valid-dwg-file-p selected-file)
+      (progn
+        (save-master-files (list selected-file))
+        (princ (strcat "\n\nOK Konfiguration erstellt: " selected-file))
+        (princ "\nDie Datei wird ab jetzt automatisch geladen.")
+        T  ; Erfolg
+      )
+      (progn
+        (princ "\n\nFEHLER Keine gueltige DWG-Datei ausgewaehlt.")
+        nil  ; Fehler
+      )
+    )
+    (progn
+      (princ "\n\nKeine Datei ausgewaehlt.")
+      (princ "\nSie koennen spaeter 'DimStyleManager' -> 'Hinzufuegen' verwenden.")
+      nil  ; Abgebrochen
+    )
+  )
+)
+
+;;; ============================================================================
 ;;; HILFSFUNKTIONEN - INTERAKTIVE AKTIONEN (FÜR MENÜ)
 ;;; ============================================================================
 
@@ -149,18 +180,12 @@
   (setq failed-count 0)
   (setq master-files (read-master-files))
   
-  ;; Falls keine Dateien, frage nach Standard
+  ;; Falls keine Dateien
   (if (null master-files)
-    (if (findfile *default-master-file*)
-      (setq master-files (list *default-master-file*))
-      (progn
-        (princ "\n*** Keine Master-Dateien konfiguriert ***")
-        (princ "\nVerwenden Sie 'Hinzufuegen' um eine Master-Datei zu konfigurieren.")
-      )
+    (progn
+      (princ "\n*** Keine Master-Dateien konfiguriert ***")
+      (princ "\nVerwenden Sie 'Hinzufuegen' um eine Master-Datei zu konfigurieren.")
     )
-  )
-  
-  (if master-files
     (progn
       (princ "\n+===========================================================+")
       (princ "\n|  LADE BEMASSTILE                                          |")
@@ -364,15 +389,7 @@
         (setq idx (1+ idx))
       )
     )
-    (progn
-      (princ "\n\nKeine Master-Dateien konfiguriert.")
-      (princ "\n\nStandard-Pfad:")
-      (princ (strcat "\n  " *default-master-file*))
-      (if (findfile *default-master-file*)
-        (princ " [OK]")
-        (princ " [FEHLER]")
-      )
-    )
+    (princ "\n\nKeine Master-Dateien konfiguriert.")
   )
   
   ;; Memory freigeben
@@ -389,7 +406,7 @@
     (progn
       (vl-file-delete *config-file*)
       (princ "\nOK Alle gespeicherten Pfade wurden zurueckgesetzt.")
-      (princ "\n\nBeim naechsten Laden werden Sie nach der Master-Datei gefragt.")
+      (princ "\n\nBeim naechsten Aufruf werden Sie nach einer Master-Datei gefragt.")
     )
     (princ "\nFEHLER Keine gespeicherten Pfade vorhanden.")
   )
@@ -411,6 +428,17 @@
       )
     )
     (princ)
+  )
+  
+  ;; ERST-KONFIGURATION wenn keine Config vorhanden
+  (if (null (read-master-files))
+    (if (not (first-time-setup))
+      ;; User hat abgebrochen oder Fehler - beende
+      (progn
+        (princ)
+        (exit)
+      )
+    )
   )
   
   (setq running T)
@@ -521,14 +549,8 @@
   ;; Hole Master-Dateien
   (setq master-files (read-master-files))
   
-  ;; Falls keine Config, verwende Standard-Pfad
-  (if (null master-files)
-    (if (findfile *default-master-file*)
-      (setq master-files (list *default-master-file*))
-    )
-  )
-  
-  ;; Lade still im Hintergrund
+  ;; Nur laden wenn Config vorhanden
+  ;; Beim Autostart NICHT nach Datei fragen!
   (if master-files
     (foreach master-file master-files
       (if (findfile master-file)
@@ -563,9 +585,12 @@
 ;;; INITIALISIERUNG - AUSGABE
 ;;; ============================================================================
 
-(princ "\nAutoLoadDimStyle.lsp v2.6.2 geladen.")
+(princ "\nAutoLoadDimStyle.lsp v2.7.0 geladen.")
 (princ "\n+===========================================================+")
 (princ "\n|  Hauptbefehl: DimStyleManager                             |")
 (princ "\n|  Autostart:   AutoLoadDimStyles (silent)                  |")
 (princ "\n+===========================================================+")
 (princ)
+```
+
+---
