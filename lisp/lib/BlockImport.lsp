@@ -11,7 +11,7 @@
 ;;; (load "lib/BlockImport.lsp")
 ;;; (ensure-block-available "BLK_Hoehenkote")
 ;;;
-;;; Version: 1.3.4
+;;; Version: 1.3.5
 ;;; Datum: 2026-02-13
 ;;; Autor: Herbert Schrotter
 
@@ -654,23 +654,30 @@
     (princ "\n[A]bbrechen  - Beenden")
     (princ "\n")
     
-    ;; Option abfragen
-    (setq option (get-keyword-input "\nOption: " "Liste Standard Hinzufügen Entfernen Abbrechen"))
+    ;; Option abfragen mit Rechtsklick-Menü
+    (initget "Liste Standard Hinzufuegen Entfernen Abbrechen")
+    (setq option (getkword "\nOption [L]iste [S]tandard [H]inzufügen [E]ntfernen [A]bbrechen: "))
     
     (cond
       ((eq option "Liste")
-       (list-all-blocks))
+       (list-all-blocks)
+       (princ "\nDrücken Sie eine beliebige Taste zum Fortfahren...")
+       (grread T))  ;; Wartet auf Tastendruck
       
       ((eq option "Standard")
        (select-standard-block))
       
-      ((eq option "Hinzufügen")
+      ((eq option "Hinzufuegen")
        (add-new-block))
       
       ((eq option "Entfernen")
        (remove-block))
       
       ((eq option "Abbrechen")
+       (setq continue nil))
+      
+      ;; ESC oder ungültige Eingabe
+      ((null option)
        (setq continue nil))
       
       (T
@@ -752,7 +759,7 @@
 (vl-load-com)
 
 ;; Lade-Meldung
-(princ "\nBlockImport.lsp v1.3.4 geladen.")
+(princ "\nBlockImport.lsp v1.3.5 geladen.")
 (princ "\nBefehle: ManageBlockImport - Block-Verwaltung")
 (princ "\n         ShowBlockPath - Zeigt konfigurierte Pfade")
 (princ "\n         ResetBlockPath - Löscht alle Pfade")
