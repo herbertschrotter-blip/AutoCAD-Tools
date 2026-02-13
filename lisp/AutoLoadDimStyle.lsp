@@ -7,7 +7,7 @@
 ;;; 3. AutoLoadDimStyle.lsp auswählen und laden
 ;;; 4. Optional: In Startup Suite hinzufügen für automatisches Laden
 ;;;
-;;; Version: 2.6.1
+;;; Version: 2.6.2
 ;;; Datum: 2026-02-13
 
 ;;; ============================================================================
@@ -454,9 +454,12 @@
         (load-dimstyles-interactive)
       )
       
-      ;; Öffnen
+      ;; Öffnen - BEENDET Schleife nach Öffnen
       ((equal kword "Oeffnen")
-        (open-master-file-interactive)
+        (progn
+          (open-master-file-interactive)
+          (setq running nil)  ; Beende Menü - Datei bleibt offen
+        )
       )
       
       ;; Hinzufügen
@@ -557,7 +560,7 @@
 ;;; INITIALISIERUNG - AUSGABE
 ;;; ============================================================================
 
-(princ "\nAutoLoadDimStyle.lsp v2.6.1 geladen.")
+(princ "\nAutoLoadDimStyle.lsp v2.6.2 geladen.")
 (princ "\n+===========================================================+")
 (princ "\n|  Hauptbefehl: DimStyleManager                             |")
 (princ "\n|  Autostart:   AutoLoadDimStyles (silent)                  |")
