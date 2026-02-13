@@ -12,7 +12,7 @@
 ;;; - Punkt wählen, Höhe eingeben
 ;;; - Block wird automatisch mit Attributen eingefügt
 ;;;
-;;; Version: 1.1.2
+;;; Version: 1.1.3
 ;;; Datum: 2026-02-13
 ;;; Autor: Herbert Schrotter
 
@@ -24,16 +24,19 @@
 ;; Intelligente Pfad-Suche mit mehreren Fallbacks
 (setq *blockimport-lib-path*
   (cond
-    ;; 1. Versuch: lib/ Unterordner im Support-Ordner
+    ;; 1. Versuch: Relativ zu diesem Script (für APPLOAD)
+    ;; Funktioniert wenn via APPLOAD geladen wird
+    ((and (setq *temp-script-path* (vl-filename-loaded-p "SetHoehenkote.lsp"))
+          *temp-script-path*
+          (setq *temp-dir* (vl-filename-directory *temp-script-path*))
+          (setq *temp-lib-path* (strcat *temp-dir* "/lib/BlockImport.lsp"))
+          (findfile *temp-lib-path*)))
+    
+    ;; 2. Versuch: lib/ Unterordner im Support-Ordner
     ((findfile "lib/BlockImport.lsp"))
     
-    ;; 2. Versuch: Direkt im Support-Ordner
+    ;; 3. Versuch: Direkt im Support-Ordner
     ((findfile "BlockImport.lsp"))
-    
-    ;; 3. Versuch: Relativ zum Script-Verzeichnis (falls via voller Pfad geladen)
-    ((and (setq *temp-script-path* (findfile "SetHoehenkote.lsp"))
-          (setq *temp-dir* (vl-filename-directory *temp-script-path*))
-          (findfile (strcat *temp-dir* "/lib/BlockImport.lsp"))))
   )
 )
 
@@ -42,9 +45,13 @@
   (progn
     (alert (strcat "FEHLER: BlockImport.lsp nicht gefunden!\n\n"
                    "Bitte stelle sicher, dass eine der folgenden Dateien existiert:\n"
-                   "1. lib/BlockImport.lsp (im Support-Ordner)\n"
-                   "2. BlockImport.lsp (im Support-Ordner)\n"
-                   "3. lib/BlockImport.lsp (neben diesem Script)"))
+                   "1. lib/BlockImport.lsp (neben SetHoehenkote.lsp)\n"
+                   "2. lib/BlockImport.lsp (im Support-Ordner)\n"
+                   "3. BlockImport.lsp (im Support-Ordner)\n\n"
+                   "Aktueller Script-Pfad:\n"
+                   (if (setq *temp-check* (vl-filename-loaded-p "SetHoehenkote.lsp"))
+                     *temp-check*
+                     "Nicht via APPLOAD geladen")))
     (exit)
   )
   (progn
@@ -322,7 +329,7 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nSetHoehenkote.lsp v1.1.2 geladen.")
+(princ "\nSetHoehenkote.lsp v1.1.3 geladen.")
 (princ "\nBefehle: SetHK - Höhenkote an Punkt setzen")
 (princ "\n         ShowBlockPath - Zeigt konfigurierten Block-Pfad")
 (princ "\n         ResetBlockPath - Löscht gespeicherten Pfad")
