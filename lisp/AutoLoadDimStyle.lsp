@@ -7,8 +7,8 @@
 ;;; 3. AutoLoadDimStyle.lsp auswählen und laden
 ;;; 4. Optional: In Startup Suite hinzufügen für automatisches Laden
 ;;;
-;;; Version: 2.5.1
-;;; Datum: 2026-02-12
+;;; Version: 2.6.0
+;;; Datum: 2026-02-13
 
 ;;; ============================================================================
 ;;; INITIALISIERUNG - VISUAL LISP
@@ -29,9 +29,6 @@
 
 ;; Pfad zur Konfigurationsdatei (speichert Liste der Master-Dateien)
 (setq *config-file* (strcat (getenv "APPDATA") "/AutoCAD/DimStyleConfig.txt"))
-
-;; Globale Variable für stillen Modus
-(setq *dimstyle-silent-mode* nil)
 
 ;;; ============================================================================
 ;;; HILFSFUNKTIONEN - CONFIG MANAGEMENT
@@ -80,7 +77,7 @@
   (if (setq file (open *config-file* "w"))
     (progn
       ;; Erste Zeile: Version
-      (write-line "2.5" file)
+      (write-line "2.6" file)
       
       ;; Dateipfade
       (foreach filepath filepaths
@@ -136,146 +133,64 @@
 )
 
 ;;; ============================================================================
-;;; HILFSFUNKTIONEN - LADEN
+;;; HILFSFUNKTIONEN - INTERAKTIVE AKTIONEN (FÜR MENÜ)
 ;;; ============================================================================
 
-;;; Lädt eine Master-Datei
-(defun load-master-file-safe (filepath / )
-  ;; Info ausgeben
-  (if (not *dimstyle-silent-mode*)
-    (princ (strcat "\n  Lade: " (vl-filename-base filepath)))
-  )
-  
-  ;; Laden - AutoCAD gibt eigene Fehlermeldungen aus falls nötig
-  (command "._-insert" filepath nil)
-  
-  (if (not *dimstyle-silent-mode*)
-    (princ "\n  ✓ Geladen")
-  )
-  
-  T  ; Rückgabe: Erfolgreich
-)
-
-;;; Fordert Benutzer auf, Master-Datei auszuwählen
-(defun select-master-file ( / filepath)
-  (if (not *dimstyle-silent-mode*)
-    (progn
-      (princ "\n*** Keine Master-Datei konfiguriert ***")
-      (princ "\nBitte wählen Sie die Master-Datei mit den Bemaßungsstilen aus...")
-    )
-  )
-  
-  (if (setq filepath (getfiled "Master-Datei wählen" *default-master-file* "dwg" 0))
-    (progn
-      (if (not *dimstyle-silent-mode*)
-        (princ (strcat "\nGewählte Datei: " filepath))
-      )
-      
-      ;; Speichere als erste Datei in Config
-      (save-master-files (list filepath))
-      
-      (if (not *dimstyle-silent-mode*)
-        (princ "\nPfad wurde gespeichert.")
-      )
-      filepath
-    )
-    nil
-  )
-)
-
-;;; ============================================================================
-;;; HAUPTFUNKTIONEN
-;;; ============================================================================
-
-;;; Lädt alle Bemaßungsstile aus konfigurierten Master-Dateien
-(defun c:LoadDimStyles ( / *error* master-files loaded-count failed-count selected-file 
-                           old-cmdecho old-attreq file-count)
-  
-  ;; Lokaler Error-Handler
-  (defun *error* (msg)
-    ;; ESC und ENTER unterdrücken
-    (if (not (member msg '("Function cancelled" "quit / exit abort")))
-      (progn
-        (princ "\n*** Fehler beim Laden der Bemaßungsstile ***")
-        (princ (strcat "\nFehlermeldung: " msg))
-      )
-    )
-    ;; Systemvariablen wiederherstellen
-    (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
-    (if old-attreq (setvar "ATTREQ" old-attreq))
-    (princ)
-  )
-  
+;;; Lädt Bemaßungsstile interaktiv
+(defun load-dimstyles-interactive ( / master-files loaded-count failed-count 
+                                      old-cmdecho old-attreq)
   ;; Systemvariablen sichern
   (setq old-cmdecho (getvar "CMDECHO"))
   (setq old-attreq (getvar "ATTREQ"))
-  
-  ;; Setzen für optimale Performance
-  (setvar "CMDECHO" 0)  ; Keine Command-Ausgaben
-  (setvar "ATTREQ" 0)   ; Keine Attribut-Dialoge
+  (setvar "CMDECHO" 0)
+  (setvar "ATTREQ" 0)
   
   (setq loaded-count 0)
   (setq failed-count 0)
-  
-  ;; Hole Liste der Master-Dateien
   (setq master-files (read-master-files))
   
-  ;; Falls keine Dateien konfiguriert, prüfe Standard-Pfad oder frage
+  ;; Falls keine Dateien, frage nach Standard
   (if (null master-files)
     (if (findfile *default-master-file*)
       (setq master-files (list *default-master-file*))
-      (if (setq selected-file (select-master-file))
-        (setq master-files (list selected-file))
+      (progn
+        (princ "\n*** Keine Master-Dateien konfiguriert ***")
+        (princ "\nVerwenden Sie 'Hinzufügen' um eine Master-Datei zu konfigurieren.")
       )
     )
   )
   
-  ;; Lade alle konfigurierten Dateien
   (if master-files
     (progn
-      ;; Berechne Anzahl nur einmal (Performance)
-      (setq file-count (length master-files))
-      
-      (if (not *dimstyle-silent-mode*)
-        (progn
-          (princ "\n=== Lade Bemaßungsstile ===")
-          (princ (strcat "\nAnzahl Master-Dateien: " (itoa file-count)))
-        )
-      )
+      (princ "\n╔══════════════════════════════════════════════════════════╗")
+      (princ "\n║  LADE BEMASSTILE                                         ║")
+      (princ "\n╚══════════════════════════════════════════════════════════╝")
       
       (foreach master-file master-files
         (if (findfile master-file)
-          (if (load-master-file-safe master-file)
+          (progn
+            (princ (strcat "\n  → Lade: " (vl-filename-base master-file)))
+            (command "._-insert" master-file nil)
+            (princ " [✓]")
             (setq loaded-count (1+ loaded-count))
-            (setq failed-count (1+ failed-count))
           )
           (progn
-            (if (not *dimstyle-silent-mode*)
-              (princ (strcat "\n  ✗ Datei nicht gefunden: " master-file))
-            )
+            (princ (strcat "\n  → Nicht gefunden: " (vl-filename-base master-file)))
+            (princ " [✗]")
             (setq failed-count (1+ failed-count))
           )
         )
       )
       
-      ;; Zusammenfassung
-      (if (not *dimstyle-silent-mode*)
-        (progn
-          (princ (strcat "\n\n✓ " (itoa loaded-count) " Datei(en) geladen"))
-          (if (> failed-count 0)
-            (princ (strcat "\n✗ " (itoa failed-count) " Datei(en) fehlgeschlagen"))
-          )
-          (princ "\n\nVerfügbar unter: BEMASSTIL (DIMSTYLE)")
-        )
+      (princ (strcat "\n\n✓ " (itoa loaded-count) " Datei(en) erfolgreich geladen"))
+      (if (> failed-count 0)
+        (princ (strcat "\n✗ " (itoa failed-count) " Datei(en) fehlgeschlagen"))
       )
-    )
-    ;; Keine Dateien gefunden oder gewählt
-    (if (not *dimstyle-silent-mode*)
-      (princ "\nKeine Master-Dateien konfiguriert.")
+      (princ "\n\nBemaßungsstile verfügbar unter: BEMASSTIL (DIMSTYLE)")
     )
   )
   
-  ;; Cleanup (normales Ende)
+  ;; Systemvariablen wiederherstellen
   (setvar "CMDECHO" old-cmdecho)
   (setvar "ATTREQ" old-attreq)
   
@@ -283,84 +198,63 @@
   (setq master-files nil)
   (setq old-cmdecho nil)
   (setq old-attreq nil)
-  
-  (princ)
 )
 
-;;; Zeigt alle konfigurierten Master-Dateien
-(defun c:ShowDimStylePath ( / master-files i)
+;;; Öffnet eine Master-Datei zum Bearbeiten
+(defun open-master-file-interactive ( / master-files choice idx selected-file max-files)
   (setq master-files (read-master-files))
   
-  (princ "\n=== Konfigurierte Master-Dateien ===")
-  
-  (if master-files
+  (if (null master-files)
+    (princ "\n✗ Keine Master-Dateien konfiguriert.")
     (progn
-      (setq i 1)
-      (foreach master-file master-files
-        (princ (strcat "\n" (itoa i) ". " master-file))
-        (if (findfile master-file)
-          (princ " [✓ Existiert]")
-          (princ " [✗ Nicht gefunden!]")
+      (princ "\n╔══════════════════════════════════════════════════════════╗")
+      (princ "\n║  MASTER-DATEI ÖFFNEN                                     ║")
+      (princ "\n╚══════════════════════════════════════════════════════════╝")
+      (princ "\n\nVerfügbare Dateien:")
+      
+      (setq max-files (length master-files))
+      (setq idx 1)
+      (foreach mf master-files
+        (princ (strcat "\n  [" (itoa idx) "] " (vl-filename-base mf)))
+        (if (findfile mf)
+          (princ " [✓]")
+          (princ " [✗]")
         )
-        (setq i (1+ i))
+        (setq idx (1+ idx))
       )
-    )
-    (progn
-      (princ "\nKeine Master-Dateien konfiguriert.")
-      (princ "\n\nStandard-Pfad:")
-      (princ (strcat "\n  " *default-master-file*))
-      (if (findfile *default-master-file*)
-        (princ " [✓ Existiert]")
-        (princ " [✗ Nicht gefunden]")
+      
+      ;; Auswahl
+      (princ "\n\nWelche Datei öffnen? (Nummer eingeben, Enter = Abbruch): ")
+      (setq choice (getint))
+      
+      (if (and choice 
+               (>= choice 1) 
+               (<= choice max-files))
+        (progn
+          (setq selected-file (nth (1- choice) master-files))
+          (if (findfile selected-file)
+            (progn
+              (princ (strcat "\n✓ Öffne: " (vl-filename-base selected-file)))
+              (command "._open" selected-file)
+            )
+            (princ "\n✗ Datei nicht gefunden.")
+          )
+        )
+        (princ "\n✗ Abgebrochen.")
       )
     )
   )
-  (princ "\n")
-  (princ)
+  
+  ;; Memory freigeben
+  (setq master-files nil)
+  (setq selected-file nil)
 )
 
-;;; Löscht alle gespeicherten Pfade
-(defun c:ResetDimStylePath ( / *error*)
-  
-  ;; Lokaler Error-Handler
-  (defun *error* (msg)
-    ;; ESC und ENTER unterdrücken
-    (if (not (member msg '("Function cancelled" "quit / exit abort")))
-      (progn
-        (princ "\n*** Fehler beim Zurücksetzen der Pfade ***")
-        (princ (strcat "\nFehlermeldung: " msg))
-      )
-    )
-    (princ)
-  )
-  
-  (if (findfile *config-file*)
-    (progn
-      (vl-file-delete *config-file*)
-      (princ "\nAlle gespeicherten Pfade wurden zurückgesetzt.")
-      (princ "\nBeim nächsten Aufruf von LoadDimStyles werden Sie nach der Datei gefragt.")
-    )
-    (princ "\nKeine gespeicherten Pfade vorhanden.")
-  )
-  (princ)
-)
-
-;;; Fügt eine weitere Master-Datei hinzu
-(defun c:AddMasterFile ( / *error* new-file master-files)
-  
-  ;; Lokaler Error-Handler
-  (defun *error* (msg)
-    ;; ESC und ENTER unterdrücken
-    (if (not (member msg '("Function cancelled" "quit / exit abort")))
-      (progn
-        (princ "\n*** Fehler beim Hinzufügen der Master-Datei ***")
-        (princ (strcat "\nFehlermeldung: " msg))
-      )
-    )
-    (princ)
-  )
-  
-  (princ "\n=== Master-Datei hinzufügen ===")
+;;; Fügt eine Master-Datei hinzu
+(defun add-master-file-interactive ( / new-file master-files)
+  (princ "\n╔══════════════════════════════════════════════════════════╗")
+  (princ "\n║  MASTER-DATEI HINZUFÜGEN                                 ║")
+  (princ "\n╚══════════════════════════════════════════════════════════╝")
   
   ;; Zeige aktuelle Liste
   (setq master-files (read-master-files))
@@ -368,7 +262,7 @@
     (progn
       (princ "\n\nAktuell konfiguriert:")
       (foreach mf master-files
-        (princ (strcat "\n  - " (vl-filename-base mf)))
+        (princ (strcat "\n  • " (vl-filename-base mf)))
       )
       (princ "\n")
     )
@@ -393,99 +287,250 @@
   ;; Memory freigeben
   (setq master-files nil)
   (setq new-file nil)
-  
-  (princ)
 )
 
-;;; Entfernt eine Master-Datei aus der Liste
-(defun c:RemoveMasterFile ( / *error* master-files selection idx removed-file input max-files)
+;;; Entfernt eine Master-Datei
+(defun remove-master-file-interactive ( / master-files choice idx removed-file max-files)
+  (setq master-files (read-master-files))
+  
+  (if (null master-files)
+    (princ "\n✗ Keine Master-Dateien konfiguriert.")
+    (progn
+      (princ "\n╔══════════════════════════════════════════════════════════╗")
+      (princ "\n║  MASTER-DATEI ENTFERNEN                                  ║")
+      (princ "\n╚══════════════════════════════════════════════════════════╝")
+      (princ "\n\nKonfigurierte Dateien:")
+      
+      (setq max-files (length master-files))
+      (setq idx 1)
+      (foreach mf master-files
+        (princ (strcat "\n  [" (itoa idx) "] " (vl-filename-base mf)))
+        (setq idx (1+ idx))
+      )
+      
+      ;; Auswahl
+      (princ "\n\nWelche Datei entfernen? (Nummer eingeben, Enter = Abbruch): ")
+      (setq choice (getint))
+      
+      (if (and choice 
+               (>= choice 1) 
+               (<= choice max-files))
+        (progn
+          (setq removed-file (nth (1- choice) master-files))
+          (remove-master-file removed-file)
+          (princ (strcat "\n✓ Entfernt: " (vl-filename-base removed-file)))
+        )
+        (princ "\n✗ Abgebrochen.")
+      )
+    )
+  )
+  
+  ;; Memory freigeben
+  (setq master-files nil)
+  (setq removed-file nil)
+)
+
+;;; Zeigt alle konfigurierten Pfade
+(defun show-paths-interactive ( / master-files idx)
+  (setq master-files (read-master-files))
+  
+  (princ "\n╔══════════════════════════════════════════════════════════╗")
+  (princ "\n║  KONFIGURIERTE PFADE                                     ║")
+  (princ "\n╚══════════════════════════════════════════════════════════╝")
+  
+  (if master-files
+    (progn
+      (princ "\n\nMaster-Dateien:")
+      (setq idx 1)
+      (foreach master-file master-files
+        (princ (strcat "\n  " (itoa idx) ". " master-file))
+        (if (findfile master-file)
+          (princ " [✓]")
+          (princ " [✗ Nicht gefunden!]")
+        )
+        (setq idx (1+ idx))
+      )
+    )
+    (progn
+      (princ "\n\nKeine Master-Dateien konfiguriert.")
+      (princ "\n\nStandard-Pfad:")
+      (princ (strcat "\n  " *default-master-file*))
+      (if (findfile *default-master-file*)
+        (princ " [✓]")
+        (princ " [✗]")
+      )
+    )
+  )
+  
+  ;; Memory freigeben
+  (setq master-files nil)
+)
+
+;;; Setzt alle Pfade zurück
+(defun reset-paths-interactive ( / )
+  (princ "\n╔══════════════════════════════════════════════════════════╗")
+  (princ "\n║  PFADE ZURÜCKSETZEN                                      ║")
+  (princ "\n╚══════════════════════════════════════════════════════════╝")
+  
+  (if (findfile *config-file*)
+    (progn
+      (vl-file-delete *config-file*)
+      (princ "\n✓ Alle gespeicherten Pfade wurden zurückgesetzt.")
+      (princ "\n\nBeim nächsten Laden werden Sie nach der Master-Datei gefragt.")
+    )
+    (princ "\n✗ Keine gespeicherten Pfade vorhanden.")
+  )
+)
+
+;;; ============================================================================
+;;; HAUPTFUNKTIONEN
+;;; ============================================================================
+
+;;; Interaktives Menü für Bemaßungsstil-Verwaltung (HAUPTBEFEHL)
+(defun c:DimStyleManager ( / *error* master-files kword running)
   
   ;; Lokaler Error-Handler
   (defun *error* (msg)
-    ;; ESC und ENTER unterdrücken
     (if (not (member msg '("Function cancelled" "quit / exit abort")))
       (progn
-        (princ "\n*** Fehler beim Entfernen der Master-Datei ***")
+        (princ "\n*** Fehler im Bemaßungsstil-Manager ***")
         (princ (strcat "\nFehlermeldung: " msg))
       )
     )
     (princ)
   )
   
-  (setq master-files (read-master-files))
+  (setq running T)
   
-  (if (null master-files)
-    (progn
-      (princ "\nKeine Master-Dateien konfiguriert.")
-      (princ)
+  (while running
+    ;; Hole aktuelle Master-Dateien
+    (setq master-files (read-master-files))
+    
+    ;; Zeige Header
+    (princ "\n")
+    (princ "\n╔══════════════════════════════════════════════════════════╗")
+    (princ "\n║         BEMASSTIL-MANAGER                                ║")
+    (princ "\n╚══════════════════════════════════════════════════════════╝")
+    
+    ;; Zeige konfigurierte Dateien
+    (if master-files
+      (progn
+        (princ (strcat "\n\nKonfigurierte Dateien: " (itoa (length master-files))))
+        (foreach mf master-files
+          (princ (strcat "\n  • " (vl-filename-base mf)))
+          (if (findfile mf)
+            (princ " [✓]")
+            (princ " [✗]")
+          )
+        )
+      )
+      (princ "\n\nKeine Master-Dateien konfiguriert.")
     )
-    (progn
-      (princ "\n=== Master-Datei entfernen ===")
-      (princ "\n\nKonfigurierte Dateien:")
-      
-      ;; Berechne Anzahl nur einmal (Performance)
-      (setq max-files (length master-files))
-      
-      ;; Liste anzeigen
-      (setq idx 1)
-      (foreach mf master-files
-        (princ (strcat "\n" (itoa idx) ". " (vl-filename-base mf)))
-        (setq idx (1+ idx))
+    
+    (princ "\n")
+    
+    ;; Keyword-Auswahl mit initget
+    (initget "Laden Öffnen Hinzufügen Entfernen Pfade Reset Beenden")
+    (setq kword (getkword "\nAktion [Laden/Öffnen/Hinzufügen/Entfernen/Pfade/Reset/Beenden] <Beenden>: "))
+    
+    ;; Wenn Enter gedrückt (nil) → Beenden
+    (if (null kword)
+      (setq kword "Beenden")
+    )
+    
+    (cond
+      ;; Laden
+      ((equal kword "Laden")
+        (load-dimstyles-interactive)
       )
       
-      ;; Auswahl mit Validierung und Wiederholung
-      (setq selection nil)
-      (while (not selection)
-        ;; Ein princ statt mehrere (effizienter)
-        (princ (strcat "\n\nWelche Datei soll entfernt werden? (Nummer 1-"
-                       (itoa max-files)
-                       ", 0 = Abbruch): "))
-        (setq input (getint))
-        
-        (cond
-          ;; User will abbrechen
-          ((equal input 0)
-            (progn
-              (princ "\n✗ Abgebrochen.")
-              (setq selection 0)
-            )
-          )
-          ;; Gültige Nummer
-          ((and input 
-                (>= input 1) 
-                (<= input max-files))
-            (setq selection input)
-          )
-          ;; Ungültige Eingabe
-          (T
-            (princ (strcat "\n✗ Ungültige Auswahl. Bitte Zahl zwischen 1 und "
-                           (itoa max-files)
-                           " eingeben, oder 0 für Abbruch."))
-          )
-        )
+      ;; Öffnen
+      ((equal kword "Öffnen")
+        (open-master-file-interactive)
       )
       
-      ;; Nur ausführen wenn nicht abgebrochen
-      (if (> selection 0)
+      ;; Hinzufügen
+      ((equal kword "Hinzufügen")
+        (add-master-file-interactive)
+      )
+      
+      ;; Entfernen
+      ((equal kword "Entfernen")
+        (remove-master-file-interactive)
+      )
+      
+      ;; Pfade anzeigen
+      ((equal kword "Pfade")
+        (show-paths-interactive)
+      )
+      
+      ;; Reset
+      ((equal kword "Reset")
+        (reset-paths-interactive)
+      )
+      
+      ;; Beenden
+      ((equal kword "Beenden")
         (progn
-          (setq removed-file (nth (1- selection) master-files))
-          (remove-master-file removed-file)
-          (princ (strcat "\n✓ Entfernt: " (vl-filename-base removed-file)))
+          (princ "\n\n✓ Bemaßungsstil-Manager beendet.")
+          (setq running nil)
         )
       )
-      
-      ;; Memory freigeben
-      (setq master-files nil)
-      (setq removed-file nil)
-      
-      (princ)
+    )
+    
+    ;; Pause nur wenn nicht beendet
+    (if running
+      (progn
+        (princ "\n")
+        (princ "\n──────────────────────────────────────────────────────────")
+        (princ "\nEnter drücken um fortzufahren...")
+        (getstring)
+      )
     )
   )
+  
+  ;; Memory freigeben
+  (setq master-files nil)
+  (princ)
 )
 
-;;; Alias für Abwärtskompatibilität
-(defun c:LoadBemMeter ( / )
-  (c:LoadDimStyles)
+;;; Lädt alle Bemaßungsstile AUTOMATISCH (silent, für S::STARTUP)
+(defun c:AutoLoadDimStyles ( / master-files old-cmdecho old-attreq)
+  ;; Systemvariablen sichern
+  (setq old-cmdecho (getvar "CMDECHO"))
+  (setq old-attreq (getvar "ATTREQ"))
+  (setvar "CMDECHO" 0)
+  (setvar "ATTREQ" 0)
+  
+  ;; Hole Master-Dateien
+  (setq master-files (read-master-files))
+  
+  ;; Falls keine Config, verwende Standard-Pfad
+  (if (null master-files)
+    (if (findfile *default-master-file*)
+      (setq master-files (list *default-master-file*))
+    )
+  )
+  
+  ;; Lade still im Hintergrund
+  (if master-files
+    (foreach master-file master-files
+      (if (findfile master-file)
+        (command "._-insert" master-file nil)
+      )
+    )
+  )
+  
+  ;; Systemvariablen wiederherstellen
+  (setvar "CMDECHO" old-cmdecho)
+  (setvar "ATTREQ" old-attreq)
+  
+  ;; Memory freigeben
+  (setq master-files nil)
+  (setq old-cmdecho nil)
+  (setq old-attreq nil)
+  
+  (princ)  ; Keine Ausgabe
 )
 
 ;;; ============================================================================
@@ -494,9 +539,7 @@
 
 ;;; Wird beim Öffnen jeder Zeichnung ausgeführt (automatisch von AutoCAD)
 (defun S::STARTUP ( / )
-  (setq *dimstyle-silent-mode* T)  ; Still beim Autostart
-  (c:LoadDimStyles)
-  (setq *dimstyle-silent-mode* nil) ; Laut bei manuellem Aufruf
+  (c:AutoLoadDimStyles)  ; Silent, keine Ausgaben
   (princ)
 )
 
@@ -504,7 +547,40 @@
 ;;; INITIALISIERUNG - AUSGABE
 ;;; ============================================================================
 
-(princ "\nAutoLoadDimStyle.lsp v2.5.1 geladen.")
-(princ "\nBefehle: LoadDimStyles, ShowDimStylePath, ResetDimStylePath")
-(princ "\n         AddMasterFile, RemoveMasterFile")
+(princ "\nAutoLoadDimStyle.lsp v2.6.0 geladen.")
+(princ "\n╔══════════════════════════════════════════════════════════╗")
+(princ "\n║  Hauptbefehl: DimStyleManager                            ║")
+(princ "\n║  Autostart:   AutoLoadDimStyles (silent)                 ║")
+(princ "\n╚══════════════════════════════════════════════════════════╝")
 (princ)
+```
+
+---
+
+## 🎯 Verwendung
+
+### **Beim Start:**
+```
+AutoLoadDimStyle.lsp v2.6.0 geladen.
+╔══════════════════════════════════════════════════════════╗
+║  Hauptbefehl: DimStyleManager                            ║
+║  Autostart:   AutoLoadDimStyles (silent)                 ║
+╚══════════════════════════════════════════════════════════╝
+```
+
+### **Befehl aufrufen:**
+```
+Command: DimStyleManager
+```
+
+### **Menü-Ablauf:**
+```
+╔══════════════════════════════════════════════════════════╗
+║         BEMASSTIL-MANAGER                                ║
+╚══════════════════════════════════════════════════════════╝
+
+Konfigurierte Dateien: 2
+  • Master_BemStile [✓]
+  • Master_Architektur [✓]
+
+Aktion [Laden/Öffnen/Hinzufügen/Entfernen/Pfade/Reset/Beenden] <Beenden>: L
