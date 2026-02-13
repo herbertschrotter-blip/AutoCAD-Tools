@@ -11,7 +11,7 @@
 ;;; (load "lib/BlockImport.lsp")
 ;;; (ensure-block-available "BLK_Hoehenkote")
 ;;;
-;;; Version: 1.3.3
+;;; Version: 1.3.4
 ;;; Datum: 2026-02-13
 ;;; Autor: Herbert Schrotter
 
@@ -535,6 +535,10 @@
       ;; Speichere Pfad in Config
       (save-block-path blockname filepath)
       
+      ;; Setze als Standard-Block (automatisch!)
+      (set-standard-block blockname)
+      (princ (strcat "\n✓ Als Standard-Block gesetzt: " blockname))
+      
       ;; Block sofort importieren (wie beim ersten Mal!)
       (princ "\nImportiere Block...")
       (setq result (ensure-block-available blockname))
@@ -748,7 +752,7 @@
 (vl-load-com)
 
 ;; Lade-Meldung
-(princ "\nBlockImport.lsp v1.3.3 geladen.")
+(princ "\nBlockImport.lsp v1.3.4 geladen.")
 (princ "\nBefehle: ManageBlockImport - Block-Verwaltung")
 (princ "\n         ShowBlockPath - Zeigt konfigurierte Pfade")
 (princ "\n         ResetBlockPath - Löscht alle Pfade")
