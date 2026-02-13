@@ -7,8 +7,18 @@
 ;;; 3. AutoLoadDimStyle.lsp auswählen und laden
 ;;; 4. Optional: In Startup Suite hinzufügen für automatisches Laden
 ;;;
-;;; Version: 2.5.0
+;;; Version: 2.5.1
 ;;; Datum: 2026-02-12
+
+;;; ============================================================================
+;;; INITIALISIERUNG - VISUAL LISP
+;;; ============================================================================
+
+;; Lade Visual LISP COM/ActiveX Schnittstelle
+;; Erforderlich für: vl-filename-directory, vl-file-directory-p, vl-mkdir,
+;;                    vl-remove, vl-filename-base, vl-filename-extension,
+;;                    vl-file-delete
+(vl-load-com)
 
 ;;; ============================================================================
 ;;; KONFIGURATION
@@ -491,10 +501,10 @@
 )
 
 ;;; ============================================================================
-;;; INITIALISIERUNG
+;;; INITIALISIERUNG - AUSGABE
 ;;; ============================================================================
 
-(princ "\nAutoLoadDimStyle.lsp v2.5.0 geladen.")
+(princ "\nAutoLoadDimStyle.lsp v2.5.1 geladen.")
 (princ "\nBefehle: LoadDimStyles, ShowDimStylePath, ResetDimStylePath")
 (princ "\n         AddMasterFile, RemoveMasterFile")
 (princ)
