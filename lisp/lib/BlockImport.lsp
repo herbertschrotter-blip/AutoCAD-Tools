@@ -11,7 +11,7 @@
 ;;; (load "lib/BlockImport.lsp")
 ;;; (ensure-block-available "BLK_Hoehenkote")
 ;;;
-;;; Version: 1.4.6
+;;; Version: 1.5.0
 ;;; Datum: 2026-02-13
 ;;; Autor: Herbert Schrotter
 
@@ -798,7 +798,17 @@
 )
 
 ;;; Hauptmenü für Block-Import Management
-(defun manage-block-import ( / option continue standard-block all-blocks)
+;;; Parameter: context - Context-ID für Namespace (z.B. "SetHK", "HoeheAufLinie")
+;;;                      Wenn nil: Verwendet globale *block-import-context*
+(defun manage-block-import (context / option continue standard-block all-blocks old-context)
+  ;; Sichere alten Context falls vorhanden
+  (setq old-context *block-import-context*)
+  
+  ;; Setze Context für diese Session
+  (if context
+    (setq *block-import-context* context)
+  )
+  
   (setq continue T)
   
   ;; Prüfe beim Start: Blocks vorhanden aber kein Standard?
@@ -866,6 +876,9 @@
     )
   )
   
+  ;; Stelle alten Context wieder her
+  (setq *block-import-context* old-context)
+  
   (princ "\n")
   (princ)
 )
@@ -919,7 +932,7 @@
 
 ;;; Block Import Manager - Hauptbefehl für User
 (defun c:ManageBlockImport ( / )
-  (manage-block-import)
+  (manage-block-import nil)  ;; nil = verwendet globale *block-import-context*
 )
 
 ;;; Zeigt alle konfigurierten Block-Pfade
@@ -940,7 +953,7 @@
 (vl-load-com)
 
 ;; Lade-Meldung
-(princ "\nBlockImport.lsp v1.4.6 geladen.")
+(princ "\nBlockImport.lsp v1.5.0 geladen.")
 (princ "\nBefehle: ManageBlockImport - Block-Verwaltung")
 (princ "\n         ShowBlockPath - Zeigt konfigurierte Pfade")
 (princ "\n         ResetBlockPath - Löscht alle Pfade")
