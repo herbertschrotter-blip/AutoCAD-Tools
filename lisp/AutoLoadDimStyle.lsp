@@ -549,8 +549,18 @@
   ;; Hole Master-Dateien
   (setq master-files (read-master-files))
   
-  ;; Nur laden wenn Config vorhanden
-  ;; Beim Autostart NICHT nach Datei fragen!
+  ;; Falls keine Config: ERST-KONFIGURATION (auch beim Autostart!)
+  (if (null master-files)
+    (progn
+      ;; First-Time Setup
+      (if (first-time-setup)
+        ;; Setup erfolgreich - hole neue Liste
+        (setq master-files (read-master-files))
+      )
+    )
+  )
+  
+  ;; Lade Master-Dateien (falls vorhanden)
   (if master-files
     (foreach master-file master-files
       (if (findfile master-file)
