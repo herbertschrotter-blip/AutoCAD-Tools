@@ -12,7 +12,7 @@
 ;;; - Punkt wählen, Höhe eingeben
 ;;; - Block wird automatisch mit Attributen eingefügt
 ;;;
-;;; Version: 1.4.0
+;;; Version: 1.5.0
 ;;; Datum: 2026-02-13
 ;;; Autor: Herbert Schrotter
 
@@ -530,7 +530,7 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nSetHoehenkote.lsp v1.4.0 geladen.")
+(princ "\nSetHoehenkote.lsp v1.5.0 geladen.")
 (princ "\nBefehle: SetHK - Höhenkote setzen (S für Skalierung)")
 (princ "\n         ShowBlockPath - Zeigt konfigurierten Block-Pfad")
 (princ "\n         ResetBlockPath - Löscht gespeicherten Pfad")
