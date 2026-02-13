@@ -12,7 +12,7 @@
 ;;; - Punkt wählen, Höhe eingeben
 ;;; - Block wird automatisch mit Attributen eingefügt
 ;;;
-;;; Version: 1.3.1
+;;; Version: 1.3.2
 ;;; Datum: 2026-02-13
 ;;; Autor: Herbert Schrotter
 
@@ -522,22 +522,15 @@
   (reset-block-path)
 )
 
-;;; Alias für Abwärtskompatibilität
-(defun c:CopyBlock ()
-  (princ "\n*** Hinweis: Befehl wurde umbenannt zu 'SetHK' ***")
-  (c:SetHK)
-)
-
 ;;; ============================================================================
 ;;; LADE-MELDUNG
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nSetHoehenkote.lsp v1.3.1 geladen.")
+(princ "\nSetHoehenkote.lsp v1.3.2 geladen.")
 (princ "\nBefehle: SetHK - Höhenkote setzen (S für Skalierung)")
 (princ "\n         ShowBlockPath - Zeigt konfigurierten Block-Pfad")
 (princ "\n         ResetBlockPath - Löscht gespeicherten Pfad")
-(princ "\n         CopyBlock (veraltet) - Alias für SetHK")
 (princ)
 
 ;;; Ende der Datei
