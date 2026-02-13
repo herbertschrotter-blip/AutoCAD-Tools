@@ -11,7 +11,7 @@
 ;;; (load "lib/BlockImport.lsp")
 ;;; (ensure-block-available "BLK_Hoehenkote")
 ;;;
-;;; Version: 1.4.4
+;;; Version: 1.4.5
 ;;; Datum: 2026-02-13
 ;;; Autor: Herbert Schrotter
 
@@ -100,7 +100,7 @@
 ;;; Liest Standard-Block aus Config
 ;;; Berücksichtigt Context (*block-import-context*)
 ;;; Rückgabe: Blockname (String) oder nil
-(defun get-standard-block ( / file line pos key value version standard-key)
+(defun get-standard-block ( / file line pos key value version standard-key found)
   ;; Standard-Key bestimmen (mit oder ohne Context)
   (setq standard-key
     (if *block-import-context*
@@ -109,6 +109,9 @@
     )
   )
   
+  (setq found nil)
+  (setq value nil)
+  
   ;; Lese DIREKT aus Config-Datei (ungefiltert!)
   (if (not (findfile *block-config-file*))
     nil
@@ -116,22 +119,21 @@
                (setq file (vl-catch-all-apply 'open (list *block-config-file* "r")))))
       (progn
         (setq version (read-line file))
-        (while (setq line (read-line file))
+        (while (and (setq line (read-line file)) (not found))
           (if (setq pos (vl-string-search "=" line))
             (progn
               (setq key (substr line 1 pos))
-              ;; Wenn Standard-Key gefunden: Gib Wert zurück
+              ;; Wenn Standard-Key gefunden: Speichere Wert
               (if (eq key standard-key)
                 (progn
                   (setq value (substr line (+ pos 2)))
-                  (close file)
-                  (setq line nil)  ;; Beende while-Schleife
+                  (setq found T)  ;; Beende Schleife
                 )
               )
             )
           )
         )
-        (if file (close file))
+        (close file)  ;; Schließe Datei NUR HIER
         value  ;; Rückgabe
       )
       nil
@@ -907,7 +909,7 @@
 (vl-load-com)
 
 ;; Lade-Meldung
-(princ "\nBlockImport.lsp v1.4.4 geladen.")
+(princ "\nBlockImport.lsp v1.4.5 geladen.")
 (princ "\nBefehle: ManageBlockImport - Block-Verwaltung")
 (princ "\n         ShowBlockPath - Zeigt konfigurierte Pfade")
 (princ "\n         ResetBlockPath - Löscht alle Pfade")
