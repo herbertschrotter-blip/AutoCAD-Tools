@@ -11,7 +11,7 @@
 ;;; (load "lib/BlockImport.lsp")
 ;;; (ensure-block-available "BLK_Hoehenkote")
 ;;;
-;;; Version: 1.3.5
+;;; Version: 1.4.0
 ;;; Datum: 2026-02-13
 ;;; Autor: Herbert Schrotter
 
@@ -35,8 +35,16 @@
 
 ;;; Liest alle gespeicherten Block-Pfade aus Konfigurationsdatei
 ;;; Rückgabe: Association-Liste ((blockname . filepath) ...) oder nil
-(defun read-all-block-paths ( / file line pos key value result version)
+(defun read-all-block-paths ( / file line pos key value result version context-prefix)
   (setq result '())
+  
+  ;; Context-Präfix bestimmen (falls gesetzt)
+  (setq context-prefix 
+    (if *block-import-context*
+      (strcat *block-import-context* ":")
+      nil
+    )
+  )
   
   ;; Prüfe ob Config-Datei existiert
   (if (not (findfile *block-config-file*))
@@ -60,8 +68,29 @@
               (setq key (substr line 1 pos))
               ;; Pfad (nach =)
               (setq value (substr line (+ pos 2)))
-              ;; Zur Liste hinzufügen
-              (setq result (cons (cons key value) result))
+              
+              ;; Context-Filterung
+              (if context-prefix
+                ;; MIT Context: Nur "Context:BlockName" oder "*STANDARD:Context*" Einträge
+                (if (or 
+                      ;; Standard-Eintrag für diesen Context
+                      (eq key (strcat "*STANDARD:" *block-import-context* "*"))
+                      ;; Block-Eintrag für diesen Context
+                      (and (> (strlen key) (strlen context-prefix))
+                           (eq (substr key 1 (strlen context-prefix)) context-prefix)))
+                  (progn
+                    ;; Bei Block-Einträgen: Entferne Context-Präfix
+                    (if (not (wcmatch key "*STANDARD*"))
+                      (setq key (substr key (+ (strlen context-prefix) 1)))
+                    )
+                    (setq result (cons (cons key value) result))
+                  )
+                )
+                ;; OHNE Context: Nur Einträge ohne ":" (legacy Support)
+                (if (not (vl-string-search ":" key))
+                  (setq result (cons (cons key value) result))
+                )
+              )
             )
           )
         )
@@ -73,10 +102,20 @@
 )
 
 ;;; Liest Standard-Block aus Config
+;;; Berücksichtigt Context (*block-import-context*)
 ;;; Rückgabe: Blockname (String) oder nil
-(defun get-standard-block ( / all-paths standard-entry)
+(defun get-standard-block ( / all-paths standard-key standard-entry)
   (setq all-paths (read-all-block-paths))
-  (setq standard-entry (assoc "*STANDARD*" all-paths))
+  
+  ;; Standard-Key bestimmen (mit oder ohne Context)
+  (setq standard-key
+    (if *block-import-context*
+      (strcat "*STANDARD:" *block-import-context* "*")
+      "*STANDARD*"
+    )
+  )
+  
+  (setq standard-entry (assoc standard-key all-paths))
   (if standard-entry
     (cdr standard-entry)
     nil
@@ -86,8 +125,15 @@
 ;;; Setzt Standard-Block in Config
 ;;; Parameter: blockname - Name des Standard-Blocks
 ;;; Rückgabe: T bei Erfolg, nil bei Fehler
-(defun set-standard-block (blockname / )
-  (save-block-path "*STANDARD*" blockname)
+(defun set-standard-block (blockname / standard-key)
+  ;; Standard-Key mit Context
+  (setq standard-key
+    (if *block-import-context*
+      (strcat "*STANDARD:" *block-import-context* "*")
+      "*STANDARD*"
+    )
+  )
+  (save-block-path standard-key blockname)
 )
 
 ;;; Liest gespeicherten Pfad für einen spezifischen Block
@@ -101,7 +147,7 @@
 ;;; Speichert Block-Pfad in Konfigurationsdatei (fügt hinzu oder aktualisiert)
 ;;; Parameter: blockname - Name des Blocks, filepath - Pfad zur Block-Datei
 ;;; Rückgabe: T bei Erfolg, nil bei Fehler
-(defun save-block-path (blockname filepath / file dir all-paths updated)
+(defun save-block-path (blockname filepath / file dir all-paths updated key-with-context line pos key value version)
   ;; Erstelle Verzeichnis falls nicht vorhanden
   (setq dir (vl-filename-directory *block-config-file*))
   (if (not (vl-file-directory-p dir))
@@ -115,17 +161,46 @@
     )
   )
   
-  ;; Alle existierenden Pfade lesen
-  (setq all-paths (read-all-block-paths))
+  ;; ALLE existierenden Pfade lesen (UNGEFILTERT - alle Contexts!)
+  (setq all-paths '())
+  (if (findfile *block-config-file*)
+    (if (not (vl-catch-all-error-p
+               (setq file (vl-catch-all-apply 'open (list *block-config-file* "r")))))
+      (progn
+        (setq version (read-line file))
+        (while (setq line (read-line file))
+          (if (setq pos (vl-string-search "=" line))
+            (progn
+              (setq key (substr line 1 pos))
+              (setq value (substr line (+ pos 2)))
+              (setq all-paths (cons (cons key value) all-paths))
+            )
+          )
+        )
+        (close file)
+      )
+    )
+  )
+  
+  ;; Key mit Context-Präfix (falls nicht schon *STANDARD*)
+  (setq key-with-context
+    (if (wcmatch blockname "*STANDARD*")
+      blockname  ;; *STANDARD:Context* bleibt wie ist
+      (if *block-import-context*
+        (strcat *block-import-context* ":" blockname)
+        blockname  ;; Kein Context: Blockname ohne Präfix
+      )
+    )
+  )
   
   ;; Blockname aktualisieren oder hinzufügen
-  (if (assoc blockname all-paths)
+  (if (assoc key-with-context all-paths)
     ;; Existiert bereits - aktualisieren
-    (setq all-paths (subst (cons blockname filepath) 
-                            (assoc blockname all-paths) 
+    (setq all-paths (subst (cons key-with-context filepath) 
+                            (assoc key-with-context all-paths) 
                             all-paths))
     ;; Neu hinzufügen
-    (setq all-paths (cons (cons blockname filepath) all-paths))
+    (setq all-paths (cons (cons key-with-context filepath) all-paths))
   )
   
   ;; Zurück in Datei schreiben mit Error-Handling
@@ -139,7 +214,7 @@
       ;; Erste Zeile: Version
       (write-line "1.0" file)
       
-      ;; Alle Block-Pfade schreiben
+      ;; Alle Block-Pfade schreiben (ALLE Contexts!)
       (foreach pair all-paths
         (write-line (strcat (car pair) "=" (cdr pair)) file)
       )
@@ -655,8 +730,10 @@
     (princ "\n")
     
     ;; Option abfragen mit Rechtsklick-Menü
+    ;; WICHTIG: Rechtsklick-Menü liest Keywords aus eckigen Klammern!
+    ;; Erste Buchstaben müssen GROß sein!
     (initget "Liste Standard Hinzufuegen Entfernen Abbrechen")
-    (setq option (getkword "\nOption [L]iste [S]tandard [H]inzufügen [E]ntfernen [A]bbrechen: "))
+    (setq option (getkword "\nOption [Liste/Standard/Hinzufuegen/Entfernen/Abbrechen]: "))
     
     (cond
       ((eq option "Liste")
@@ -759,7 +836,7 @@
 (vl-load-com)
 
 ;; Lade-Meldung
-(princ "\nBlockImport.lsp v1.3.5 geladen.")
+(princ "\nBlockImport.lsp v1.4.0 geladen.")
 (princ "\nBefehle: ManageBlockImport - Block-Verwaltung")
 (princ "\n         ShowBlockPath - Zeigt konfigurierte Pfade")
 (princ "\n         ResetBlockPath - Löscht alle Pfade")
