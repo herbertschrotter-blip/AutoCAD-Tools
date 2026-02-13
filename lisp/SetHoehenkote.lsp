@@ -12,7 +12,7 @@
 ;;; - Punkt wählen, Höhe eingeben
 ;;; - Block wird automatisch mit Attributen eingefügt
 ;;;
-;;; Version: 1.1.3
+;;; Version: 1.1.4
 ;;; Datum: 2026-02-13
 ;;; Autor: Herbert Schrotter
 
@@ -273,7 +273,7 @@
 ;;; ============================================================================
 
 ;;; Hauptbefehl: Höhenkote setzen
-(defun c:SetHK ( / *error* pt höhe old-osmode old-cmdecho)
+(defun c:SetHK ( / *error* pt höhe old-cmdecho)
   
   ;; Lokaler Error-Handler
   (defun *error* (msg)
@@ -282,17 +282,14 @@
       (princ (strcat "\nFehler: " msg))
     )
     ;; Systemvariablen wiederherstellen
-    (if old-osmode (setvar "OSMODE" old-osmode))
     (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
     (princ)
   )
   
   ;; Systemvariablen sichern
-  (setq old-osmode (getvar "OSMODE"))
   (setq old-cmdecho (getvar "CMDECHO"))
   
   ;; Systemvariablen setzen für Command
-  (setvar "OSMODE" 0)      ;; OSNAP aus
   (setvar "CMDECHO" 0)     ;; Command-Echo aus
   
   ;; Einfügepunkt abfragen
@@ -312,7 +309,6 @@
   )
   
   ;; Cleanup bei normalem Ende
-  (setvar "OSMODE" old-osmode)
   (setvar "CMDECHO" old-cmdecho)
   (princ)
 )
@@ -338,7 +334,7 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nSetHoehenkote.lsp v1.1.3 geladen.")
+(princ "\nSetHoehenkote.lsp v1.1.4 geladen.")
 (princ "\nBefehle: SetHK - Höhenkote an Punkt setzen")
 (princ "\n         ShowBlockPath - Zeigt konfigurierten Block-Pfad")
 (princ "\n         ResetBlockPath - Löscht gespeicherten Pfad")
