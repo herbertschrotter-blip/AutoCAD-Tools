@@ -11,7 +11,7 @@
 ;;; (load "lib/BlockImport.lsp")
 ;;; (ensure-block-available "BLK_Hoehenkote")
 ;;;
-;;; Version: 1.4.1
+;;; Version: 1.4.2
 ;;; Datum: 2026-02-13
 ;;; Autor: Herbert Schrotter
 
@@ -633,13 +633,14 @@
 )
 
 ;;; Entfernt Block aus Config
-(defun remove-block ( / all-paths block-list choice selected-block new-paths file dir)
+(defun remove-block ( / all-paths block-list choice selected-block new-paths file dir standard-block was-standard remaining-blocks)
   (setq all-paths (read-all-block-paths))
+  (setq standard-block (get-standard-block))
   
   ;; Erstelle Liste ohne *STANDARD* Eintrag
   (setq block-list '())
   (foreach pair all-paths
-    (if (not (eq (car pair) "*STANDARD*"))
+    (if (not (wcmatch (car pair) "*STANDARD*"))
       (setq block-list (cons pair block-list))
     )
   )
@@ -658,6 +659,10 @@
       (setq counter 1)
       (foreach pair block-list
         (princ (strcat "\n  " (itoa counter) ". " (car pair)))
+        ;; Markiere Standard-Block
+        (if (eq (car pair) standard-block)
+          (princ " [STANDARD]")
+        )
         (setq counter (+ counter 1))
       )
       
@@ -668,11 +673,33 @@
         (progn
           (setq selected-block (car (nth (- choice 1) block-list)))
           
+          ;; Prüfe ob Standard-Block entfernt wird
+          (setq was-standard (eq selected-block standard-block))
+          
           ;; Erstelle neue Liste ohne den gewählten Block
           (setq new-paths '())
           (foreach pair all-paths
             (if (not (eq (car pair) selected-block))
               (setq new-paths (cons pair new-paths))
+            )
+          )
+          
+          ;; Wenn Standard-Block entfernt: Entferne auch *STANDARD* Eintrag
+          (if was-standard
+            (progn
+              (setq new-paths 
+                (vl-remove-if 
+                  '(lambda (x) 
+                     (wcmatch (car x) 
+                       (if *block-import-context*
+                         (strcat "*STANDARD:" *block-import-context* "*")
+                         "*STANDARD*"
+                       )
+                     )
+                   )
+                  new-paths
+                )
+              )
             )
           )
           
@@ -695,6 +722,31 @@
               )
               (close file)
               (princ (strcat "\n✓ Block entfernt: " selected-block))
+              
+              ;; Wenn Standard-Block entfernt wurde: Frage nach neuem Standard
+              (if was-standard
+                (progn
+                  (princ "\n")
+                  (princ "\n*** Der Standard-Block wurde entfernt! ***")
+                  
+                  ;; Prüfe ob noch andere Blocks vorhanden
+                  (setq remaining-blocks '())
+                  (foreach pair new-paths
+                    (if (not (wcmatch (car pair) "*STANDARD*"))
+                      (setq remaining-blocks (cons pair remaining-blocks))
+                    )
+                  )
+                  
+                  (if remaining-blocks
+                    (progn
+                      (princ "\nMöchten Sie einen neuen Standard-Block setzen?")
+                      (select-standard-block)
+                    )
+                    (princ "\nKeine weiteren Blocks vorhanden.")
+                  )
+                )
+              )
+              
               T
             )
           )
@@ -838,7 +890,7 @@
 (vl-load-com)
 
 ;; Lade-Meldung
-(princ "\nBlockImport.lsp v1.4.1 geladen.")
+(princ "\nBlockImport.lsp v1.4.2 geladen.")
 (princ "\nBefehle: ManageBlockImport - Block-Verwaltung")
 (princ "\n         ShowBlockPath - Zeigt konfigurierte Pfade")
 (princ "\n         ResetBlockPath - Löscht alle Pfade")
