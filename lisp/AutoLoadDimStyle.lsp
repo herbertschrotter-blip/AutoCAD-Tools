@@ -242,7 +242,10 @@
               (setq docs (vla-get-documents acad-obj))
               (setq new-doc (vla-open docs selected-file))
               
-              (princ "\nOK Datei geoeffnet")
+              ;; WICHTIG: Aktiviere die geöffnete Datei
+              (vla-activate new-doc)
+              
+              (princ "\nOK Datei geoeffnet und aktiviert")
             )
             (princ "\nFEHLER Datei nicht gefunden.")
           )
