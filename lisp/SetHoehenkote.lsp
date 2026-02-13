@@ -22,40 +22,49 @@
 
 ;; Lade gemeinsame Block-Import Bibliothek
 ;; Intelligente Pfad-Suche mit mehreren Fallbacks
+
+;; Bestimme Verzeichnis dieser Datei (funktioniert nur wenn per voller Pfad geladen)
+(setq *this-script-dir* 
+  (if (setq *temp-dwg* (getvar "DWGPREFIX"))
+    *temp-dwg*
+    nil
+  )
+)
+
 (setq *blockimport-lib-path*
   (cond
-    ;; 1. Versuch: Relativ zu diesem Script (für APPLOAD)
-    ;; Funktioniert wenn via APPLOAD geladen wird
-    ((and (setq *temp-script-path* (vl-filename-loaded-p "SetHoehenkote.lsp"))
-          *temp-script-path*
-          (setq *temp-dir* (vl-filename-directory *temp-script-path*))
-          (setq *temp-lib-path* (strcat *temp-dir* "/lib/BlockImport.lsp"))
-          (findfile *temp-lib-path*)))
-    
-    ;; 2. Versuch: lib/ Unterordner im Support-Ordner
+    ;; 1. Versuch: lib/ Unterordner im Support-Ordner
     ((findfile "lib/BlockImport.lsp"))
     
-    ;; 3. Versuch: Direkt im Support-Ordner
+    ;; 2. Versuch: Direkt im Support-Ordner
     ((findfile "BlockImport.lsp"))
   )
 )
 
-;; Prüfe ob Bibliothek gefunden wurde
+;; Falls nicht gefunden: Bitte User um Auswahl
 (if (null *blockimport-lib-path*)
   (progn
-    (alert (strcat "FEHLER: BlockImport.lsp nicht gefunden!\n\n"
-                   "Bitte stelle sicher, dass eine der folgenden Dateien existiert:\n"
-                   "1. lib/BlockImport.lsp (neben SetHoehenkote.lsp)\n"
-                   "2. lib/BlockImport.lsp (im Support-Ordner)\n"
-                   "3. BlockImport.lsp (im Support-Ordner)\n\n"
-                   "Aktueller Script-Pfad:\n"
-                   (if (setq *temp-check* (vl-filename-loaded-p "SetHoehenkote.lsp"))
-                     *temp-check*
-                     "Nicht via APPLOAD geladen")))
-    (exit)
+    (princ "\n*** BlockImport.lsp wird nicht im Support-Pfad gefunden ***")
+    (princ "\nBitte wählen Sie die Datei lib/BlockImport.lsp aus...")
+    
+    ;; Öffne File-Dialog
+    (if (setq *blockimport-lib-path* 
+          (getfiled "BlockImport.lsp auswählen" 
+                    "D:/OneDrive/Dokumente/02 Arbeit/05 Vorlagen - Scripte/02_AutoCAD Tools/lisp/lib/" 
+                    "lsp" 
+                    0))
+      (princ (strcat "\nGewählte Datei: " *blockimport-lib-path*))
+      (progn
+        (alert "FEHLER: Keine Datei ausgewählt!")
+        (exit)
+      )
+    )
   )
+)
+
+;; Lade Bibliothek
+(if *blockimport-lib-path*
   (progn
-    ;; Lade Bibliothek
     (load *blockimport-lib-path*)
     (princ (strcat "\n  Bibliothek geladen: " *blockimport-lib-path*))
   )
