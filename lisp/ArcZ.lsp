@@ -2,7 +2,7 @@
 ;;; ArcZ.lsp
 ;;; 3D-Kreisbogen durch 3 Punkte mit beliebigen Z-Höhen
 ;;; 
-;;; Version: 1.0.0
+;;; Version: 1.0.1
 ;;; Datum: 2026-02-19
 ;;; Autor: Herbert Schrotter
 ;;;
@@ -64,8 +64,7 @@
   (command "_.UCS" "_3" p1 p2 p3)
 
   ;; 3-Punkte-Kreisbogen zeichnen
-  (command "_.ARC")
-  (command "_3P" p1 p2 p3)
+  (command "_.ARC" "_3P" p1 p2 p3)
 
   ;; UCS wiederherstellen
   (if oldUCS
@@ -82,6 +81,6 @@
 ;;; INITIALISIERUNG
 ;;; ============================================================================
 
-(princ "\nArcZ.lsp v1.0.0 geladen.")
+(princ "\nArcZ.lsp v1.0.1 geladen.")
 (princ "\nBefehl: ARCZ - 3D-Kreisbogen durch 3 Punkte")
 (princ)
