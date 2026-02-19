@@ -13,7 +13,7 @@
 ;;; - Beliebig viele Zwischenpunkte setzen mit automatisch interpolierter Höhe
 ;;; - ESC zum Beenden
 ;;;
-;;; Version: 1.4.1
+;;; Version: 1.4.2
 ;;; Datum: 2026-02-19
 ;;; Autor: Herbert Schrotter
 
@@ -89,8 +89,6 @@
 ;; Lade gemeinsame Block-Import Bibliothek
 ;; Intelligente Pfad-Suche mit mehreren Fallbacks
 
-(setq default-start-dir nil)  ;; Lokale Variable für File-Dialog
-
 ;; Versuche gespeicherten Pfad zu laden
 (setq *blockimport-lib-path* (read-blockimport-path))
 
@@ -118,24 +116,15 @@
     (princ "\n*** BlockImport.lsp wird nicht im Support-Pfad gefunden ***")
     (princ "\nBitte wählen Sie die Datei lib/BlockImport.lsp aus...")
     
-    ;; Bestimme sinnvollen Start-Ordner
-    (setq default-start-dir
-      (cond
-        ;; 1. Zeichnungs-Verzeichnis
-        ((getvar "DWGPREFIX"))
-        
-        ;; 2. Benutzer-Dokumente
-        ((getenv "USERPROFILE"))
-        
-        ;; 3. Fallback: Leer
-        (T "")
-      )
-    )
-    
     ;; Öffne File-Dialog
     (if (setq *blockimport-lib-path* 
           (getfiled "BlockImport.lsp auswählen" 
-                    default-start-dir
+                    ;; Start-Ordner: Zeichnungs-Verzeichnis oder User-Profile
+                    (cond
+                      ((getvar "DWGPREFIX"))
+                      ((getenv "USERPROFILE"))
+                      (T "")
+                    )
                     "lsp" 
                     0))
       (progn
@@ -223,7 +212,8 @@
 ;;; GLOBALE VARIABLEN
 ;;; ============================================================================
 
-;; Speichert die zuletzt eingegebene Höhe
+;; Speichert die zuletzt eingegebene Höhe für Default-Vorschlag
+;; Wird über Sessions hinweg NICHT gespeichert (nur im RAM)
 (setq g_lastHeight nil)
 
 ;;; ============================================================================
@@ -255,6 +245,22 @@
 ;;; ============================================================================
 
 ;;; Berechnet interpolierte Höhe für Punkt auf Linie zwischen zwei Fixpunkten
+;;; Verwendet Skalarprojektion - funktioniert auch für Punkte außerhalb der Strecke
+;;; 
+;;; Parameter:
+;;;   pf1 - Fixpunkt 1 (Liste x y z)
+;;;   height1 - Höhe bei Fixpunkt 1 (Zahl)
+;;;   pf2 - Fixpunkt 2 (Liste x y z)
+;;;   height2 - Höhe bei Fixpunkt 2 (Zahl)
+;;;   pg - Gesuchter Punkt (Liste x y z)
+;;; 
+;;; Rückgabe:
+;;;   Interpolierte Höhe (Zahl)
+;;;   
+;;; Funktioniert für:
+;;;   - Punkte zwischen PF1 und PF2 (0 < scalar < 1)
+;;;   - Punkte links von PF1 (scalar < 0) → Extrapolation
+;;;   - Punkte rechts von PF2 (scalar > 1) → Extrapolation
 (defun calculate-interpolated-height (pf1 height1 pf2 height2 pg / vpf vpg scalar dist-pf1-pf2 height-diff interpolated-height)
   ;; Vektor von pf1 zu pf2 (nur XY-Ebene)
   (setq vpf (list (- (car pf2) (car pf1)) 
@@ -598,7 +604,7 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nHoeheAufLinie.lsp v1.4.1 geladen.")
+(princ "\nHoeheAufLinie.lsp v1.4.2 geladen.")
 (princ "\nBefehle:")
 (princ "\n  HoeheAufLinie (HAL)      - Höheninterpolation entlang Linie (S für Skalierung)")
 (princ "\n  ManageBlockImportHAL     - Block-Verwaltung für HoeheAufLinie")
