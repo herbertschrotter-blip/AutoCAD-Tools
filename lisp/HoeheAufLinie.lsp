@@ -13,7 +13,7 @@
 ;;; - Beliebig viele Zwischenpunkte setzen mit automatisch interpolierter Höhe
 ;;; - ESC zum Beenden
 ;;;
-;;; Version: 1.4.0
+;;; Version: 1.4.1
 ;;; Datum: 2026-02-19
 ;;; Autor: Herbert Schrotter
 
@@ -255,7 +255,7 @@
 ;;; ============================================================================
 
 ;;; Berechnet interpolierte Höhe für Punkt auf Linie zwischen zwei Fixpunkten
-(defun calculate-interpolated-height (pf1 height1 pf2 height2 pg / vpf vpg scalar proj dist-pf1-proj dist-pf1-pf2 slope interpolated-height)
+(defun calculate-interpolated-height (pf1 height1 pf2 height2 pg / vpf vpg scalar dist-pf1-pf2 height-diff interpolated-height)
   ;; Vektor von pf1 zu pf2 (nur XY-Ebene)
   (setq vpf (list (- (car pf2) (car pf1)) 
                   (- (cadr pf2) (cadr pf1))))
@@ -264,26 +264,18 @@
   (setq vpg (list (- (car pg) (car pf1)) 
                   (- (cadr pg) (cadr pf1))))
   
-  ;; Skalarprojektion
+  ;; Skalarprojektion: Wie weit liegt pg auf der Linie pf1-pf2?
+  ;; Scalar = 0.0 bei pf1, 1.0 bei pf2, <0 links von pf1, >1 rechts von pf2
   (setq scalar (/ (+ (* (car vpg) (car vpf)) 
                      (* (cadr vpg) (cadr vpf))) 
                   (expt (distance pf1 pf2) 2)))
   
-  ;; Projizierter Punkt auf der Linie
-  (setq proj (list (+ (car pf1) (* scalar (car vpf))) 
-                   (+ (cadr pf1) (* scalar (cadr vpf)))))
-  
-  ;; Distanz von pf1 zum projizierten Punkt
-  (setq dist-pf1-proj (distance pf1 proj))
-  
-  ;; Gesamtdistanz zwischen Fixpunkten
-  (setq dist-pf1-pf2 (distance pf1 pf2))
-  
-  ;; Gefälle berechnen
-  (setq slope (/ (- height2 height1) dist-pf1-pf2))
+  ;; Höhendifferenz zwischen Fixpunkten
+  (setq height-diff (- height2 height1))
   
   ;; Interpolierte Höhe berechnen
-  (setq interpolated-height (+ height1 (* slope dist-pf1-proj)))
+  ;; WICHTIG: Verwende Skalar direkt - funktioniert auch für Punkte außerhalb!
+  (setq interpolated-height (+ height1 (* scalar height-diff)))
   
   interpolated-height
 )
@@ -606,7 +598,7 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nHoeheAufLinie.lsp v1.4.0 geladen.")
+(princ "\nHoeheAufLinie.lsp v1.4.1 geladen.")
 (princ "\nBefehle:")
 (princ "\n  HoeheAufLinie (HAL)      - Höheninterpolation entlang Linie (S für Skalierung)")
 (princ "\n  ManageBlockImportHAL     - Block-Verwaltung für HoeheAufLinie")
