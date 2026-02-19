@@ -13,7 +13,7 @@
 ;;; - Beliebig viele Punkte innerhalb/außerhalb setzen
 ;;; - ESC zum Beenden
 ;;;
-;;; Version: 1.5.1
+;;; Version: 1.5.2
 ;;; Datum: 2026-02-19
 ;;; Autor: Herbert Schrotter
 
@@ -334,7 +334,9 @@
       (setq w (caddr bary))
       
       ;; Höhe = gewichtete Summe
-      (setq height (+ (* u h1) (* v h2) (* w h3)))
+      ;; WICHTIG: u→p1/h1, v→p3/h3, w→p2/h2
+      ;; (wegen Vektordefinition: v0=p3-p1, v1=p2-p1, v2=pg-p1)
+      (setq height (+ (* u h1) (* w h2) (* v h3)))
       
       height
     )
@@ -810,7 +812,7 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nHoeheAufFlaeche.lsp v1.5.1 geladen.")
+(princ "\nHoeheAufFlaeche.lsp v1.5.2 geladen.")
 (princ "\nBefehle:")
 (princ "\n  HoeheAufFlaeche (HAF)    - Höheninterpolation auf Fläche (S/Z)")
 (princ "\n  ManageBlockImportHAF     - Block-Verwaltung für HoeheAufFlaeche")
