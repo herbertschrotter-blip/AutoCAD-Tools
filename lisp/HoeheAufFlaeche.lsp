@@ -13,7 +13,7 @@
 ;;; - Beliebig viele Punkte innerhalb/außerhalb setzen
 ;;; - ESC zum Beenden
 ;;;
-;;; Version: 1.2.0
+;;; Version: 1.2.2
 ;;; Datum: 2026-02-19
 ;;; Autor: Herbert Schrotter
 
@@ -261,8 +261,13 @@
 
 ;;; Zeichnet temporäre Dreiecks-Linien
 ;;; Rückgabe: Liste mit Entity-Namen
-(defun draw-temp-triangles (p1 p2 p3 p4 / ents)
+(defun draw-temp-triangles (p1 p2 p3 p4 / ents ent-data ltype-loaded)
   (setq ents nil)
+  
+  ;; Versuche DASHED Linientyp zu laden (unterdrücke Fehler)
+  (vl-catch-all-apply 'command 
+    (list "_.-linetype" "_l" "DASHED" "" "")
+  )
   
   ;; Dreieck 1: p1-p2-p3
   (command "_line" p1 p2 "")
@@ -288,10 +293,26 @@
     )
   )
   
-  ;; Setze alle Linien auf Farbe 8 (grau) und gestrichelt
+  ;; Setze Farbe und Linientyp mit entmod (zuverlässiger!)
   (foreach ent ents
     (if ent
-      (command "_change" ent "" "_p" "_c" "8" "_lt" "DASHED" "")
+      (progn
+        (setq ent-data (entget ent))
+        ;; Setze Farbe auf 8 (grau)
+        (setq ent-data (subst (cons 62 8) (assoc 62 ent-data) ent-data))
+        ;; Wenn 62 noch nicht existiert, hinzufügen
+        (if (not (assoc 62 ent-data))
+          (setq ent-data (append ent-data (list (cons 62 8))))
+        )
+        ;; Setze Linientyp auf DASHED
+        (setq ent-data (subst (cons 6 "DASHED") (assoc 6 ent-data) ent-data))
+        ;; Wenn 6 noch nicht existiert, hinzufügen
+        (if (not (assoc 6 ent-data))
+          (setq ent-data (append ent-data (list (cons 6 "DASHED"))))
+        )
+        ;; Aktualisiere Entity
+        (entmod ent-data)
+      )
     )
   )
   
@@ -915,7 +936,7 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nHoeheAufFlaeche.lsp v1.2.0 geladen.")
+(princ "\nHoeheAufFlaeche.lsp v1.2.2 geladen.")
 (princ "\nBefehle:")
 (princ "\n  HoeheAufFlaeche (HAF)    - Höheninterpolation auf Fläche (S/Z)")
 (princ "\n                             Zeigt temporär Begrenzung + Dreiecks-Netz")
