@@ -13,7 +13,7 @@
 ;;; - Beliebig viele Zwischenpunkte setzen mit automatisch interpolierter Höhe
 ;;; - ESC zum Beenden
 ;;;
-;;; Version: 1.3.1
+;;; Version: 1.4.0
 ;;; Datum: 2026-02-19
 ;;; Autor: Herbert Schrotter
 
@@ -170,6 +170,55 @@
 ;; Name des Höhenkoten-Blocks
 (setq *hoehenkote-blockname* "BLK_Hoehenkote")
 
+;; Config-Datei für XY-Skalierung
+(setq *scale-config-file* 
+  (if (getenv "APPDATA")
+    (strcat (getenv "APPDATA") "/AutoCAD/HoeheAufLinieScale.txt")
+    "C:/Temp/HoeheAufLinieScale.txt"
+  )
+)
+
+;;; Liest gespeicherte XY-Skalierung aus Config
+(defun read-scale-config ( / file scale version)
+  (setq scale nil)
+  
+  (if (not (findfile *scale-config-file*))
+    nil
+    (if (vl-catch-all-error-p
+          (setq file (vl-catch-all-apply 'open (list *scale-config-file* "r"))))
+      nil
+      (progn
+        (setq version (read-line file))
+        (setq scale (read-line file))
+        (close file)
+        (if scale
+          (atof scale)
+          nil
+        )
+      )
+    )
+  )
+)
+
+;;; Speichert XY-Skalierung in Config
+(defun save-scale-config (scale-value / file dir)
+  (setq dir (vl-filename-directory *scale-config-file*))
+  (if (not (vl-file-directory-p dir))
+    (vl-catch-all-apply 'vl-mkdir (list dir))
+  )
+  
+  (if (vl-catch-all-error-p
+        (setq file (vl-catch-all-apply 'open (list *scale-config-file* "w"))))
+    nil
+    (progn
+      (write-line "1.0" file)
+      (write-line (rtos scale-value 2 6) file)
+      (close file)
+      T
+    )
+  )
+)
+
 ;;; ============================================================================
 ;;; GLOBALE VARIABLEN
 ;;; ============================================================================
@@ -289,16 +338,52 @@
   )
 )
 
+;;; Fragt Benutzer nach XY-Skalierung und speichert in Config
+(defun getScale ( / scaleValue prompt current-scale)
+  ;; Aktuelle Skalierung aus Config lesen
+  (setq current-scale (read-scale-config))
+  
+  (setq prompt (strcat "\nNeue XY-Skalierung" 
+                       (if current-scale 
+                         (strcat " <" (rtos current-scale 2 2) ">") 
+                         " <1.0>") 
+                       ": "))
+  
+  (setq scaleValue (getreal prompt))
+  
+  ;; Wenn ENTER gedrückt
+  (if (null scaleValue)
+    (if current-scale
+      (setq scaleValue current-scale)
+      (setq scaleValue 1.0)
+    )
+  )
+  
+  ;; Validierung: Skalierung muss > 0 sein
+  (if (<= scaleValue 0.0)
+    (progn
+      (princ "\n*** Skalierung muss größer als 0 sein! Verwende 1.0 ***")
+      (setq scaleValue 1.0)
+    )
+  )
+  
+  ;; Skalierung in Config speichern
+  (save-scale-config scaleValue)
+  (princ (strcat "\n✓ Skalierung gespeichert: " (rtos scaleValue 2 2)))
+  
+  scaleValue
+)
+
 ;;; ============================================================================
 ;;; HILFSFUNKTIONEN - BLOCK EINFÜGEN
 ;;; ============================================================================
 
-;;; Fügt Höhenkoten-Block an gegebenem Punkt mit Höhe ein
-(defun insert-hoehenkote-block (einfuegepunkt hoehe / blockName heightStr old-attdia block-available importEnt ent attribs insertionPoint)
+;;; Fügt Höhenkoten-Block an gegebenem Punkt mit Höhe und Skalierung ein
+(defun insert-hoehenkote-block (einfuegepunkt hoehe scale / blockName heightStr old-attdia block-available importEnt ent attribs insertionPoint)
   (setq blockName *hoehenkote-blockname*)
   
   ;; Parameter-Prüfung
-  (if (and (valid-point-p einfuegepunkt) (valid-height-p hoehe))
+  (if (and (valid-point-p einfuegepunkt) (valid-height-p hoehe) scale)
     (progn
       ;; Block verfügbar machen
       (setq block-available (ensure-block-available blockName))
@@ -314,8 +399,8 @@
           (setq old-attdia (getvar "ATTDIA"))
           (setvar "ATTDIA" 0)
           
-          ;; Block einfügen
-          (command "_-insert" blockName einfuegepunkt "" "" "" "")
+          ;; Block einfügen MIT XY-SKALIERUNG
+          (command "_-insert" blockName einfuegepunkt scale scale "" "")
           
           ;; ATTDIA wiederherstellen
           (setvar "ATTDIA" old-attdia)
@@ -344,7 +429,7 @@
             (entdel importEnt)
           )
           
-          (princ (strcat "\n  ✓ Höhenkote gesetzt: " heightStr " auf Z=" (rtos hoehe 2 3)))
+          (princ (strcat "\n  ✓ Höhenkote gesetzt: " heightStr " | Z=" (rtos hoehe 2 3) " | XY-Scale=" (rtos scale 2 2)))
           T
         )
         (progn
@@ -365,7 +450,7 @@
 ;;; ============================================================================
 
 ;;; Hauptbefehl: Höheninterpolation entlang Linie
-(defun c:HoeheAufLinie ( / *error* old-cmdecho old-attdia pf1 height1 pf2 height2 pg interpolated-height)
+(defun c:HoeheAufLinie ( / *error* old-cmdecho old-attdia pf1 height1 pf2 height2 pg interpolated-height scale)
   
   ;; Lokaler Error-Handler
   (defun *error* (msg)
@@ -392,9 +477,26 @@
   (princ "\nSetzen Sie zwei Fixpunkte mit bekannten Höhen.")
   (princ "\nDann können Sie beliebig viele Zwischenpunkte setzen.")
   
-  ;; Fixpunkt 1
+  ;; Skalierung laden oder initialisieren
+  (setq scale (read-scale-config))
+  (if (null scale)
+    (progn
+      (princ "\n*** Keine Skalierung konfiguriert ***")
+      (setq scale (getScale))
+    )
+  )
+  
+  ;; Fixpunkt 1 mit Skalierungs-Option
   (princ "\n")
-  (setq pf1 (getpoint "\nFixpunkt 1 wählen: "))
+  (initget "Skalierung")
+  (setq pf1 (getpoint (strcat "\nFixpunkt 1 wählen (oder [S]kalierung <" (rtos scale 2 2) ">): ")))
+  
+  ;; Prüfe ob Keyword "Skalierung" gewählt wurde
+  (while (= pf1 "Skalierung")
+    (setq scale (getScale))
+    (initget "Skalierung")
+    (setq pf1 (getpoint (strcat "\nFixpunkt 1 wählen (oder [S]kalierung <" (rtos scale 2 2) ">): ")))
+  )
   
   (if (not (valid-point-p pf1))
     (princ "\n*** Abbruch: Kein gültiger Punkt gewählt ***")
@@ -405,11 +507,19 @@
         (princ "\n*** Abbruch: Keine gültige Höhe eingegeben ***")
         (progn
           (setq g_lastHeight height1)
-          (insert-hoehenkote-block pf1 height1)
+          (insert-hoehenkote-block pf1 height1 scale)
           
-          ;; Fixpunkt 2
+          ;; Fixpunkt 2 mit Skalierungs-Option
           (princ "\n")
-          (setq pf2 (getpoint "\nFixpunkt 2 wählen: "))
+          (initget "Skalierung")
+          (setq pf2 (getpoint (strcat "\nFixpunkt 2 wählen (oder [S]kalierung <" (rtos scale 2 2) ">): ")))
+          
+          ;; Prüfe ob Keyword "Skalierung" gewählt wurde
+          (while (= pf2 "Skalierung")
+            (setq scale (getScale))
+            (initget "Skalierung")
+            (setq pf2 (getpoint (strcat "\nFixpunkt 2 wählen (oder [S]kalierung <" (rtos scale 2 2) ">): ")))
+          )
           
           (if (not (valid-point-p pf2))
             (princ "\n*** Abbruch: Kein gültiger Punkt gewählt ***")
@@ -420,20 +530,37 @@
                 (princ "\n*** Abbruch: Keine gültige Höhe eingegeben ***")
                 (progn
                   (setq g_lastHeight height2)
-                  (insert-hoehenkote-block pf2 height2)
+                  (insert-hoehenkote-block pf2 height2 scale)
                   
-                  ;; Schleife: Gesuchte Punkte
+                  ;; Schleife: Gesuchte Punkte mit Skalierungs-Option
                   (princ "\n")
                   (princ "\n--- Zwischenpunkte setzen (ESC = Ende) ---")
                   
-                  (while (setq pg (getpoint "\nGesuchten Punkt wählen (ESC = Ende): "))
-                    (if (valid-point-p pg)
+                  (initget "Skalierung")
+                  (setq pg (getpoint (strcat "\nGesuchten Punkt wählen (oder [S]kalierung/ESC <" (rtos scale 2 2) ">): ")))
+                  
+                  (while pg
+                    ;; Prüfe ob Keyword "Skalierung" gewählt wurde
+                    (if (= pg "Skalierung")
                       (progn
-                        (setq interpolated-height (calculate-interpolated-height pf1 height1 pf2 height2 pg))
-                        (princ (strcat "\n  Berechnete Höhe: " (format-height interpolated-height)))
-                        (insert-hoehenkote-block pg interpolated-height)
+                        (setq scale (getScale))
+                        (initget "Skalierung")
+                        (setq pg (getpoint (strcat "\nGesuchten Punkt wählen (oder [S]kalierung/ESC <" (rtos scale 2 2) ">): ")))
                       )
-                      (princ "\n*** Ungültiger Punkt - übersprungen ***")
+                      ;; Normal: Punkt gewählt
+                      (progn
+                        (if (valid-point-p pg)
+                          (progn
+                            (setq interpolated-height (calculate-interpolated-height pf1 height1 pf2 height2 pg))
+                            (princ (strcat "\n  Berechnete Höhe: " (format-height interpolated-height)))
+                            (insert-hoehenkote-block pg interpolated-height scale)
+                          )
+                          (princ "\n*** Ungültiger Punkt - übersprungen ***")
+                        )
+                        ;; Nächsten Punkt abfragen
+                        (initget "Skalierung")
+                        (setq pg (getpoint (strcat "\nGesuchten Punkt wählen (oder [S]kalierung/ESC <" (rtos scale 2 2) ">): ")))
+                      )
                     )
                   )
                   
@@ -479,9 +606,9 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nHoeheAufLinie.lsp v1.3.1 geladen.")
+(princ "\nHoeheAufLinie.lsp v1.4.0 geladen.")
 (princ "\nBefehle:")
-(princ "\n  HoeheAufLinie (HAL)      - Höheninterpolation entlang Linie")
+(princ "\n  HoeheAufLinie (HAL)      - Höheninterpolation entlang Linie (S für Skalierung)")
 (princ "\n  ManageBlockImportHAL     - Block-Verwaltung für HoeheAufLinie")
 (princ "\n  ShowBlockPath            - Zeigt konfigurierten Block-Pfad")
 (princ "\n  ResetBlockPath           - Löscht gespeicherten Pfad")
