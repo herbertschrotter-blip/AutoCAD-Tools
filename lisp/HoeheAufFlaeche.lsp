@@ -13,7 +13,7 @@
 ;;; - Beliebig viele Punkte innerhalb/außerhalb setzen
 ;;; - ESC zum Beenden
 ;;;
-;;; Version: 1.5.0
+;;; Version: 1.5.1
 ;;; Datum: 2026-02-19
 ;;; Autor: Herbert Schrotter
 
@@ -479,6 +479,9 @@
           (command "_move" ent "" "_non" insertionPoint "_non" 
                    (list (car insertionPoint) (cadr insertionPoint) hoehe))
           
+          ;; Bringe Block nach vorne in der Zeichnungsreihenfolge
+          (command "_.draworder" ent "" "_front")
+          
           (if importEnt
             (entdel importEnt)
           )
@@ -807,7 +810,7 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nHoeheAufFlaeche.lsp v1.5.0 geladen.")
+(princ "\nHoeheAufFlaeche.lsp v1.5.1 geladen.")
 (princ "\nBefehle:")
 (princ "\n  HoeheAufFlaeche (HAF)    - Höheninterpolation auf Fläche (S/Z)")
 (princ "\n  ManageBlockImportHAF     - Block-Verwaltung für HoeheAufFlaeche")
