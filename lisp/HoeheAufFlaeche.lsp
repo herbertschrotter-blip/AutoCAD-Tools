@@ -13,7 +13,7 @@
 ;;; - Beliebig viele Punkte innerhalb/außerhalb setzen
 ;;; - ESC zum Beenden
 ;;;
-;;; Version: 1.4.0
+;;; Version: 1.4.2
 ;;; Datum: 2026-02-19
 ;;; Autor: Herbert Schrotter
 
@@ -609,7 +609,7 @@
                            num-corners pg interpolated-height scale
                            bary inside tri-info
                            pt ht prompt-str block-ent last-ent
-                           temp-entities boundary-ent triangle-ents)
+                           temp-entities boundary-ents triangle-ents)
   
   ;; Lokaler Error-Handler
   (defun *error* (msg)
@@ -809,19 +809,20 @@
       ;; ====================================================================
       ;; TEMPORÄRE VISUALISIERUNG ZEICHNEN
       ;; ====================================================================
-      (setq temp-entities nil)
+      
+      ;; Stelle sicher dass kein Command aktiv ist
+      (command "" "")
       
       (princ "\n  Zeichne Flächen-Begrenzung...")
-      (setq boundary-ent (draw-temp-boundary corner-points))
-      (if boundary-ent
-        (setq temp-entities (cons boundary-ent temp-entities))
-      )
+      (setq boundary-ents (draw-temp-boundary corner-points))
       
       (princ "\n  Zeichne Dreiecks-Netz...")
       (setq triangle-ents (draw-temp-triangles p1 p2 p3 p4))
-      (setq temp-entities (append triangle-ents temp-entities))
       
-      (princ "\n  ✓ Visualisierung aktiv (wird nach Befehl gelöscht)")
+      ;; Sammle alle temporären Entities
+      (setq temp-entities (append boundary-ents triangle-ents))
+      
+      (princ "\n  ✓ Visualisierung aktiv (bleibt beim Zoomen)")
       
       ;; Schleife: Gesuchte Punkte
       (princ "\n")
@@ -936,7 +937,7 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nHoeheAufFlaeche.lsp v1.4.0 geladen.")
+(princ "\nHoeheAufFlaeche.lsp v1.4.2 geladen.")
 (princ "\nBefehle:")
 (princ "\n  HoeheAufFlaeche (HAF)    - Höheninterpolation auf Fläche (S/Z)")
 (princ "\n                             Temp. Visualisierung bleibt beim Zoomen!")
