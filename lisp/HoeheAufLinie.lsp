@@ -13,7 +13,7 @@
 ;;; - Beliebig viele Zwischenpunkte setzen mit automatisch interpolierter Höhe
 ;;; - ESC zum Beenden
 ;;;
-;;; Version: 1.3.0
+;;; Version: 1.3.1
 ;;; Datum: 2026-02-19
 ;;; Autor: Herbert Schrotter
 
@@ -365,7 +365,7 @@
 ;;; ============================================================================
 
 ;;; Hauptbefehl: Höheninterpolation entlang Linie
-(defun c:HoeheAufLinie ( / *error* old-osmode old-cmdecho old-attdia pf1 height1 pf2 height2 pg interpolated-height)
+(defun c:HoeheAufLinie ( / *error* old-cmdecho old-attdia pf1 height1 pf2 height2 pg interpolated-height)
   
   ;; Lokaler Error-Handler
   (defun *error* (msg)
@@ -373,21 +373,19 @@
       (princ (strcat "\nFehler: " msg))
     )
     ;; Systemvariablen wiederherstellen
-    (if old-osmode (setvar "OSMODE" old-osmode))
     (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
     (if old-attdia (setvar "ATTDIA" old-attdia))
     (princ)
   )
   
   ;; Systemvariablen sichern
-  (setq old-osmode (getvar "OSMODE"))
   (setq old-cmdecho (getvar "CMDECHO"))
   (setq old-attdia (getvar "ATTDIA"))
   
   ;; Systemvariablen setzen
-  (setvar "OSMODE" 0)
-  (setvar "CMDECHO" 0)
-  (setvar "ATTDIA" 0)
+  (setvar "CMDECHO" 0)      ;; Command-Echo aus
+  (setvar "ATTDIA" 0)       ;; Attribut-Dialog aus
+  ;; OSMODE wird NICHT geändert - User braucht Objektfang für präzise Punktwahl!
   
   ;; Hauptprogramm
   (princ "\n=== Höheninterpolation entlang Linie ===")
@@ -450,7 +448,6 @@
   )
   
   ;; Cleanup
-  (if old-osmode (setvar "OSMODE" old-osmode))
   (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
   (if old-attdia (setvar "ATTDIA" old-attdia))
   
@@ -482,7 +479,7 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nHoeheAufLinie.lsp v1.3.0 geladen.")
+(princ "\nHoeheAufLinie.lsp v1.3.1 geladen.")
 (princ "\nBefehle:")
 (princ "\n  HoeheAufLinie (HAL)      - Höheninterpolation entlang Linie")
 (princ "\n  ManageBlockImportHAL     - Block-Verwaltung für HoeheAufLinie")
