@@ -43,7 +43,6 @@ Kopieren nach:
 ### Für Script-Entwickler
 
 **In Ihrem AutoLISP-Script:**
-
 ```lisp
 ;; Context setzen (WICHTIG für Namespace-Isolation!)
 (setq *block-import-context* "SetHK")  ; Eindeutige ID für Ihr Script
@@ -64,7 +63,6 @@ Kopieren nach:
 ```
 
 **Block-Manager intern aufrufen:**
-
 ```lisp
 ;; Öffnet Block-Manager für aktuellen Context
 (manage-block-import "SetHK")
@@ -93,7 +91,6 @@ Command: ManageBlockImport
 ```
 
 **Menü-Optionen:**
-
 ```
 ========================================
      BLOCK IMPORT MANAGER
@@ -295,6 +292,109 @@ Quelle: [Lee Mac Programming](https://www.lee-mac.com/)
     (manage-block-import "MeinTool")
   )
 )
+```
+
+### BlockImport.lsp Pfad Management für Calling Scripts
+
+Calling Scripts sollten den Pfad zu BlockImport.lsp persistent speichern, um wiederholte File-Dialogs zu vermeiden.
+
+**Empfohlene Implementierung (siehe SetHoehenkote.lsp als Referenz):**
+```lisp
+;; Config-Datei für BlockImport.lsp Pfad
+(setq *myscript-config-file* 
+  (strcat (getenv "APPDATA") "/AutoCAD/MeinScriptConfig.txt"))
+
+;; Liest gespeicherten BlockImport.lsp Pfad aus Config
+(defun read-blockimport-path ( / file path version)
+  (setq path nil)
+  (if (not (findfile *myscript-config-file*))
+    nil
+    (if (vl-catch-all-error-p
+          (setq file (vl-catch-all-apply 'open (list *myscript-config-file* "r"))))
+      nil
+      (progn
+        (setq version (read-line file))
+        (setq path (read-line file))
+        (close file)
+        path
+      )
+    )
+  )
+)
+
+;; Speichert BlockImport.lsp Pfad in Config
+(defun save-blockimport-path (filepath / file dir)
+  (setq dir (vl-filename-directory *myscript-config-file*))
+  (if (not (vl-file-directory-p dir))
+    (vl-catch-all-apply 'vl-mkdir (list dir))
+  )
+  (if (not (vl-catch-all-error-p
+            (setq file (vl-catch-all-apply 'open (list *myscript-config-file* "w")))))
+    (progn
+      (write-line "1.0" file)
+      (write-line filepath file)
+      (close file)
+      T
+    )
+    nil
+  )
+)
+
+;; Intelligente Pfad-Suche mit Fallback-Mechanismen
+(setq *blockimport-lib-path* (read-blockimport-path))
+
+;; Prüfe ob gespeicherter Pfad noch gültig ist
+(if (and *blockimport-lib-path* (not (findfile *blockimport-lib-path*)))
+  (setq *blockimport-lib-path* nil)
+)
+
+;; Wenn kein gültiger Pfad: Suche in Standard-Orten
+(if (null *blockimport-lib-path*)
+  (setq *blockimport-lib-path*
+    (cond
+      ((findfile "lib/BlockImport.lsp"))
+      ((findfile "BlockImport.lsp"))
+    )
+  )
+)
+
+;; Wenn immer noch nicht gefunden: File-Dialog
+(if (null *blockimport-lib-path*)
+  (progn
+    (princ "\n*** BlockImport.lsp nicht im Support-Pfad gefunden ***")
+    (setq *blockimport-lib-path* 
+      (getfiled "BlockImport.lsp auswählen" 
+                (cond ((getvar "DWGPREFIX"))
+                      ((getenv "USERPROFILE"))
+                      (T ""))
+                "lsp" 0))
+    (if *blockimport-lib-path*
+      (save-blockimport-path *blockimport-lib-path*)
+    )
+  )
+)
+
+;; Lade Bibliothek
+(if *blockimport-lib-path*
+  (load *blockimport-lib-path*)
+)
+```
+
+**Config-Format:**
+```
+1.0
+D:/OneDrive/Dokumente/.../lisp/lib/BlockImport.lsp
+```
+
+**Vorteile:**
+- User wird nur einmal nach BlockImport.lsp gefragt
+- Pfad bleibt über Sessions gespeichert
+- Automatische Fallback-Suche im Support-Pfad
+- Keine wiederholten File-Dialogs
+
+**Config-Datei Speicherort:**
+```
+%APPDATA%/AutoCAD/MeinScriptConfig.txt
 ```
 
 ## Lizenz
