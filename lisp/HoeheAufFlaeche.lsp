@@ -13,7 +13,7 @@
 ;;; - Beliebig viele Punkte innerhalb/außerhalb setzen
 ;;; - ESC zum Beenden
 ;;;
-;;; Version: 1.5.2
+;;; Version: 1.5.3
 ;;; Datum: 2026-02-19
 ;;; Autor: Herbert Schrotter
 
@@ -207,8 +207,29 @@
 ;;; ============================================================================
 
 ;;; Konvertiert Höhe in String mit genau 2 Dezimalstellen
-(defun ensure-two-decimals (heightValue)
-  (rtos heightValue 2 2)
+;;; Stellt sicher dass MINDESTENS 2 Dezimalstellen angezeigt werden
+;;; Beispiele: 2 → "2.00", 2.1 → "2.10", 2.123 → "2.12"
+(defun ensure-two-decimals (heightValue / str)
+  ;; rtos mit Modus 2 (Dezimal) und MINDESTENS 2 Dezimalstellen
+  ;; Problem: (rtos 2.0 2 2) kann "2" zurückgeben statt "2.00"
+  ;; Lösung: Prüfe ob mindestens 2 Dezimalstellen vorhanden
+  (setq str (rtos heightValue 2 2))
+  
+  ;; Prüfe ob Dezimalpunkt vorhanden
+  (if (not (vl-string-search "." str))
+    ;; Kein Dezimalpunkt → füge ".00" hinzu
+    (setq str (strcat str ".00"))
+    ;; Dezimalpunkt vorhanden → prüfe Anzahl Nachkommastellen
+    (progn
+      (setq dot-pos (vl-string-search "." str))
+      (setq decimals (- (strlen str) dot-pos 1))
+      (cond
+        ((= decimals 0) (setq str (strcat str "00")))
+        ((= decimals 1) (setq str (strcat str "0")))
+      )
+    )
+  )
+  str
 )
 
 ;;; Formatiert Höhenwert für Anzeige (mit 2 Dezimalstellen)
@@ -812,7 +833,7 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nHoeheAufFlaeche.lsp v1.5.2 geladen.")
+(princ "\nHoeheAufFlaeche.lsp v1.5.3 geladen.")
 (princ "\nBefehle:")
 (princ "\n  HoeheAufFlaeche (HAF)    - Höheninterpolation auf Fläche (S/Z)")
 (princ "\n  ManageBlockImportHAF     - Block-Verwaltung für HoeheAufFlaeche")
