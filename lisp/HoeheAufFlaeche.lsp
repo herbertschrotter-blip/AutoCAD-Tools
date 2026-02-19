@@ -13,7 +13,7 @@
 ;;; - Beliebig viele Punkte innerhalb/außerhalb setzen
 ;;; - ESC zum Beenden
 ;;;
-;;; Version: 1.4.2
+;;; Version: 1.5.0
 ;;; Datum: 2026-02-19
 ;;; Autor: Herbert Schrotter
 
@@ -227,106 +227,6 @@
 )
 
 ;;; ============================================================================
-;;; HILFSFUNKTIONEN - VISUALISIERUNG (TEMPORÄR)
-;;; ============================================================================
-
-;;; Zeichnet temporäre Polyline um Eckpunkte
-;;; Rückgabe: Entity-Name der Polyline
-(defun draw-temp-boundary (points / pline-points ent)
-  ;; Konvertiere 3D-Punkte zu 2D für Polyline
-  (setq pline-points 
-    (mapcar '(lambda (pt) (list (car pt) (cadr pt))) points)
-  )
-  
-  ;; Schließe Polyline (erster Punkt am Ende wiederholen)
-  (setq pline-points (append pline-points (list (car pline-points))))
-  
-  ;; Zeichne Polyline
-  (command "_pline")
-  (foreach pt pline-points
-    (command pt)
-  )
-  (command "")
-  
-  ;; Hole Entity und setze Farbe rot
-  (setq ent (entlast))
-  (if ent
-    (progn
-      (command "_change" ent "" "_p" "_c" "1" "")  ;; Farbe 1 = Rot
-      ent
-    )
-    nil
-  )
-)
-
-;;; Zeichnet temporäre Dreiecks-Linien
-;;; Rückgabe: Liste mit Entity-Namen
-(defun draw-temp-triangles (p1 p2 p3 p4 / ents ent-data ltype-loaded)
-  (setq ents nil)
-  
-  ;; Versuche DASHED Linientyp zu laden (unterdrücke Fehler)
-  (vl-catch-all-apply 'command 
-    (list "_.-linetype" "_l" "DASHED" "" "")
-  )
-  
-  ;; Dreieck 1: p1-p2-p3
-  (command "_line" p1 p2 "")
-  (setq ents (cons (entlast) ents))
-  
-  (command "_line" p2 p3 "")
-  (setq ents (cons (entlast) ents))
-  
-  (command "_line" p3 p1 "")
-  (setq ents (cons (entlast) ents))
-  
-  ;; Wenn 4 Punkte: Dreieck 2 und Trennlinie
-  (if p4
-    (progn
-      (command "_line" p1 p3 "")  ;; Trennlinie zwischen Dreiecken
-      (setq ents (cons (entlast) ents))
-      
-      (command "_line" p3 p4 "")
-      (setq ents (cons (entlast) ents))
-      
-      (command "_line" p4 p1 "")
-      (setq ents (cons (entlast) ents))
-    )
-  )
-  
-  ;; Setze Farbe und Linientyp mit entmod (zuverlässiger!)
-  (foreach ent ents
-    (if ent
-      (progn
-        (setq ent-data (entget ent))
-        ;; Setze Farbe auf 8 (grau)
-        (setq ent-data (subst (cons 62 8) (assoc 62 ent-data) ent-data))
-        ;; Wenn 62 noch nicht existiert, hinzufügen
-        (if (not (assoc 62 ent-data))
-          (setq ent-data (append ent-data (list (cons 62 8))))
-        )
-        ;; Setze Linientyp auf DASHED
-        (setq ent-data (subst (cons 6 "DASHED") (assoc 6 ent-data) ent-data))
-        ;; Wenn 6 noch nicht existiert, hinzufügen
-        (if (not (assoc 6 ent-data))
-          (setq ent-data (append ent-data (list (cons 6 "DASHED"))))
-        )
-        ;; Aktualisiere Entity
-        (entmod ent-data)
-      )
-    )
-  )
-  
-  ents
-)
-
-;;; Löscht Liste von temporären Entities
-(defun delete-temp-entities (ent-list / )
-  (foreach ent ent-list
-    (if (and ent (not (null (entget ent))))
-      (entdel ent)
-    )
-  )
-)
 
 ;;; ============================================================================
 ;;; HILFSFUNKTIONEN - MATHEMATIK (GEOMETRIE)
@@ -608,17 +508,12 @@
                            p1 h1 p2 h2 p3 h3 p4 h4
                            num-corners pg interpolated-height scale
                            bary inside tri-info
-                           pt ht prompt-str block-ent last-ent
-                           temp-entities boundary-ents triangle-ents)
+                           pt ht prompt-str block-ent last-ent)
   
   ;; Lokaler Error-Handler
   (defun *error* (msg)
     (if (not (member msg '("Function cancelled" "quit / exit abort")))
       (princ (strcat "\nFehler: " msg))
-    )
-    ;; Temporäre Visualisierung löschen
-    (if temp-entities
-      (delete-temp-entities temp-entities)
     )
     ;; Systemvariablen wiederherstellen
     (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
@@ -807,22 +702,8 @@
       )
       
       ;; ====================================================================
-      ;; TEMPORÄRE VISUALISIERUNG ZEICHNEN
+      ;; KEINE VISUALISIERUNG - DIREKT ZU PUNKTEN
       ;; ====================================================================
-      
-      ;; Stelle sicher dass kein Command aktiv ist
-      (command "" "")
-      
-      (princ "\n  Zeichne Flächen-Begrenzung...")
-      (setq boundary-ents (draw-temp-boundary corner-points))
-      
-      (princ "\n  Zeichne Dreiecks-Netz...")
-      (setq triangle-ents (draw-temp-triangles p1 p2 p3 p4))
-      
-      ;; Sammle alle temporären Entities
-      (setq temp-entities (append boundary-ents triangle-ents))
-      
-      (princ "\n  ✓ Visualisierung aktiv (bleibt beim Zoomen)")
       
       ;; Schleife: Gesuchte Punkte
       (princ "\n")
@@ -891,17 +772,6 @@
       )
       
       (princ "\n\n✓ Höheninterpolation abgeschlossen.")
-      
-      ;; ====================================================================
-      ;; TEMPORÄRE VISUALISIERUNG LÖSCHEN
-      ;; ====================================================================
-      (if temp-entities
-        (progn
-          (princ "\n  Lösche temporäre Visualisierung...")
-          (delete-temp-entities temp-entities)
-          (princ " ✓")
-        )
-      )
     )
   )
   
@@ -937,10 +807,9 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nHoeheAufFlaeche.lsp v1.4.2 geladen.")
+(princ "\nHoeheAufFlaeche.lsp v1.5.0 geladen.")
 (princ "\nBefehle:")
 (princ "\n  HoeheAufFlaeche (HAF)    - Höheninterpolation auf Fläche (S/Z)")
-(princ "\n                             Temp. Visualisierung bleibt beim Zoomen!")
 (princ "\n  ManageBlockImportHAF     - Block-Verwaltung für HoeheAufFlaeche")
 (princ "\n  ShowBlockPath            - Zeigt konfigurierten Block-Pfad")
 (princ "\n  ResetBlockPath           - Löscht gespeicherten Pfad")
