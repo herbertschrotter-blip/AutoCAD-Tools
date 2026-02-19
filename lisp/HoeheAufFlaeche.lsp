@@ -13,7 +13,7 @@
 ;;; - Beliebig viele Punkte innerhalb/außerhalb setzen
 ;;; - ESC zum Beenden
 ;;;
-;;; Version: 1.1.0
+;;; Version: 1.2.0
 ;;; Datum: 2026-02-19
 ;;; Autor: Herbert Schrotter
 
@@ -224,6 +224,87 @@
     ((> heightValue 0.0) (setq formattedHeight (strcat "+" formattedHeight)))
   )
   formattedHeight
+)
+
+;;; ============================================================================
+;;; HILFSFUNKTIONEN - VISUALISIERUNG (TEMPORÄR)
+;;; ============================================================================
+
+;;; Zeichnet temporäre Polyline um Eckpunkte
+;;; Rückgabe: Entity-Name der Polyline
+(defun draw-temp-boundary (points / pline-points ent)
+  ;; Konvertiere 3D-Punkte zu 2D für Polyline
+  (setq pline-points 
+    (mapcar '(lambda (pt) (list (car pt) (cadr pt))) points)
+  )
+  
+  ;; Schließe Polyline (erster Punkt am Ende wiederholen)
+  (setq pline-points (append pline-points (list (car pline-points))))
+  
+  ;; Zeichne Polyline
+  (command "_pline")
+  (foreach pt pline-points
+    (command pt)
+  )
+  (command "")
+  
+  ;; Hole Entity und setze Farbe rot
+  (setq ent (entlast))
+  (if ent
+    (progn
+      (command "_change" ent "" "_p" "_c" "1" "")  ;; Farbe 1 = Rot
+      ent
+    )
+    nil
+  )
+)
+
+;;; Zeichnet temporäre Dreiecks-Linien
+;;; Rückgabe: Liste mit Entity-Namen
+(defun draw-temp-triangles (p1 p2 p3 p4 / ents)
+  (setq ents nil)
+  
+  ;; Dreieck 1: p1-p2-p3
+  (command "_line" p1 p2 "")
+  (setq ents (cons (entlast) ents))
+  
+  (command "_line" p2 p3 "")
+  (setq ents (cons (entlast) ents))
+  
+  (command "_line" p3 p1 "")
+  (setq ents (cons (entlast) ents))
+  
+  ;; Wenn 4 Punkte: Dreieck 2 und Trennlinie
+  (if p4
+    (progn
+      (command "_line" p1 p3 "")  ;; Trennlinie zwischen Dreiecken
+      (setq ents (cons (entlast) ents))
+      
+      (command "_line" p3 p4 "")
+      (setq ents (cons (entlast) ents))
+      
+      (command "_line" p4 p1 "")
+      (setq ents (cons (entlast) ents))
+    )
+  )
+  
+  ;; Setze alle Linien auf Farbe 8 (grau) und gestrichelt
+  (foreach ent ents
+    (if ent
+      (command "_change" ent "" "_p" "_c" "8" "_lt" "DASHED" "")
+    )
+  )
+  
+  ents
+)
+
+;;; Löscht Liste von temporären Entities
+(defun delete-temp-entities (ent-list / )
+  (foreach ent ent-list
+    (if (and ent (not (null (entget ent))))
+      (entdel ent)
+    )
+  )
 )
 
 ;;; ============================================================================
@@ -440,6 +521,7 @@
 ;;; ============================================================================
 
 ;;; Fügt Höhenkoten-Block an gegebenem Punkt mit Höhe und Skalierung ein
+;;; Rückgabe: Entity-Name des eingefügten Blocks oder nil bei Fehler
 (defun insert-hoehenkote-block (einfuegepunkt hoehe scale / blockName heightStr old-attdia block-available importEnt ent attribs insertionPoint)
   (setq blockName *hoehenkote-blockname*)
   
@@ -480,7 +562,7 @@
             (entdel importEnt)
           )
           
-          T
+          ent  ;; Rückgabe: Entity-Name des Blocks
         )
         (progn
           (princ "\n*** FEHLER: Block konnte nicht geladen werden ***")
@@ -501,17 +583,23 @@
 
 ;;; Hauptbefehl: Höheninterpolation auf Fläche
 (defun c:HoeheAufFlaeche ( / *error* old-cmdecho old-attdia 
-                           corner-points corner-heights corner-number done
+                           corner-points corner-heights corner-entities corner-number done
                            p1 h1 p2 h2 p3 h3 p4 h4
                            num-corners pg interpolated-height scale
                            bary inside tri-info
-                           pt ht prompt-str)
+                           pt ht prompt-str block-ent last-ent
+                           temp-entities boundary-ent triangle-ents)
   
   ;; Lokaler Error-Handler
   (defun *error* (msg)
     (if (not (member msg '("Function cancelled" "quit / exit abort")))
       (princ (strcat "\nFehler: " msg))
     )
+    ;; Temporäre Visualisierung löschen
+    (if temp-entities
+      (delete-temp-entities temp-entities)
+    )
+    ;; Systemvariablen wiederherstellen
     (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
     (if old-attdia (setvar "ATTDIA" old-attdia))
     (princ)
@@ -557,6 +645,7 @@
   
   (setq corner-points nil)
   (setq corner-heights nil)
+  (setq corner-entities nil)  ;; Speichert Entity-Namen der eingefügten Blocks
   (setq corner-number 1)
   (setq done nil)
   
@@ -598,11 +687,18 @@
       ((= pt "Zurueck")
        (if (> corner-number 1)
          (progn
+           ;; Letzten Block löschen
+           (setq last-ent (last corner-entities))
+           (if last-ent
+             (entdel last-ent)
+           )
+           
            ;; Letzten Punkt entfernen
            (setq corner-points (reverse (cdr (reverse corner-points))))
            (setq corner-heights (reverse (cdr (reverse corner-heights))))
+           (setq corner-entities (reverse (cdr (reverse corner-entities))))
            (setq corner-number (- corner-number 1))
-           (princ (strcat "\n  ← Eckpunkt " (itoa corner-number) " entfernt"))
+           (princ (strcat "\n  ← Eckpunkt " (itoa corner-number) " entfernt (Block gelöscht)"))
          )
          (princ "\n*** Kein Punkt zum Entfernen vorhanden ***")
        )
@@ -621,17 +717,24 @@
        (if ht
          (progn
            (setq g_lastHeight ht)
-           (insert-hoehenkote-block pt ht scale)
-           (princ (strcat "\n  ✓ Eckpunkt " (itoa corner-number) " gesetzt"))
+           (setq block-ent (insert-hoehenkote-block pt ht scale))
            
-           ;; Zu Listen hinzufügen
-           (setq corner-points (append corner-points (list pt)))
-           (setq corner-heights (append corner-heights (list ht)))
-           (setq corner-number (+ corner-number 1))
-           
-           ;; Bei 3 Punkten: Optional fertig
-           (if (= corner-number 4)
-             (princ "\n  (Sie können ENTER drücken oder einen 4. Punkt setzen)")
+           (if block-ent
+             (progn
+               (princ (strcat "\n  ✓ Eckpunkt " (itoa corner-number) " gesetzt"))
+               
+               ;; Zu Listen hinzufügen
+               (setq corner-points (append corner-points (list pt)))
+               (setq corner-heights (append corner-heights (list ht)))
+               (setq corner-entities (append corner-entities (list block-ent)))
+               (setq corner-number (+ corner-number 1))
+               
+               ;; Bei 3 Punkten: Optional fertig
+               (if (= corner-number 4)
+                 (princ "\n  (Sie können ENTER drücken oder einen 4. Punkt setzen)")
+               )
+             )
+             (princ "\n*** Fehler beim Block-Einfügen - Punkt übersprungen ***")
            )
          )
          (princ "\n*** Ungültige Höhe - Punkt übersprungen ***")
@@ -681,6 +784,23 @@
           (setq h4 (nth 3 corner-heights))
         )
       )
+      
+      ;; ====================================================================
+      ;; TEMPORÄRE VISUALISIERUNG ZEICHNEN
+      ;; ====================================================================
+      (setq temp-entities nil)
+      
+      (princ "\n  Zeichne Flächen-Begrenzung...")
+      (setq boundary-ent (draw-temp-boundary corner-points))
+      (if boundary-ent
+        (setq temp-entities (cons boundary-ent temp-entities))
+      )
+      
+      (princ "\n  Zeichne Dreiecks-Netz...")
+      (setq triangle-ents (draw-temp-triangles p1 p2 p3 p4))
+      (setq temp-entities (append triangle-ents temp-entities))
+      
+      (princ "\n  ✓ Visualisierung aktiv (wird nach Befehl gelöscht)")
       
       ;; Schleife: Gesuchte Punkte
       (princ "\n")
@@ -749,6 +869,17 @@
       )
       
       (princ "\n\n✓ Höheninterpolation abgeschlossen.")
+      
+      ;; ====================================================================
+      ;; TEMPORÄRE VISUALISIERUNG LÖSCHEN
+      ;; ====================================================================
+      (if temp-entities
+        (progn
+          (princ "\n  Lösche temporäre Visualisierung...")
+          (delete-temp-entities temp-entities)
+          (princ " ✓")
+        )
+      )
     )
   )
   
@@ -784,9 +915,10 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nHoeheAufFlaeche.lsp v1.1.0 geladen.")
+(princ "\nHoeheAufFlaeche.lsp v1.2.0 geladen.")
 (princ "\nBefehle:")
-(princ "\n  HoeheAufFlaeche (HAF)    - Höheninterpolation auf Fläche (S/Z für Skalierung/Zurück)")
+(princ "\n  HoeheAufFlaeche (HAF)    - Höheninterpolation auf Fläche (S/Z)")
+(princ "\n                             Zeigt temporär Begrenzung + Dreiecks-Netz")
 (princ "\n  ManageBlockImportHAF     - Block-Verwaltung für HoeheAufFlaeche")
 (princ "\n  ShowBlockPath            - Zeigt konfigurierten Block-Pfad")
 (princ "\n  ResetBlockPath           - Löscht gespeicherten Pfad")
