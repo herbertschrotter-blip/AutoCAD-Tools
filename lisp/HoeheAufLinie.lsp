@@ -3,9 +3,9 @@
 ;;; Speziell für Leica-Vermessungsarbeiten
 ;;;
 ;;; Installation:
-;;; 1. Diese Datei in den AutoCAD Support-Ordner kopieren
-;;; 2. lib/BlockImport.lsp muss ebenfalls im Support-Ordner sein
-;;; 3. AutoCAD neu starten oder mit (load "HoeheAufLinie.lsp") laden
+;;; 1. Diese Datei mit APPLOAD laden
+;;; 2. Beim ersten Mal nach lib/BlockImport.lsp gefragt werden
+;;; 3. Pfad wird gespeichert für zukünftige Sitzungen
 ;;;
 ;;; Verwendung:
 ;;; - Befehl: HoeheAufLinie (oder HAL)
@@ -13,43 +13,150 @@
 ;;; - Beliebig viele Zwischenpunkte setzen mit automatisch interpolierter Höhe
 ;;; - ESC zum Beenden
 ;;;
-;;; Version: 1.1.1
-;;; Datum: 2026-02-10
+;;; Version: 1.3.0
+;;; Datum: 2026-02-19
 ;;; Autor: Herbert Schrotter
 
 ;;; ============================================================================
 ;;; BIBLIOTHEKEN LADEN
 ;;; ============================================================================
 
-;; Lade gemeinsame Block-Import Bibliothek
-;; Intelligente Pfad-Suche mit mehreren Fallbacks
-(setq *blockimport-lib-path*
-  (cond
-    ;; 1. Versuch: Relativ zum aktuellen Script (lisp/lib/BlockImport.lsp)
-    ((findfile (strcat (vl-filename-directory (findfile "HoeheAufLinie.lsp")) 
-                       "/lib/BlockImport.lsp")))
-    
-    ;; 2. Versuch: lib/ Unterordner im Support-Ordner
-    ((findfile "lib/BlockImport.lsp"))
-    
-    ;; 3. Versuch: Direkt im Support-Ordner (falls lib/ dort kopiert wurde)
-    ((findfile "BlockImport.lsp"))
+;; Config-Datei für BlockImport.lsp Pfad
+(setq *hal-config-file* 
+  (if (getenv "APPDATA")
+    (strcat (getenv "APPDATA") "/AutoCAD/HoeheAufLinieConfig.txt")
+    "C:/Temp/HoeheAufLinieConfig.txt"
   )
 )
 
-;; Prüfe ob Bibliothek gefunden wurde
+;;; Liest gespeicherten BlockImport.lsp Pfad aus Config
+(defun read-blockimport-path ( / file path version)
+  (setq path nil)
+  
+  ;; Prüfe ob Config-Datei existiert
+  (if (not (findfile *hal-config-file*))
+    nil  ;; Datei existiert nicht
+    ;; Versuche Datei zu öffnen mit Error-Handling
+    (if (vl-catch-all-error-p
+          (setq file (vl-catch-all-apply 'open (list *hal-config-file* "r"))))
+      (progn
+        (princ (strcat "\n*** Fehler beim Öffnen der Config-Datei: " *hal-config-file* " ***"))
+        nil
+      )
+      (progn
+        ;; Erste Zeile: Version
+        (setq version (read-line file))
+        ;; Zweite Zeile: Pfad
+        (setq path (read-line file))
+        (close file)
+        path
+      )
+    )
+  )
+)
+
+;;; Speichert BlockImport.lsp Pfad in Config
+(defun save-blockimport-path (filepath / file dir)
+  ;; Erstelle Verzeichnis falls nicht vorhanden
+  (setq dir (vl-filename-directory *hal-config-file*))
+  (if (not (vl-file-directory-p dir))
+    (if (vl-catch-all-error-p (vl-catch-all-apply 'vl-mkdir (list dir)))
+      (progn
+        (princ (strcat "\n*** Fehler beim Erstellen des Config-Verzeichnis: " dir " ***"))
+        nil
+      )
+      ;; Verzeichnis erfolgreich erstellt
+      T
+    )
+  )
+  
+  ;; Speichere Pfad mit Error-Handling
+  (if (vl-catch-all-error-p
+        (setq file (vl-catch-all-apply 'open (list *hal-config-file* "w"))))
+    (progn
+      (princ (strcat "\n*** Fehler beim Schreiben der Config-Datei: " *hal-config-file* " ***"))
+      nil
+    )
+    (progn
+      (write-line "1.0" file)
+      (write-line filepath file)
+      (close file)
+      T
+    )
+  )
+)
+
+;; Lade gemeinsame Block-Import Bibliothek
+;; Intelligente Pfad-Suche mit mehreren Fallbacks
+
+(setq default-start-dir nil)  ;; Lokale Variable für File-Dialog
+
+;; Versuche gespeicherten Pfad zu laden
+(setq *blockimport-lib-path* (read-blockimport-path))
+
+;; Wenn gespeicherter Pfad existiert, prüfe ob Datei noch da ist
+(if (and *blockimport-lib-path* (not (findfile *blockimport-lib-path*)))
+  (setq *blockimport-lib-path* nil)  ;; Pfad ungültig
+)
+
+;; Wenn kein gültiger Pfad: Suche in Standard-Orten
+(if (null *blockimport-lib-path*)
+  (setq *blockimport-lib-path*
+    (cond
+      ;; 1. Versuch: lib/ Unterordner im Support-Ordner
+      ((findfile "lib/BlockImport.lsp"))
+      
+      ;; 2. Versuch: Direkt im Support-Ordner
+      ((findfile "BlockImport.lsp"))
+    )
+  )
+)
+
+;; Wenn immer noch nicht gefunden: Bitte User um Auswahl
 (if (null *blockimport-lib-path*)
   (progn
-    (alert (strcat "FEHLER: BlockImport.lsp nicht gefunden!\n\n"
-                   "Bitte stelle sicher, dass eine der folgenden Dateien existiert:\n"
-                   "1. lisp/lib/BlockImport.lsp (neben diesem Script)\n"
-                   "2. lib/BlockImport.lsp (im Support-Ordner)\n"
-                   "3. BlockImport.lsp (im Support-Ordner)"))
-    (exit)
+    (princ "\n*** BlockImport.lsp wird nicht im Support-Pfad gefunden ***")
+    (princ "\nBitte wählen Sie die Datei lib/BlockImport.lsp aus...")
+    
+    ;; Bestimme sinnvollen Start-Ordner
+    (setq default-start-dir
+      (cond
+        ;; 1. Zeichnungs-Verzeichnis
+        ((getvar "DWGPREFIX"))
+        
+        ;; 2. Benutzer-Dokumente
+        ((getenv "USERPROFILE"))
+        
+        ;; 3. Fallback: Leer
+        (T "")
+      )
+    )
+    
+    ;; Öffne File-Dialog
+    (if (setq *blockimport-lib-path* 
+          (getfiled "BlockImport.lsp auswählen" 
+                    default-start-dir
+                    "lsp" 
+                    0))
+      (progn
+        (princ (strcat "\nGewählte Datei: " *blockimport-lib-path*))
+        ;; Speichere Pfad für nächstes Mal
+        (save-blockimport-path *blockimport-lib-path*)
+        (princ "\nPfad wurde gespeichert für zukünftige Sitzungen.")
+      )
+      (progn
+        (alert "FEHLER: Keine Datei ausgewählt!")
+        (exit)
+      )
+    )
   )
+)
+
+;; Lade Bibliothek
+(if *blockimport-lib-path*
   (progn
-    (princ (strcat "\nLade BlockImport.lsp von: " *blockimport-lib-path*))
     (load *blockimport-lib-path*)
+    (princ (strcat "\n  Bibliothek geladen: " *blockimport-lib-path*))
   )
 )
 
@@ -57,14 +164,11 @@
 ;;; KONFIGURATION
 ;;; ============================================================================
 
+;; Block-Import Context für dieses Script (NACH dem Laden setzen!)
+(setq *block-import-context* "HoeheAufLinie")
+
 ;; Name des Höhenkoten-Blocks
 (setq *hoehenkote-blockname* "BLK_Hoehenkote")
-
-;; Standard-Pfad zur Block-Datei (wird von BlockImport.lsp verwendet)
-(setq *default-block-file* "D:/OneDrive/Dokumente/02 Arbeit/05 Vorlagen - Scripte/02_AutoCAD Tools/templates/Blöcke/BLK_Hoehenkote.dwg")
-
-;; Pfad zur Konfigurationsdatei (wird von BlockImport.lsp verwendet)
-(setq *block-config-file* (strcat (getenv "APPDATA") "/AutoCAD/HoehenkoteBlockConfig.txt"))
 
 ;;; ============================================================================
 ;;; GLOBALE VARIABLEN
@@ -102,20 +206,16 @@
 ;;; ============================================================================
 
 ;;; Berechnet interpolierte Höhe für Punkt auf Linie zwischen zwei Fixpunkten
-;;; pf1, pf2 = Fixpunkte (Listen mit x,y,z)
-;;; height1, height2 = Höhen der Fixpunkte
-;;; pg = Gesuchter Punkt (Liste mit x,y,z)
-;;; Rückgabe: Interpolierte Höhe (Zahl)
-(defun calculate-interpolated-height (pf1 height1 pf2 height2 pg / vpf vpg scalar proj dist-pf1-pf2 dist-pf1-proj slope interpolated-height)
-  ;; Vektor von pf1 zu pf2
+(defun calculate-interpolated-height (pf1 height1 pf2 height2 pg / vpf vpg scalar proj dist-pf1-proj dist-pf1-pf2 slope interpolated-height)
+  ;; Vektor von pf1 zu pf2 (nur XY-Ebene)
   (setq vpf (list (- (car pf2) (car pf1)) 
                   (- (cadr pf2) (cadr pf1))))
   
-  ;; Vektor von pf1 zu pg
+  ;; Vektor von pf1 zu pg (nur XY-Ebene)
   (setq vpg (list (- (car pg) (car pf1)) 
                   (- (cadr pg) (cadr pf1))))
   
-  ;; Skalarprojektion: Wie weit liegt pg auf der Linie pf1-pf2?
+  ;; Skalarprojektion
   (setq scalar (/ (+ (* (car vpg) (car vpf)) 
                      (* (cadr vpg) (cadr vpf))) 
                   (expt (distance pf1 pf2) 2)))
@@ -140,45 +240,92 @@
 )
 
 ;;; ============================================================================
+;;; HILFSFUNKTIONEN - INPUT-VALIDIERUNG
+;;; ============================================================================
+
+;;; Validiert ob Punkt gültig ist
+(defun valid-point-p (pt)
+  (and pt
+       (listp pt)
+       (= (length pt) 3)
+       (numberp (car pt))
+       (numberp (cadr pt))
+       (numberp (caddr pt)))
+)
+
+;;; Validiert ob Höhenwert gültig ist
+(defun valid-height-p (height)
+  (and height
+       (numberp height))
+)
+
+;;; Holt Höhenwert mit Validierung und Default
+(defun get-validated-height (prompt default / height)
+  (if default
+    (setq prompt (strcat prompt " <" (format-height default) ">: "))
+    (setq prompt (strcat prompt ": "))
+  )
+  
+  (setq height (getreal prompt))
+  
+  ;; Falls ENTER gedrückt: Default verwenden
+  (if (null height)
+    (if default
+      (setq height default)
+      ;; Kein Default: Nochmal fragen
+      (progn
+        (while (null height)
+          (princ "\n*** Bitte geben Sie eine Höhe ein ***")
+          (setq height (getreal (strcat prompt ": ")))
+        )
+      )
+    )
+  )
+  
+  ;; Validierung
+  (if (valid-height-p height)
+    height
+    nil
+  )
+)
+
+;;; ============================================================================
 ;;; HILFSFUNKTIONEN - BLOCK EINFÜGEN
 ;;; ============================================================================
 
 ;;; Fügt Höhenkoten-Block an gegebenem Punkt mit Höhe ein
-(defun CopyBlockAutomatisch (einfügepunkt höhe / blockName heightStr attdia ent attribs insertionPoint block-available importEnt)
+(defun insert-hoehenkote-block (einfuegepunkt hoehe / blockName heightStr old-attdia block-available importEnt ent attribs insertionPoint)
   (setq blockName *hoehenkote-blockname*)
   
   ;; Parameter-Prüfung
-  (if (and einfügepunkt höhe)
+  (if (and (valid-point-p einfuegepunkt) (valid-height-p hoehe))
     (progn
-      ;; Block verfügbar machen (lädt automatisch wenn nötig)
-      ;; Verwendet ensure-block-available aus BlockImport.lsp
-      ;; Rückgabe: (T importEnt) oder (nil nil)
+      ;; Block verfügbar machen
       (setq block-available (ensure-block-available blockName))
       
-      (if (car block-available)  ;; Erstes Element = Erfolg?
+      (if (car block-available)
         (progn
-          (setq importEnt (cadr block-available))  ;; Zweites Element = importEnt
+          (setq importEnt (cadr block-available))
           
-          ;; Höhe als String mit genau 2 Dezimalstellen formatieren
-          (setq heightStr (format-height-value höhe))
+          ;; Höhe formatieren
+          (setq heightStr (format-height-value hoehe))
           
-          ;; ATTDIA-Variable speichern und auf 0 setzen (keine Dialog-Anzeige)
-          (setq attdia (getvar "ATTDIA"))
+          ;; ATTDIA sichern
+          (setq old-attdia (getvar "ATTDIA"))
           (setvar "ATTDIA" 0)
           
           ;; Block einfügen
-          (command "_-insert" blockName einfügepunkt "" "" "" "")
+          (command "_-insert" blockName einfuegepunkt "" "" "" "")
           
-          ;; ATTDIA-Variable auf den ursprünglichen Wert zurücksetzen
-          (setvar "ATTDIA" attdia)
+          ;; ATTDIA wiederherstellen
+          (setvar "ATTDIA" old-attdia)
           
-          ;; Attribute im eingefügten Block setzen
+          ;; Attribute setzen
           (setq ent (entlast))
           (if (and ent (eq (cdr (assoc 0 (entget ent))) "INSERT"))
             (progn
               (setq attribs (entnext ent))
               (while (and attribs (eq (cdr (assoc 0 (entget attribs))) "ATTRIB"))
-                ;; Nur HOEHE-Attribut setzen (3DEZ wird nicht mehr verwendet)
                 (if (eq (cdr (assoc 2 (entget attribs))) "HOEHE")
                   (entmod (subst (cons 1 heightStr) (assoc 1 (entget attribs)) (entget attribs)))
                 )
@@ -187,24 +334,30 @@
             )
           )
           
-          ;; Block auf die Eingabehöhe verschieben (Z-Koordinate)
+          ;; Block auf Höhe verschieben
           (setq insertionPoint (cdr (assoc 10 (entget ent))))
           (command "_move" ent "" "_non" insertionPoint "_non" 
-                   (list (car insertionPoint) (cadr insertionPoint) höhe))
+                   (list (car insertionPoint) (cadr insertionPoint) hoehe))
           
-          ;; Den während des Imports eingefügten Block wieder entfernen (falls vorhanden)
+          ;; Import-Block entfernen
           (if importEnt
             (entdel importEnt)
           )
           
-          (princ (strcat "\n  ✓ Höhenkote gesetzt: " heightStr " auf Z=" (rtos höhe 2 3)))
+          (princ (strcat "\n  ✓ Höhenkote gesetzt: " heightStr " auf Z=" (rtos hoehe 2 3)))
+          T
         )
-        (princ "\n*** FEHLER: Block konnte nicht geladen werden ***")
+        (progn
+          (princ "\n*** FEHLER: Block konnte nicht geladen werden ***")
+          nil
+        )
       )
     )
-    (princ "\n*** Fehler: Ungültige Parameter ***")
+    (progn
+      (princ "\n*** Fehler: Ungültige Parameter ***")
+      nil
+    )
   )
-  (princ)
 )
 
 ;;; ============================================================================
@@ -212,145 +365,130 @@
 ;;; ============================================================================
 
 ;;; Hauptbefehl: Höheninterpolation entlang Linie
-(defun c:HoeheAufLinie ( / pf1 height1 pf2 height2 pg interpolated-height)
+(defun c:HoeheAufLinie ( / *error* old-osmode old-cmdecho old-attdia pf1 height1 pf2 height2 pg interpolated-height)
+  
+  ;; Lokaler Error-Handler
+  (defun *error* (msg)
+    (if (not (member msg '("Function cancelled" "quit / exit abort")))
+      (princ (strcat "\nFehler: " msg))
+    )
+    ;; Systemvariablen wiederherstellen
+    (if old-osmode (setvar "OSMODE" old-osmode))
+    (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
+    (if old-attdia (setvar "ATTDIA" old-attdia))
+    (princ)
+  )
+  
+  ;; Systemvariablen sichern
+  (setq old-osmode (getvar "OSMODE"))
+  (setq old-cmdecho (getvar "CMDECHO"))
+  (setq old-attdia (getvar "ATTDIA"))
+  
+  ;; Systemvariablen setzen
+  (setvar "OSMODE" 0)
+  (setvar "CMDECHO" 0)
+  (setvar "ATTDIA" 0)
+  
+  ;; Hauptprogramm
   (princ "\n=== Höheninterpolation entlang Linie ===")
   (princ "\nSetzen Sie zwei Fixpunkte mit bekannten Höhen.")
   (princ "\nDann können Sie beliebig viele Zwischenpunkte setzen.")
   
-  ;; ========== FIXPUNKT 1 ==========
+  ;; Fixpunkt 1
   (princ "\n")
   (setq pf1 (getpoint "\nFixpunkt 1 wählen: "))
   
-  (if (null pf1)
+  (if (not (valid-point-p pf1))
+    (princ "\n*** Abbruch: Kein gültiger Punkt gewählt ***")
     (progn
-      (princ "\n*** Abbruch: Kein Punkt gewählt ***")
-      (princ)
-    )
-    (progn
-      ;; Höhe für Fixpunkt 1
-      (setq height1 (getreal (strcat "\nHöhe Fixpunkt 1 eingeben"
-                                     (if g_lastHeight 
-                                       (strcat " <" (format-height g_lastHeight) ">") 
-                                       "")
-                                     ": ")))
+      (setq height1 (get-validated-height "\nHöhe Fixpunkt 1 eingeben" g_lastHeight))
       
-      ;; Falls ENTER: letzte Höhe verwenden
-      (if (null height1)
-        (if g_lastHeight
-          (setq height1 g_lastHeight)
-          (progn
-            (while (null height1)
-              (princ "\n*** Bitte geben Sie eine Höhe ein ***")
-              (setq height1 (getreal "\nHöhe Fixpunkt 1 eingeben: "))
-            )
-          )
-        )
-      )
-      
-      ;; Höhe speichern
-      (setq g_lastHeight height1)
-      
-      ;; Block an Fixpunkt 1 einfügen
-      (CopyBlockAutomatisch pf1 height1)
-      
-      ;; ========== FIXPUNKT 2 ==========
-      (princ "\n")
-      (setq pf2 (getpoint "\nFixpunkt 2 wählen: "))
-      
-      (if (null pf2)
+      (if (not height1)
+        (princ "\n*** Abbruch: Keine gültige Höhe eingegeben ***")
         (progn
-          (princ "\n*** Abbruch: Kein Punkt gewählt ***")
-          (princ)
-        )
-        (progn
-          ;; Höhe für Fixpunkt 2
-          (setq height2 (getreal (strcat "\nHöhe Fixpunkt 2 eingeben"
-                                         (if g_lastHeight 
-                                           (strcat " <" (format-height g_lastHeight) ">") 
-                                           "")
-                                         ": ")))
+          (setq g_lastHeight height1)
+          (insert-hoehenkote-block pf1 height1)
           
-          ;; Falls ENTER: letzte Höhe verwenden
-          (if (null height2)
-            (if g_lastHeight
-              (setq height2 g_lastHeight)
-              (progn
-                (while (null height2)
-                  (princ "\n*** Bitte geben Sie eine Höhe ein ***")
-                  (setq height2 (getreal "\nHöhe Fixpunkt 2 eingeben: "))
+          ;; Fixpunkt 2
+          (princ "\n")
+          (setq pf2 (getpoint "\nFixpunkt 2 wählen: "))
+          
+          (if (not (valid-point-p pf2))
+            (princ "\n*** Abbruch: Kein gültiger Punkt gewählt ***")
+            (progn
+              (setq height2 (get-validated-height "\nHöhe Fixpunkt 2 eingeben" g_lastHeight))
+              
+              (if (not height2)
+                (princ "\n*** Abbruch: Keine gültige Höhe eingegeben ***")
+                (progn
+                  (setq g_lastHeight height2)
+                  (insert-hoehenkote-block pf2 height2)
+                  
+                  ;; Schleife: Gesuchte Punkte
+                  (princ "\n")
+                  (princ "\n--- Zwischenpunkte setzen (ESC = Ende) ---")
+                  
+                  (while (setq pg (getpoint "\nGesuchten Punkt wählen (ESC = Ende): "))
+                    (if (valid-point-p pg)
+                      (progn
+                        (setq interpolated-height (calculate-interpolated-height pf1 height1 pf2 height2 pg))
+                        (princ (strcat "\n  Berechnete Höhe: " (format-height interpolated-height)))
+                        (insert-hoehenkote-block pg interpolated-height)
+                      )
+                      (princ "\n*** Ungültiger Punkt - übersprungen ***")
+                    )
+                  )
+                  
+                  (princ "\n\n✓ Höheninterpolation abgeschlossen.")
                 )
               )
             )
           )
-          
-          ;; Höhe speichern
-          (setq g_lastHeight height2)
-          
-          ;; Block an Fixpunkt 2 einfügen
-          (CopyBlockAutomatisch pf2 height2)
-          
-          ;; ========== SCHLEIFE: GESUCHTE PUNKTE ==========
-          (princ "\n")
-          (princ "\n--- Zwischenpunkte setzen (ESC = Ende) ---")
-          
-          (while (setq pg (getpoint "\nGesuchten Punkt wählen (ESC = Ende): "))
-            ;; Höhe interpolieren
-            (setq interpolated-height (calculate-interpolated-height pf1 height1 pf2 height2 pg))
-            
-            ;; Ausgabe der berechneten Höhe
-            (princ (strcat "\n  Berechnete Höhe: " (format-height interpolated-height)))
-            
-            ;; Block einfügen
-            (CopyBlockAutomatisch pg interpolated-height)
-          )
-          
-          (princ "\n\n✓ Höheninterpolation abgeschlossen.")
         )
       )
     )
   )
+  
+  ;; Cleanup
+  (if old-osmode (setvar "OSMODE" old-osmode))
+  (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
+  (if old-attdia (setvar "ATTDIA" old-attdia))
+  
   (princ)
 )
 
-;;; Kurzbefehl (Alias)
+;;; Kurzbefehl
 (defun c:HAL ()
   (c:HoeheAufLinie)
 )
 
-;;; Zeigt aktuell konfigurierten Block-Pfad
-;;; Verwendet show-block-path aus BlockImport.lsp
+;;; Zeigt konfigurierten Block-Pfad
 (defun c:ShowBlockPath ()
   (show-block-path)
 )
 
-;;; Löscht gespeicherten Block-Pfad
-;;; Verwendet reset-block-path aus BlockImport.lsp
+;;; Löscht gespeicherten Pfad
 (defun c:ResetBlockPath ()
   (reset-block-path)
 )
 
-;;; ============================================================================
-;;; FEHLERBEHANDLUNG
-;;; ============================================================================
-
-(defun *error* (errmsg)
-  (if (/= errmsg "quit / exit abort")
-    (princ (strcat "\nFehler: " errmsg))
-  )
-  ;; Systemvariablen wiederherstellen (falls vorhanden)
-  (if attdia (setvar "ATTDIA" attdia))
-  (princ)
+;;; Block Import Manager
+(defun c:ManageBlockImportHAL ()
+  (manage-block-import "HoeheAufLinie")
 )
 
 ;;; ============================================================================
 ;;; LADE-MELDUNG
 ;;; ============================================================================
 
-(princ "\nHoeheAufLinie.lsp v1.1.1 geladen.")
-(princ "\nBefehle: HoeheAufLinie (oder HAL) - Höheninterpolation entlang Linie")
-(princ "\n         ShowBlockPath - Zeigt konfigurierten Block-Pfad")
-(princ "\n         ResetBlockPath - Löscht gespeicherten Pfad")
-(princ "\nBibliothek: BlockImport.lsp v1.0.0")
+(vl-load-com)
+(princ "\nHoeheAufLinie.lsp v1.3.0 geladen.")
+(princ "\nBefehle:")
+(princ "\n  HoeheAufLinie (HAL)      - Höheninterpolation entlang Linie")
+(princ "\n  ManageBlockImportHAL     - Block-Verwaltung für HoeheAufLinie")
+(princ "\n  ShowBlockPath            - Zeigt konfigurierten Block-Pfad")
+(princ "\n  ResetBlockPath           - Löscht gespeicherten Pfad")
+(princ "\n")
 (princ)
 
 ;;; Ende der Datei
