@@ -13,7 +13,7 @@
 ;;; - Beliebig viele Zwischenpunkte setzen mit automatisch interpolierter Höhe
 ;;; - ESC zum Beenden
 ;;;
-;;; Version: 1.5.0
+;;; Version: 1.5.1
 ;;; Datum: 2026-02-24
 ;;; Autor: Herbert Schrotter
 
@@ -244,16 +244,30 @@
 ;;; HILFSFUNKTIONEN - BLOCK-PRÜFUNG
 ;;; ============================================================================
 
-;;; Prüft ob Block bereits an dieser Position+Höhe existiert
+;;; Prüft ob Block bereits nahe dieser Position+Höhe existiert
+;;; Verwendet distance-Funktion statt einzelner Koordinaten-Checks
+;;; WICHTIG: Transformiert BKS→WKS für korrekten Vergleich!
+;;; 
 ;;; Parameter:
-;;;   pt - Punkt (Liste x y z)
+;;;   pt - Punkt (Liste x y z) in BKS-Koordinaten
 ;;;   height - Höhe (Zahl)
 ;;;   blockname - Block-Name (String)
+;;; 
 ;;; Rückgabe:
 ;;;   T wenn Block existiert, nil sonst
-(defun block-exists-at-position (pt height blockname / ss i ent entdata inspt z-coord tolerance found)
-  (setq tolerance 0.001)  ; 1mm Toleranz für Koordinaten
+;;; 
+;;; Toleranzen:
+;;;   XY-Ebene: 0.05 Einheiten (5cm) - fängt auch Attribut-Klicks
+;;;   Z-Höhe: 0.001 Einheiten (1mm) - präzise Höhenprüfung
+(defun block-exists-at-position (pt height blockname / ss i ent inspt pt-wcs tolerance-xy tolerance-z dist-xy dist-z found)
+  (setq tolerance-xy 0.05)   ; 5cm Toleranz für XY (OSNAP kann Attribut fangen)
+  (setq tolerance-z 0.001)   ; 1mm Toleranz für Z (präzise Höhe)
   (setq found nil)
+  
+  ;; KRITISCH: Transformiere Punkt von BKS zu WKS
+  ;; Block-Einfügepunkte (DXF 10) sind IMMER in WKS!
+  ;; getpoint gibt BKS-Koordinaten zurück!
+  (setq pt-wcs (trans pt 1 0))  ; 1=UCS(BKS), 0=WCS
   
   ;; Suche alle Blöcke mit diesem Namen
   (setq ss (ssget "_X" (list (cons 0 "INSERT") (cons 2 blockname))))
@@ -263,25 +277,19 @@
       (setq i 0)
       (while (and (< i (sslength ss)) (not found))
         (setq ent (ssname ss i))
-        (setq entdata (entget ent))
+        (setq inspt (cdr (assoc 10 (entget ent))))
         
-        ;; Einfügepunkt holen
-        (setq inspt (cdr (assoc 10 entdata)))
+        ;; Berechne XY-Abstand mit distance (2D) - WKS zu WKS!
+        (setq dist-xy (distance (list (car pt-wcs) (cadr pt-wcs)) 
+                                (list (car inspt) (cadr inspt))))
         
-        ;; Prüfe XY-Position (mit Toleranz)
-        (if (and 
-              (< (abs (- (car pt) (car inspt))) tolerance)
-              (< (abs (- (cadr pt) (cadr inspt))) tolerance)
-            )
-          (progn
-            ;; XY stimmt! Jetzt Z-Höhe prüfen
-            (setq z-coord (caddr inspt))
-            
-            ;; Prüfe Z-Höhe (mit Toleranz)
-            (if (< (abs (- height z-coord)) tolerance)
-              (setq found T)  ; Block gefunden!
-            )
-          )
+        ;; Berechne Z-Abstand
+        (setq dist-z (abs (- height (caddr inspt))))
+        
+        ;; Prüfe beide Abstände
+        (if (and (< dist-xy tolerance-xy)
+                 (< dist-z tolerance-z))
+          (setq found T)  ; Block in Nähe gefunden!
         )
         
         (setq i (1+ i))
@@ -556,13 +564,13 @@
   ;; Fixpunkt 1 mit Skalierungs-Option
   (princ "\n")
   (initget "Skalierung")
-  (setq pf1 (getpoint (strcat "\nFixpunkt 1 wählen (oder [S]kalierung <" (rtos scale 2 2) ">): ")))
+  (setq pf1 (getpoint (strcat "\nFixpunkt 1 wählen (oder Skalierung <" (rtos scale 2 2) ">): ")))
   
   ;; Prüfe ob Keyword "Skalierung" gewählt wurde
   (while (= pf1 "Skalierung")
     (setq scale (getScale))
     (initget "Skalierung")
-    (setq pf1 (getpoint (strcat "\nFixpunkt 1 wählen (oder [S]kalierung <" (rtos scale 2 2) ">): ")))
+    (setq pf1 (getpoint (strcat "\nFixpunkt 1 wählen (oder Skalierung <" (rtos scale 2 2) ">): ")))
   )
   
   (if (not (valid-point-p pf1))
@@ -580,13 +588,13 @@
           ;; Fixpunkt 2 mit Skalierungs-Option
           (princ "\n")
           (initget "Skalierung")
-          (setq pf2 (getpoint (strcat "\nFixpunkt 2 wählen (oder [S]kalierung <" (rtos scale 2 2) ">): ")))
+          (setq pf2 (getpoint (strcat "\nFixpunkt 2 wählen (oder Skalierung <" (rtos scale 2 2) ">): ")))
           
           ;; Prüfe ob Keyword "Skalierung" gewählt wurde
           (while (= pf2 "Skalierung")
             (setq scale (getScale))
             (initget "Skalierung")
-            (setq pf2 (getpoint (strcat "\nFixpunkt 2 wählen (oder [S]kalierung <" (rtos scale 2 2) ">): ")))
+            (setq pf2 (getpoint (strcat "\nFixpunkt 2 wählen (oder Skalierung <" (rtos scale 2 2) ">): ")))
           )
           
           (if (not (valid-point-p pf2))
@@ -606,7 +614,7 @@
                   (princ "\n--- Zwischenpunkte setzen (ESC = Ende) ---")
                   
                   (initget "Skalierung")
-                  (setq pg (getpoint (strcat "\nGesuchten Punkt wählen (oder [S]kalierung/ESC <" (rtos scale 2 2) ">): ")))
+                  (setq pg (getpoint (strcat "\nGesuchten Punkt wählen (oder Skalierung/ESC <" (rtos scale 2 2) ">): ")))
                   
                   (while pg
                     ;; Prüfe ob Keyword "Skalierung" gewählt wurde
@@ -614,7 +622,7 @@
                       (progn
                         (setq scale (getScale))
                         (initget "Skalierung")
-                        (setq pg (getpoint (strcat "\nGesuchten Punkt wählen (oder [S]kalierung/ESC <" (rtos scale 2 2) ">): ")))
+                        (setq pg (getpoint (strcat "\nGesuchten Punkt wählen (oder Skalierung/ESC <" (rtos scale 2 2) ">): ")))
                       )
                       ;; Normal: Punkt gewählt
                       (progn
@@ -629,7 +637,7 @@
                         )
                         ;; Nächsten Punkt abfragen
                         (initget "Skalierung")
-                        (setq pg (getpoint (strcat "\nGesuchten Punkt wählen (oder [S]kalierung/ESC <" (rtos scale 2 2) ">): ")))
+                        (setq pg (getpoint (strcat "\nGesuchten Punkt wählen (oder Skalierung/ESC <" (rtos scale 2 2) ">): ")))
                       )
                     )
                   )
@@ -676,7 +684,7 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nHoeheAufLinie.lsp v1.5.0 geladen.")
+(princ "\nHoeheAufLinie.lsp v1.5.1 geladen.")
 (princ "\nBefehle:")
 (princ "\n  HoeheAufLinie (HAL)      - Höheninterpolation entlang Linie (S für Skalierung)")
 (princ "\n  ManageBlockImportHAL     - Block-Verwaltung für HoeheAufLinie")
