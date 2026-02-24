@@ -13,8 +13,8 @@
 ;;; - Beliebig viele Zwischenpunkte setzen mit automatisch interpolierter Höhe
 ;;; - ESC zum Beenden
 ;;;
-;;; Version: 1.4.2
-;;; Datum: 2026-02-19
+;;; Version: 1.5.0
+;;; Datum: 2026-02-24
 ;;; Autor: Herbert Schrotter
 
 ;;; ============================================================================
@@ -241,6 +241,59 @@
 )
 
 ;;; ============================================================================
+;;; HILFSFUNKTIONEN - BLOCK-PRÜFUNG
+;;; ============================================================================
+
+;;; Prüft ob Block bereits an dieser Position+Höhe existiert
+;;; Parameter:
+;;;   pt - Punkt (Liste x y z)
+;;;   height - Höhe (Zahl)
+;;;   blockname - Block-Name (String)
+;;; Rückgabe:
+;;;   T wenn Block existiert, nil sonst
+(defun block-exists-at-position (pt height blockname / ss i ent entdata inspt z-coord tolerance found)
+  (setq tolerance 0.001)  ; 1mm Toleranz für Koordinaten
+  (setq found nil)
+  
+  ;; Suche alle Blöcke mit diesem Namen
+  (setq ss (ssget "_X" (list (cons 0 "INSERT") (cons 2 blockname))))
+  
+  (if ss
+    (progn
+      (setq i 0)
+      (while (and (< i (sslength ss)) (not found))
+        (setq ent (ssname ss i))
+        (setq entdata (entget ent))
+        
+        ;; Einfügepunkt holen
+        (setq inspt (cdr (assoc 10 entdata)))
+        
+        ;; Prüfe XY-Position (mit Toleranz)
+        (if (and 
+              (< (abs (- (car pt) (car inspt))) tolerance)
+              (< (abs (- (cadr pt) (cadr inspt))) tolerance)
+            )
+          (progn
+            ;; XY stimmt! Jetzt Z-Höhe prüfen
+            (setq z-coord (caddr inspt))
+            
+            ;; Prüfe Z-Höhe (mit Toleranz)
+            (if (< (abs (- height z-coord)) tolerance)
+              (setq found T)  ; Block gefunden!
+            )
+          )
+        )
+        
+        (setq i (1+ i))
+      )
+      
+      found
+    )
+    nil  ; Keine Blöcke gefunden
+  )
+)
+
+;;; ============================================================================
 ;;; HILFSFUNKTIONEN - MATHEMATIK
 ;;; ============================================================================
 
@@ -377,62 +430,78 @@
 ;;; ============================================================================
 
 ;;; Fügt Höhenkoten-Block an gegebenem Punkt mit Höhe und Skalierung ein
-(defun insert-hoehenkote-block (einfuegepunkt hoehe scale / blockName heightStr old-attdia block-available importEnt ent attribs insertionPoint)
+;;; Parameter:
+;;;   einfuegepunkt - XYZ Punkt (Liste)
+;;;   hoehe - Höhenwert (Zahl)
+;;;   scale - XY-Skalierung (Zahl)
+;;;   skip-if-exists - T = Nicht einfügen wenn Block schon existiert (für Fixpunkte)
+;;;                    nil = Immer einfügen (für Zwischenpunkte)
+(defun insert-hoehenkote-block (einfuegepunkt hoehe scale skip-if-exists / blockName heightStr old-attdia block-available importEnt ent attribs insertionPoint)
   (setq blockName *hoehenkote-blockname*)
   
   ;; Parameter-Prüfung
   (if (and (valid-point-p einfuegepunkt) (valid-height-p hoehe) scale)
     (progn
-      ;; Block verfügbar machen
-      (setq block-available (ensure-block-available blockName))
       
-      (if (car block-available)
+      ;; NEU: Prüfe ob Block bereits existiert (nur wenn skip-if-exists = T)
+      (if (and skip-if-exists (block-exists-at-position einfuegepunkt hoehe blockName))
         (progn
-          (setq importEnt (cadr block-available))
-          
-          ;; Höhe formatieren
-          (setq heightStr (format-height-value hoehe))
-          
-          ;; ATTDIA sichern
-          (setq old-attdia (getvar "ATTDIA"))
-          (setvar "ATTDIA" 0)
-          
-          ;; Block einfügen MIT XY-SKALIERUNG
-          (command "_-insert" blockName einfuegepunkt scale scale "" "")
-          
-          ;; ATTDIA wiederherstellen
-          (setvar "ATTDIA" old-attdia)
-          
-          ;; Attribute setzen
-          (setq ent (entlast))
-          (if (and ent (eq (cdr (assoc 0 (entget ent))) "INSERT"))
-            (progn
-              (setq attribs (entnext ent))
-              (while (and attribs (eq (cdr (assoc 0 (entget attribs))) "ATTRIB"))
-                (if (eq (cdr (assoc 2 (entget attribs))) "HOEHE")
-                  (entmod (subst (cons 1 heightStr) (assoc 1 (entget attribs)) (entget attribs)))
-                )
-                (setq attribs (entnext attribs))
-              )
-            )
-          )
-          
-          ;; Block auf Höhe verschieben
-          (setq insertionPoint (cdr (assoc 10 (entget ent))))
-          (command "_move" ent "" "_non" insertionPoint "_non" 
-                   (list (car insertionPoint) (cadr insertionPoint) hoehe))
-          
-          ;; Import-Block entfernen
-          (if importEnt
-            (entdel importEnt)
-          )
-          
-          (princ (strcat "\n  ✓ Höhenkote gesetzt: " heightStr " | Z=" (rtos hoehe 2 3) " | XY-Scale=" (rtos scale 2 2)))
-          T
+          (princ (strcat "\n  ✓ Block existiert bereits: " (format-height-value hoehe) " | Z=" (rtos hoehe 2 3)))
+          nil  ; Kein Block eingefügt
         )
         (progn
-          (princ "\n*** FEHLER: Block konnte nicht geladen werden ***")
-          nil
+          ;; BESTEHENDER CODE: Block verfügbar machen
+          (setq block-available (ensure-block-available blockName))
+          
+          (if (car block-available)
+            (progn
+              (setq importEnt (cadr block-available))
+              
+              ;; Höhe formatieren
+              (setq heightStr (format-height-value hoehe))
+              
+              ;; ATTDIA sichern
+              (setq old-attdia (getvar "ATTDIA"))
+              (setvar "ATTDIA" 0)
+              
+              ;; Block einfügen MIT XY-SKALIERUNG
+              (command "_-insert" blockName einfuegepunkt scale scale "" "")
+              
+              ;; ATTDIA wiederherstellen
+              (setvar "ATTDIA" old-attdia)
+              
+              ;; Attribute setzen
+              (setq ent (entlast))
+              (if (and ent (eq (cdr (assoc 0 (entget ent))) "INSERT"))
+                (progn
+                  (setq attribs (entnext ent))
+                  (while (and attribs (eq (cdr (assoc 0 (entget attribs))) "ATTRIB"))
+                    (if (eq (cdr (assoc 2 (entget attribs))) "HOEHE")
+                      (entmod (subst (cons 1 heightStr) (assoc 1 (entget attribs)) (entget attribs)))
+                    )
+                    (setq attribs (entnext attribs))
+                  )
+                )
+              )
+              
+              ;; Block auf Höhe verschieben
+              (setq insertionPoint (cdr (assoc 10 (entget ent))))
+              (command "_move" ent "" "_non" insertionPoint "_non" 
+                       (list (car insertionPoint) (cadr insertionPoint) hoehe))
+              
+              ;; Import-Block entfernen
+              (if importEnt
+                (entdel importEnt)
+              )
+              
+              (princ (strcat "\n  ✓ Höhenkote gesetzt: " heightStr " | Z=" (rtos hoehe 2 3) " | XY-Scale=" (rtos scale 2 2)))
+              T
+            )
+            (progn
+              (princ "\n*** FEHLER: Block konnte nicht geladen werden ***")
+              nil
+            )
+          )
         )
       )
     )
@@ -505,7 +574,8 @@
         (princ "\n*** Abbruch: Keine gültige Höhe eingegeben ***")
         (progn
           (setq g_lastHeight height1)
-          (insert-hoehenkote-block pf1 height1 scale)
+          ;; NEU: T = skip-if-exists für Fixpunkte
+          (insert-hoehenkote-block pf1 height1 scale T)
           
           ;; Fixpunkt 2 mit Skalierungs-Option
           (princ "\n")
@@ -528,7 +598,8 @@
                 (princ "\n*** Abbruch: Keine gültige Höhe eingegeben ***")
                 (progn
                   (setq g_lastHeight height2)
-                  (insert-hoehenkote-block pf2 height2 scale)
+                  ;; NEU: T = skip-if-exists für Fixpunkte
+                  (insert-hoehenkote-block pf2 height2 scale T)
                   
                   ;; Schleife: Gesuchte Punkte mit Skalierungs-Option
                   (princ "\n")
@@ -551,7 +622,8 @@
                           (progn
                             (setq interpolated-height (calculate-interpolated-height pf1 height1 pf2 height2 pg))
                             (princ (strcat "\n  Berechnete Höhe: " (format-height interpolated-height)))
-                            (insert-hoehenkote-block pg interpolated-height scale)
+                            ;; NEU: nil = immer einfügen für Zwischenpunkte
+                            (insert-hoehenkote-block pg interpolated-height scale nil)
                           )
                           (princ "\n*** Ungültiger Punkt - übersprungen ***")
                         )
@@ -604,7 +676,7 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nHoeheAufLinie.lsp v1.4.2 geladen.")
+(princ "\nHoeheAufLinie.lsp v1.5.0 geladen.")
 (princ "\nBefehle:")
 (princ "\n  HoeheAufLinie (HAL)      - Höheninterpolation entlang Linie (S für Skalierung)")
 (princ "\n  ManageBlockImportHAL     - Block-Verwaltung für HoeheAufLinie")
