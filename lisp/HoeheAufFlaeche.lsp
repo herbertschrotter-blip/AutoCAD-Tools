@@ -13,8 +13,8 @@
 ;;; - Beliebig viele Punkte innerhalb/außerhalb setzen
 ;;; - ESC zum Beenden
 ;;;
-;;; Version: 1.5.3
-;;; Datum: 2026-02-19
+;;; Version: 1.6.1
+;;; Datum: 2026-02-24
 ;;; Autor: Herbert Schrotter
 
 ;;; ============================================================================
@@ -248,6 +248,65 @@
 )
 
 ;;; ============================================================================
+;;; HILFSFUNKTIONEN - BLOCK-PRÜFUNG
+;;; ============================================================================
+
+;;; Prüft ob Block bereits nahe dieser Position+Höhe existiert
+;;; Verwendet distance-Funktion statt einzelner Koordinaten-Checks
+;;; WICHTIG: Transformiert BKS→WKS für korrekten Vergleich!
+;;; 
+;;; Parameter:
+;;;   pt - Punkt (Liste x y z) in BKS-Koordinaten
+;;;   height - Höhe (Zahl)
+;;;   blockname - Block-Name (String)
+;;; 
+;;; Rückgabe:
+;;;   T wenn Block existiert, nil sonst
+;;; 
+;;; Toleranzen:
+;;;   XY-Ebene: 0.05 Einheiten (5cm) - fängt auch Attribut-Klicks
+;;;   Z-Höhe: 0.001 Einheiten (1mm) - präzise Höhenprüfung
+(defun block-exists-at-position (pt height blockname / ss i ent inspt pt-wcs tolerance-xy tolerance-z dist-xy dist-z found)
+  (setq tolerance-xy 0.05)   ; 5cm Toleranz für XY (OSNAP kann Attribut fangen)
+  (setq tolerance-z 0.001)   ; 1mm Toleranz für Z (präzise Höhe)
+  (setq found nil)
+  
+  ;; KRITISCH: Transformiere Punkt von BKS zu WKS
+  ;; Block-Einfügepunkte (DXF 10) sind IMMER in WKS!
+  ;; getpoint gibt BKS-Koordinaten zurück!
+  (setq pt-wcs (trans pt 1 0))  ; 1=UCS(BKS), 0=WCS
+  
+  ;; Suche alle Blöcke mit diesem Namen
+  (setq ss (ssget "_X" (list (cons 0 "INSERT") (cons 2 blockname))))
+  
+  (if ss
+    (progn
+      (setq i 0)
+      (while (and (< i (sslength ss)) (not found))
+        (setq ent (ssname ss i))
+        (setq inspt (cdr (assoc 10 (entget ent))))
+        
+        ;; Berechne XY-Abstand mit distance (2D) - WKS zu WKS!
+        (setq dist-xy (distance (list (car pt-wcs) (cadr pt-wcs)) 
+                                (list (car inspt) (cadr inspt))))
+        
+        ;; Berechne Z-Abstand
+        (setq dist-z (abs (- height (caddr inspt))))
+        
+        ;; Prüfe beide Abstände
+        (if (and (< dist-xy tolerance-xy)
+                 (< dist-z tolerance-z))
+          (setq found T)  ; Block in Nähe gefunden!
+        )
+        
+        (setq i (1+ i))
+      )
+      
+      found
+    )
+    nil  ; Keine Blöcke gefunden
+  )
+)
 
 ;;; ============================================================================
 ;;; HILFSFUNKTIONEN - MATHEMATIK (GEOMETRIE)
@@ -465,55 +524,72 @@
 ;;; ============================================================================
 
 ;;; Fügt Höhenkoten-Block an gegebenem Punkt mit Höhe und Skalierung ein
-;;; Rückgabe: Entity-Name des eingefügten Blocks oder nil bei Fehler
-(defun insert-hoehenkote-block (einfuegepunkt hoehe scale / blockName heightStr old-attdia block-available importEnt ent attribs insertionPoint)
+;;; Parameter:
+;;;   einfuegepunkt - XYZ Punkt (Liste)
+;;;   hoehe - Höhenwert (Zahl)
+;;;   scale - XY-Skalierung (Zahl)
+;;;   skip-if-exists - T = Nicht einfügen wenn Block schon existiert (für Eckpunkte)
+;;;                    nil = Immer einfügen (für gesuchte Punkte)
+;;; Rückgabe: Entity-Name des eingefügten Blocks oder nil
+(defun insert-hoehenkote-block (einfuegepunkt hoehe scale skip-if-exists / blockName heightStr old-attdia block-available importEnt ent attribs insertionPoint)
   (setq blockName *hoehenkote-blockname*)
   
   (if (and (valid-point-p einfuegepunkt) (valid-height-p hoehe) scale)
     (progn
-      (setq block-available (ensure-block-available blockName))
       
-      (if (car block-available)
+      ;; NEU: Prüfe ob Block bereits existiert (nur wenn skip-if-exists = T)
+      (if (and skip-if-exists (block-exists-at-position einfuegepunkt hoehe blockName))
         (progn
-          (setq importEnt (cadr block-available))
-          (setq heightStr (format-height-value hoehe))
-          
-          (setq old-attdia (getvar "ATTDIA"))
-          (setvar "ATTDIA" 0)
-          
-          (command "_-insert" blockName einfuegepunkt scale scale "" "")
-          
-          (setvar "ATTDIA" old-attdia)
-          
-          (setq ent (entlast))
-          (if (and ent (eq (cdr (assoc 0 (entget ent))) "INSERT"))
-            (progn
-              (setq attribs (entnext ent))
-              (while (and attribs (eq (cdr (assoc 0 (entget attribs))) "ATTRIB"))
-                (if (eq (cdr (assoc 2 (entget attribs))) "HOEHE")
-                  (entmod (subst (cons 1 heightStr) (assoc 1 (entget attribs)) (entget attribs)))
-                )
-                (setq attribs (entnext attribs))
-              )
-            )
-          )
-          
-          (setq insertionPoint (cdr (assoc 10 (entget ent))))
-          (command "_move" ent "" "_non" insertionPoint "_non" 
-                   (list (car insertionPoint) (cadr insertionPoint) hoehe))
-          
-          ;; Bringe Block nach vorne in der Zeichnungsreihenfolge
-          (command "_.draworder" ent "" "_front")
-          
-          (if importEnt
-            (entdel importEnt)
-          )
-          
-          ent  ;; Rückgabe: Entity-Name des Blocks
+          (princ (strcat "\n  ✓ Block existiert bereits: " (format-height-value hoehe) " | Z=" (rtos hoehe 2 3)))
+          nil  ; Kein Block eingefügt
         )
         (progn
-          (princ "\n*** FEHLER: Block konnte nicht geladen werden ***")
-          nil
+          ;; BESTEHENDER CODE: Block verfügbar machen
+          (setq block-available (ensure-block-available blockName))
+          
+          (if (car block-available)
+            (progn
+              (setq importEnt (cadr block-available))
+              (setq heightStr (format-height-value hoehe))
+              
+              (setq old-attdia (getvar "ATTDIA"))
+              (setvar "ATTDIA" 0)
+              
+              (command "_-insert" blockName einfuegepunkt scale scale "" "")
+              
+              (setvar "ATTDIA" old-attdia)
+              
+              (setq ent (entlast))
+              (if (and ent (eq (cdr (assoc 0 (entget ent))) "INSERT"))
+                (progn
+                  (setq attribs (entnext ent))
+                  (while (and attribs (eq (cdr (assoc 0 (entget attribs))) "ATTRIB"))
+                    (if (eq (cdr (assoc 2 (entget attribs))) "HOEHE")
+                      (entmod (subst (cons 1 heightStr) (assoc 1 (entget attribs)) (entget attribs)))
+                    )
+                    (setq attribs (entnext attribs))
+                  )
+                )
+              )
+              
+              (setq insertionPoint (cdr (assoc 10 (entget ent))))
+              (command "_move" ent "" "_non" insertionPoint "_non" 
+                       (list (car insertionPoint) (cadr insertionPoint) hoehe))
+              
+              ;; Bringe Block nach vorne in der Zeichnungsreihenfolge
+              (command "_.draworder" ent "" "_front")
+              
+              (if importEnt
+                (entdel importEnt)
+              )
+              
+              ent  ;; Rückgabe: Entity-Name des Blocks
+            )
+            (progn
+              (princ "\n*** FEHLER: Block konnte nicht geladen werden ***")
+              nil
+            )
+          )
         )
       )
     )
@@ -553,19 +629,6 @@
   
   (setvar "CMDECHO" 0)
   (setvar "ATTDIA" 0)
-  
-  ;; Listen für Eckpunkte
-  (setq corner-points nil)
-  (setq corner-heights nil)
-  
-  ;; Skalierung laden oder initialisieren
-  (setq scale (read-scale-config))
-  (if (null scale)
-    (progn
-      (princ "\n*** Keine Skalierung konfiguriert ***")
-      (setq scale (getScale))
-    )
-  )
   
   ;; Hauptprogramm
   (princ "\n=== Höheninterpolation auf Fläche ===")
@@ -659,7 +722,8 @@
        (if ht
          (progn
            (setq g_lastHeight ht)
-           (setq block-ent (insert-hoehenkote-block pt ht scale))
+           ;; NEU: T = skip-if-exists für Eckpunkte
+           (setq block-ent (insert-hoehenkote-block pt ht scale T))
            
            (if block-ent
              (progn
@@ -782,7 +846,8 @@
                 (if interpolated-height
                   (progn
                     (princ (strcat "\n  Berechnete Höhe: " (format-height interpolated-height) " (" tri-info ")"))
-                    (insert-hoehenkote-block pg interpolated-height scale)
+                    ;; NEU: nil = immer einfügen für gesuchte Punkte
+                    (insert-hoehenkote-block pg interpolated-height scale nil)
                     (princ (strcat "  | XY-Scale=" (rtos scale 2 2)))
                   )
                   (princ "\n*** Fehler bei Höhenberechnung ***")
@@ -833,7 +898,7 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nHoeheAufFlaeche.lsp v1.5.3 geladen.")
+(princ "\nHoeheAufFlaeche.lsp v1.6.1 geladen.")
 (princ "\nBefehle:")
 (princ "\n  HoeheAufFlaeche (HAF)    - Höheninterpolation auf Fläche (S/Z)")
 (princ "\n  ManageBlockImportHAF     - Block-Verwaltung für HoeheAufFlaeche")
