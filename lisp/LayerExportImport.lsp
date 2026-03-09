@@ -3,7 +3,7 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System | Custom Property GUID | ObjectDBX Batch-Sync
 ;;; 
-;;; Version: 1.2.0
+;;; Version: 1.3.0
 ;;; Datum:   2026-03-10
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -77,7 +77,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v1.2.0" fp)
+    (write-line ";;; LayerSync Konfiguration v1.3.0" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -432,36 +432,27 @@
 
 
 ;;; ========================================================================
-;;; LAYER SAMMELN (aktuelle Zeichnung)
+;;; LAYER SAMMELN (VLA-basiert, aktuelle Zeichnung)
+;;; Rueckgabe: Sortierte Liste von Layer-Property-Listen (12 Werte)
+;;; Index: 0=Name 1=Color 2=Linetype 3=Lineweight 4=OnOff 5=Freeze
+;;;        6=Lock 7=Plot 8=VPDefault 9=Description 10=Transparency 11=Handle
 ;;; ========================================================================
 
-(defun LXI:collect-layers ( / lay-tbl lay-name result ent-data
-                              col ltype lw plot-flag on-off frz lck handle)
-  (while (setq lay-tbl (tblnext "LAYER" (not lay-tbl)))
-    (setq lay-name (cdr (assoc 2 lay-tbl)))
+(defun LXI:collect-layers ( / doc layers-coll lay-obj lay-name lay-data result)
+  (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)))
+  (setq layers-coll (vla-get-Layers doc))
+  (setq result nil)
+  (vlax-for lay-obj layers-coll
+    (setq lay-name (vla-get-Name lay-obj))
     (if (and (not (LXI:xref-layer-p lay-name))
              (LXI:sync-layer-p lay-name))
       (progn
-        (setq ent-data (entget (tblobjname "LAYER" lay-name)))
-        (setq handle (cdr (assoc 5 ent-data)))
-        (if (null handle) (setq handle "0"))
-        (setq col (cdr (assoc 62 ent-data)))
-        (if (null col) (setq col 7))
-        (setq on-off (if (< col 0) "OFF" "ON"))
-        (setq col (abs col))
-        (setq ltype (cdr (assoc 6 ent-data)))
-        (if (null ltype) (setq ltype "Continuous"))
-        (setq frz (cdr (assoc 70 ent-data)))
-        (if (null frz) (setq frz 0))
-        (setq lck frz)
-        (setq frz (if (= (logand frz 1) 1) "FROZEN" "THAWED"))
-        (setq lck (if (= (logand lck 4) 4) "LOCKED" "UNLOCKED"))
-        (setq lw "Default")
-        (setq plot-flag (cdr (assoc 290 ent-data)))
-        (setq plot-flag (if (or (null plot-flag) (= plot-flag 1)) "PLOT" "NOPLOT"))
-        (LXI:debug-print (strcat "Gefunden: " lay-name " [" handle "] Farbe=" (itoa col)))
-        (setq result
-          (cons (list lay-name (itoa col) ltype lw plot-flag on-off frz lck handle) result)))))
+        (setq lay-data (LXI:read-layer-vla lay-obj))
+        (LXI:debug-print
+          (strcat "Gefunden: " (nth 0 lay-data)
+                  " [" (nth 11 lay-data) "]"
+                  " Farbe=" (nth 1 lay-data)))
+        (setq result (cons lay-data result)))))
   (if result (vl-sort result '(lambda (a b) (< (car a) (car b))))))
 
 (defun LXI:compare-field (old-val new-val / )
@@ -655,55 +646,166 @@
       (setq found (cdr (assoc 2 lay-tbl)))))
   found)
 
-(defun LXI:create-layer (lay-name col ltype plot-flag on-off frz lck / new-col)
+;;; ------------------------------------------------------------------------
+;;; Erstellt einen neuen Layer via VLA mit allen 10 Properties
+;;; Parameter: Master-Layer-Daten als Liste (14 Felder aus Master-CSV)
+;;;   oder Einzelwerte: lay-name col ltype lw plot on-off frz lck vpdef desc trans
+;;; Rueckgabe: T bei Erfolg, nil bei Fehler
+;;; ------------------------------------------------------------------------
+(defun LXI:create-layer (lay-name col ltype lw plot-flag on-off frz lck
+                          vpdef desc trans
+                          / doc layers-coll lay-obj)
+  ;; Linientyp sicherstellen
   (setq ltype (LXI:ensure-linetype ltype))
-  (setq new-col (if (= on-off "OFF") (- col) col))
-  (if (entmake
-        (list '(0 . "LAYER") '(100 . "AcDbSymbolTableRecord")
-              '(100 . "AcDbLayerTableRecord")
-              (cons 2 lay-name) (cons 62 new-col) (cons 6 ltype) '(370 . -3)
-              (cons 290 (if (= plot-flag "PLOT") 1 0))
-              (cons 70 (+ (if (= frz "FROZEN") 1 0) (if (= lck "LOCKED") 4 0)))))
-    T nil))
-
-(defun LXI:update-layer-props (lay-name col ltype plot-flag on-off / ent-data new-col)
-  (setq ent-data (entget (tblobjname "LAYER" lay-name)))
-  (if (null ent-data) nil
+  ;; Defaults fuer neue Parameter (Abwaertskompatibilitaet)
+  (if (null lw) (setq lw -3))
+  (if (null vpdef) (setq vpdef "0"))
+  (if (null desc) (setq desc ""))
+  (if (null trans) (setq trans 0))
+  (if (numberp col) nil (setq col (atoi col)))
+  (if (numberp lw) nil (setq lw (atoi lw)))
+  (if (numberp trans) nil (setq trans (atoi trans)))
+  
+  (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)))
+  (setq layers-coll (vla-get-Layers doc))
+  (setq lay-obj
+    (vl-catch-all-apply 'vla-Add (list layers-coll lay-name)))
+  (if (vl-catch-all-error-p lay-obj) nil
     (progn
-      (setq new-col (if (= on-off "OFF") (- col) col))
-      (setq ent-data (subst (cons 62 new-col) (assoc 62 ent-data) ent-data))
-      (setq ltype (LXI:ensure-linetype ltype))
-      (if (and (/= (strcase ltype) "CONTINUOUS") (assoc 6 ent-data))
-        (setq ent-data (subst (cons 6 ltype) (assoc 6 ent-data) ent-data)))
-      (if (assoc 290 ent-data)
-        (setq ent-data (subst (cons 290 (if (= plot-flag "PLOT") 1 0))
-                              (assoc 290 ent-data) ent-data)))
-      (entmod ent-data) T)))
+      (vl-catch-all-apply 'vla-put-Color (list lay-obj col))
+      (vl-catch-all-apply 'vla-put-Linetype (list lay-obj ltype))
+      (vl-catch-all-apply 'vla-put-Lineweight (list lay-obj lw))
+      (vla-put-LayerOn lay-obj (if (= on-off "ON") :vlax-true :vlax-false))
+      (vl-catch-all-apply 'vla-put-Freeze
+        (list lay-obj (if (= frz "FROZEN") :vlax-true :vlax-false)))
+      (vla-put-Lock lay-obj (if (= lck "LOCKED") :vlax-true :vlax-false))
+      (vla-put-Plottable lay-obj (if (= plot-flag "PLOT") :vlax-true :vlax-false))
+      ;; ViewportDefault
+      (if (= vpdef "1")
+        (vl-catch-all-apply 'vlax-put-property
+          (list lay-obj 'ViewportDefault :vlax-true)))
+      ;; Beschreibung
+      (if (and desc (/= desc ""))
+        (vl-catch-all-apply 'vla-put-Description (list lay-obj desc)))
+      ;; Transparenz (command-basiert)
+      (if (and trans (> trans 0))
+        (LXI:set-transparency lay-name trans))
+      T)))
 
-(defun LXI:compare-layer-props (lay-name col ltype plot-flag on-off
-                                 / ent-data diffs local-col local-ltype
-                                   local-plot local-onoff)
-  (setq ent-data (entget (tblobjname "LAYER" lay-name)))
-  (if (null ent-data) nil
+
+;;; ------------------------------------------------------------------------
+;;; Aktualisiert einen bestehenden Layer via VLA mit allen 10 Properties
+;;; Parameter: lay-name + Master-Werte
+;;; Rueckgabe: T bei Erfolg
+;;; ------------------------------------------------------------------------
+(defun LXI:update-layer-props (lay-name col ltype lw plot-flag on-off frz lck
+                                vpdef desc trans
+                                / doc layers-coll lay-obj)
+  ;; Linientyp sicherstellen
+  (setq ltype (LXI:ensure-linetype ltype))
+  ;; Typ-Konvertierung
+  (if (null lw) (setq lw -3))
+  (if (null vpdef) (setq vpdef "0"))
+  (if (null desc) (setq desc ""))
+  (if (null trans) (setq trans 0))
+  (if (numberp col) nil (setq col (atoi col)))
+  (if (numberp lw) nil (setq lw (atoi lw)))
+  (if (numberp trans) nil (setq trans (atoi trans)))
+  
+  (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)))
+  (setq layers-coll (vla-get-Layers doc))
+  (setq lay-obj
+    (vl-catch-all-apply 'vla-Item (list layers-coll lay-name)))
+  (if (vl-catch-all-error-p lay-obj) nil
     (progn
+      (vl-catch-all-apply 'vla-put-Color (list lay-obj col))
+      (vl-catch-all-apply 'vla-put-Linetype (list lay-obj ltype))
+      (vl-catch-all-apply 'vla-put-Lineweight (list lay-obj lw))
+      (vla-put-LayerOn lay-obj (if (= on-off "ON") :vlax-true :vlax-false))
+      ;; Freeze: Nicht setzen wenn Layer aktuell ist (wuerde Fehler geben)
+      (vl-catch-all-apply 'vla-put-Freeze
+        (list lay-obj (if (= frz "FROZEN") :vlax-true :vlax-false)))
+      (vla-put-Lock lay-obj (if (= lck "LOCKED") :vlax-true :vlax-false))
+      (vla-put-Plottable lay-obj (if (= plot-flag "PLOT") :vlax-true :vlax-false))
+      ;; ViewportDefault
+      (vl-catch-all-apply 'vlax-put-property
+        (list lay-obj 'ViewportDefault
+              (if (= vpdef "1") :vlax-true :vlax-false)))
+      ;; Beschreibung
+      (vl-catch-all-apply 'vla-put-Description (list lay-obj desc))
+      ;; Transparenz
+      (LXI:set-transparency lay-name trans)
+      T)))
+
+
+;;; ------------------------------------------------------------------------
+;;; Vergleicht Layer-Properties: Master vs. Lokal (alle 10 Properties)
+;;; Parameter: lay-name + Master-Werte (als Strings)
+;;; Rueckgabe: Liste der Unterschiede oder nil wenn identisch
+;;; ------------------------------------------------------------------------
+(defun LXI:compare-layer-props (lay-name col ltype lw plot-flag on-off frz lck
+                                  vpdef desc trans
+                                  / doc layers-coll lay-obj local-data diffs)
+  ;; Defaults
+  (if (null lw) (setq lw "-3"))
+  (if (null vpdef) (setq vpdef "0"))
+  (if (null desc) (setq desc ""))
+  (if (null trans) (setq trans "0"))
+  ;; Strings sicherstellen
+  (if (numberp col) (setq col (itoa col)))
+  (if (numberp lw) (setq lw (itoa lw)))
+  (if (numberp trans) (setq trans (itoa trans)))
+  
+  (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)))
+  (setq layers-coll (vla-get-Layers doc))
+  (setq lay-obj
+    (vl-catch-all-apply 'vla-Item (list layers-coll lay-name)))
+  (if (vl-catch-all-error-p lay-obj) nil
+    (progn
+      ;; Lokale Werte lesen
+      (setq local-data (LXI:read-layer-vla lay-obj))
+      ;; local-data: (Name Color Ltype LW OnOff Frz Lck Plot VPDef Desc Trans Handle)
       (setq diffs nil)
-      (setq local-col (cdr (assoc 62 ent-data)))
-      (if (null local-col) (setq local-col 7))
-      (setq local-onoff (if (< local-col 0) "OFF" "ON"))
-      (setq local-col (abs local-col))
-      (if (/= local-col col)
-        (setq diffs (cons (strcat "  Farbe:     Master=" (itoa col) "  Lokal=" (itoa local-col)) diffs)))
-      (if (/= (strcase local-onoff) (strcase on-off))
-        (setq diffs (cons (strcat "  OnOff:     Master=" on-off "  Lokal=" local-onoff) diffs)))
-      (setq local-ltype (cdr (assoc 6 ent-data)))
-      (if (null local-ltype) (setq local-ltype "Continuous"))
-      (if (/= (strcase local-ltype) (strcase ltype))
-        (setq diffs (cons (strcat "  Linientyp: Master=" ltype "  Lokal=" local-ltype) diffs)))
-      (setq local-plot (cdr (assoc 290 ent-data)))
-      (if (null local-plot) (setq local-plot 1))
-      (if (/= local-plot (if (= plot-flag "PLOT") 1 0))
-        (setq diffs (cons (strcat "  Plot:      Master=" plot-flag
-                                  "  Lokal=" (if (= local-plot 1) "PLOT" "NOPLOT")) diffs)))
+      ;; Farbe (Index 1)
+      (if (/= (nth 1 local-data) col)
+        (setq diffs (cons (strcat "  Farbe:       Master=" col
+                                  "  Lokal=" (nth 1 local-data)) diffs)))
+      ;; Linientyp (Index 2)
+      (if (/= (strcase (nth 2 local-data)) (strcase ltype))
+        (setq diffs (cons (strcat "  Linientyp:   Master=" ltype
+                                  "  Lokal=" (nth 2 local-data)) diffs)))
+      ;; Linienstaerke (Index 3)
+      (if (/= (nth 3 local-data) lw)
+        (setq diffs (cons (strcat "  Linienstaerke: Master=" lw
+                                  "  Lokal=" (nth 3 local-data)) diffs)))
+      ;; OnOff (Index 4)
+      (if (/= (strcase (nth 4 local-data)) (strcase on-off))
+        (setq diffs (cons (strcat "  OnOff:       Master=" on-off
+                                  "  Lokal=" (nth 4 local-data)) diffs)))
+      ;; Freeze (Index 5)
+      (if (/= (strcase (nth 5 local-data)) (strcase frz))
+        (setq diffs (cons (strcat "  Freeze:      Master=" frz
+                                  "  Lokal=" (nth 5 local-data)) diffs)))
+      ;; Lock (Index 6)
+      (if (/= (strcase (nth 6 local-data)) (strcase lck))
+        (setq diffs (cons (strcat "  Lock:        Master=" lck
+                                  "  Lokal=" (nth 6 local-data)) diffs)))
+      ;; Plot (Index 7)
+      (if (/= (strcase (nth 7 local-data)) (strcase plot-flag))
+        (setq diffs (cons (strcat "  Plot:        Master=" plot-flag
+                                  "  Lokal=" (nth 7 local-data)) diffs)))
+      ;; VPDefault (Index 8)
+      (if (/= (nth 8 local-data) vpdef)
+        (setq diffs (cons (strcat "  VP-Default:  Master=" vpdef
+                                  "  Lokal=" (nth 8 local-data)) diffs)))
+      ;; Beschreibung (Index 9)
+      (if (/= (nth 9 local-data) desc)
+        (setq diffs (cons (strcat "  Beschreibung: Master=" desc
+                                  "  Lokal=" (nth 9 local-data)) diffs)))
+      ;; Transparenz (Index 10)
+      (if (/= (nth 10 local-data) trans)
+        (setq diffs (cons (strcat "  Transparenz: Master=" trans
+                                  "  Lokal=" (nth 10 local-data)) diffs)))
       (if diffs (reverse diffs) nil))))
 
 (defun LXI:ask-conflict (lay-name diffs / choice)
@@ -1710,7 +1812,7 @@
 (LXI:read-config)
 (if (not (findfile (LXI:get-config-path)))
   (progn (LXI:ensure-directory *LXI:base-path*) (LXI:write-config)))
-(princ "\nLayerExportImport.lsp v1.2.0 geladen.")
+(princ "\nLayerExportImport.lsp v1.3.0 geladen.")
 (princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG")
 (princ (strcat "\nPraefix: " *LXI:prefix* "* | Speicherort: " *LXI:base-path*))
 (princ)
