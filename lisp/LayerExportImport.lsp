@@ -4,7 +4,7 @@
 ;;; MasterID-System fuer zeichnungsuebergreifendes Tracking
 ;;; FINGERPRINTGUID durch Custom Property LayerSyncGUID ersetzt
 ;;; 
-;;; Version: 0.11.0
+;;; Version: 0.12.0
 ;;; Datum:   2026-03-09
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -15,11 +15,12 @@
 ;;;   4. Tastenkuerzel: CUI > Strg+Shift+L auf LAYSYNC legen
 ;;;
 ;;; Befehle:
-;;;   LAYSYNC - Import + Export in einem Schritt (Strg+Shift+L)
-;;;   LAYEXP  - Nur Export: Layer in Master-Datei schreiben
-;;;   LAYIMP  - Nur Import: Layer aus Master holen (interaktiv)
-;;;   LAYLOG  - Layer-Aenderungshistorie anzeigen
-;;;   LAYCFG  - Konfiguration anzeigen / aendern
+;;;   LAYSYNC   - Import + Export in einem Schritt (Strg+Shift+L)
+;;;   LAYEXP    - Nur Export: Layer in Master-Datei schreiben
+;;;   LAYIMP    - Nur Import: Layer aus Master holen (interaktiv)
+;;;   LAYLOG    - Layer-Aenderungshistorie anzeigen
+;;;   LAYSTATUS - Uebersicht aller Zeichnungen und Sync-Stand
+;;;   LAYCFG    - Konfiguration anzeigen / aendern
 ;;;
 ;;; Dateien im LayerSync-Ordner:
 ;;;   LayerMaster.csv  - Layer-Daten mit MasterID (Primary Key)
@@ -74,7 +75,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v0.11.0" fp)
+    (write-line ";;; LayerSync Konfiguration v0.12.0" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -1132,6 +1133,114 @@
 
 
 ;;; ========================================================================
+;;; Hauptbefehl: LAYSTATUS
+;;; Zeigt Uebersicht aller registrierten Zeichnungen und deren Sync-Stand
+;;; ========================================================================
+(defun c:LAYSTATUS ( / *error* old-cmdecho
+                       master-data mapper-data
+                       dwg-list dwg-entry dwg-name dwg-guid
+                       total-master dwg-count dwg-missing
+                       master-ids dwg-mids mid)
+  (defun *error* (msg)
+    (if (not (wcmatch (strcase msg T) "*cancel*,*quit*"))
+      (princ (strcat "\nFehler: " msg)))
+    (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
+    (princ))
+  (setq old-cmdecho (getvar "CMDECHO"))
+  (setvar "CMDECHO" 0)
+  
+  (setq master-data (LXI:read-master))
+  (setq mapper-data (LXI:read-mapper))
+  
+  (if (null master-data)
+    (princ "\n*** Kein Master gefunden.")
+    (progn
+      (setq total-master (length master-data))
+      
+      ;; Alle MasterIDs sammeln
+      (setq master-ids nil)
+      (foreach lay master-data
+        (setq master-ids (cons (car lay) master-ids)))
+      
+      ;; Eindeutige Zeichnungen aus Mapper extrahieren (nach GUID gruppiert)
+      ;; Format: '(("dwgname" "guid" count missing) ...)
+      (setq dwg-list nil)
+      
+      (if mapper-data
+        (progn
+          ;; Alle eindeutigen DWG+GUID Kombinationen finden
+          (foreach entry mapper-data
+            (setq dwg-name (nth 0 entry))
+            (setq dwg-guid (nth 1 entry))
+            ;; Pruefen ob schon in dwg-list
+            (if (not (assoc dwg-name dwg-list))
+              (setq dwg-list
+                (cons (list dwg-name dwg-guid) dwg-list))))
+          
+          ;; Pro Zeichnung: Layer zaehlen und fehlende ermitteln
+          (princ "\n\n====== LayerSync Status ======")
+          (princ (strcat "\nMaster: " (itoa total-master) " Layer"))
+          (princ (strcat "\nPraefix: " *LXI:prefix* "*"))
+          (princ (strcat "\nSpeicherort: " *LXI:base-path*))
+          (princ "\n")
+          (princ (strcat "\n"
+            (LXI:pad-str "Zeichnung" 35)
+            (LXI:pad-str "Layer" 8)
+            (LXI:pad-str "Fehlend" 10)
+            "GUID"))
+          (princ (strcat "\n"
+            (LXI:pad-str "-----------------------------------" 35)
+            (LXI:pad-str "--------" 8)
+            (LXI:pad-str "----------" 10)
+            "--------------------"))
+          
+          (foreach dwg-entry (reverse dwg-list)
+            (setq dwg-name (nth 0 dwg-entry))
+            (setq dwg-guid (nth 1 dwg-entry))
+            
+            ;; MasterIDs dieser Zeichnung sammeln
+            (setq dwg-mids nil)
+            (foreach entry mapper-data
+              (if (= (strcase (nth 0 entry)) (strcase dwg-name))
+                (setq dwg-mids (cons (nth 4 entry) dwg-mids))))
+            
+            (setq dwg-count (length dwg-mids))
+            
+            ;; Fehlende zaehlen: MasterIDs die nicht im Mapper dieser DWG sind
+            (setq dwg-missing 0)
+            (foreach mid master-ids
+              (if (not (member mid dwg-mids))
+                (setq dwg-missing (1+ dwg-missing))))
+            
+            (princ (strcat "\n"
+              (LXI:pad-str dwg-name 35)
+              (LXI:pad-str (itoa dwg-count) 8)
+              (LXI:pad-str
+                (if (= dwg-missing 0) "OK"
+                  (strcat (itoa dwg-missing) " fehlen"))
+                10)
+              (if (or (null dwg-guid) (= dwg-guid "") (= dwg-guid "NO-GUID"))
+                "KEINE GUID!"
+                (substr dwg-guid 1 (min 20 (strlen dwg-guid)))))))
+          
+          ;; Aktuelle Zeichnung markieren
+          (princ "\n")
+          (princ (strcat "\n  * Aktuelle Zeichnung: " (LXI:dwg-name)))
+          (princ (strcat "\n  * Aktuelle GUID: " (LXI:dwg-guid)))
+          (princ "\n=============================="))
+        ;; Kein Mapper
+        (progn
+          (princ "\n\n====== LayerSync Status ======")
+          (princ (strcat "\nMaster: " (itoa total-master) " Layer"))
+          (princ "\nMapper: Keine Eintraege.")
+          (princ "\nNoch keine Zeichnung synchronisiert.")
+          (princ "\n==============================")))))
+  
+  (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
+  (princ))
+
+
+;;; ========================================================================
 ;;; Hauptbefehl: LAYCFG
 ;;; ========================================================================
 (defun c:LAYCFG ( / *error* old-cmdecho choice new-val)
@@ -1185,8 +1294,8 @@
 (LXI:read-config)
 (if (not (findfile (LXI:get-config-path)))
   (progn (LXI:ensure-directory *LXI:base-path*) (LXI:write-config)))
-(princ "\nLayerExportImport.lsp v0.11.0 geladen.")
-(princ "\nBefehle: LAYSYNC | LAYEXP | LAYIMP | LAYLOG | LAYCFG")
+(princ "\nLayerExportImport.lsp v0.12.0 geladen.")
+(princ "\nBefehle: LAYSYNC | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG")
 (princ (strcat "\nPraefix: " *LXI:prefix* "* | Speicherort: " *LXI:base-path*))
 (princ "\nTipp: LAYSYNC auf Strg+Shift+L legen (CUI)")
 (princ)
