@@ -3,8 +3,8 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System | Custom Property GUID | ObjectDBX Batch-Sync
 ;;; 
-;;; Version: 1.1.0
-;;; Datum:   2026-03-09
+;;; Version: 1.2.0
+;;; Datum:   2026-03-10
 ;;; Autor:   Herbert Schrotter
 ;;;
 ;;; Installation:
@@ -77,7 +77,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v1.1.0" fp)
+    (write-line ";;; LayerSync Konfiguration v1.2.0" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -559,6 +559,87 @@
   (setq cmd (strcat "._-LAYER TR " (itoa trans-pct) " " lay-name " \n"))
   (vl-catch-all-apply 'vla-SendCommand (list doc cmd))
   T)
+
+
+;;; ========================================================================
+;;; VLA LAYER-ZUGRIFF (einheitlich fuer lokal, Documents, ObjectDBX)
+;;; ========================================================================
+
+;;; ------------------------------------------------------------------------
+;;; Liest alle Properties eines VLA Layer-Objekts in eine Liste
+;;; Funktioniert mit: aktuellem Document, Documents-Collection, ObjectDBX
+;;; Parameter: lay-obj - VLA Layer-Objekt
+;;; Rueckgabe: Liste mit 12 Werten:
+;;;   (Name Color Linetype Lineweight OnOff Freeze Lock
+;;;    Plot VPDefault Description Transparency Handle)
+;;; Indices: 0=Name 1=Color 2=Linetype 3=Lineweight 4=OnOff 5=Freeze
+;;;          6=Lock 7=Plot 8=VPDefault 9=Description 10=Transparency 11=Handle
+;;; ------------------------------------------------------------------------
+(defun LXI:read-layer-vla (lay-obj / lay-name col ltype lw
+                            on-off frz lck plot-flag vpdef desc trans handle)
+  ;; Name und Handle
+  (setq lay-name (vla-get-Name lay-obj))
+  (setq handle (vla-get-Handle lay-obj))
+  
+  ;; Farbe (Integer, absoluter Wert)
+  (setq col (vla-get-Color lay-obj))
+  (if (< col 0) (setq col (abs col)))
+  
+  ;; Linientyp
+  (setq ltype (vla-get-Linetype lay-obj))
+  (if (null ltype) (setq ltype "Continuous"))
+  
+  ;; Linienstaerke (Integer: -3=Default, -2=ByBlock, -1=ByLayer, 0+ in 1/100mm)
+  (setq lw (vla-get-Lineweight lay-obj))
+  
+  ;; OnOff
+  (setq on-off
+    (if (= (vla-get-LayerOn lay-obj) :vlax-true) "ON" "OFF"))
+  
+  ;; Freeze
+  (setq frz
+    (if (= (vla-get-Freeze lay-obj) :vlax-true) "FROZEN" "THAWED"))
+  
+  ;; Lock
+  (setq lck
+    (if (= (vla-get-Lock lay-obj) :vlax-true) "LOCKED" "UNLOCKED"))
+  
+  ;; Plottable
+  (setq plot-flag
+    (if (= (vla-get-Plottable lay-obj) :vlax-true) "PLOT" "NOPLOT"))
+  
+  ;; ViewportDefault (Frieren in neuen Ansichtsfenstern)
+  (setq vpdef
+    (vl-catch-all-apply 'vlax-get-property (list lay-obj 'ViewportDefault)))
+  (if (vl-catch-all-error-p vpdef) (setq vpdef 0))
+  (setq vpdef (if (or (= vpdef :vlax-true) (= vpdef -1) (= vpdef 1)) "1" "0"))
+  
+  ;; Beschreibung
+  (setq desc
+    (vl-catch-all-apply 'vla-get-Description (list lay-obj)))
+  (if (vl-catch-all-error-p desc) (setq desc ""))
+  (if (null desc) (setq desc ""))
+  
+  ;; Transparenz (XData, nur bei aktuellem Dokument lesbar)
+  ;; Bei ObjectDBX/Documents: XData nicht zugreifbar, default 0
+  (setq trans 0)
+  (vl-catch-all-apply
+    '(lambda ()
+      (setq trans (LXI:get-transparency lay-name))))
+  
+  ;; Rueckgabe als Liste (alle als Strings fuer CSV-Kompatibilitaet)
+  (list lay-name
+        (itoa col)
+        ltype
+        (itoa lw)
+        on-off
+        frz
+        lck
+        plot-flag
+        vpdef
+        desc
+        (itoa trans)
+        handle))
 
 
 ;;; ========================================================================
@@ -1629,7 +1710,7 @@
 (LXI:read-config)
 (if (not (findfile (LXI:get-config-path)))
   (progn (LXI:ensure-directory *LXI:base-path*) (LXI:write-config)))
-(princ "\nLayerExportImport.lsp v1.1.0 geladen.")
+(princ "\nLayerExportImport.lsp v1.2.0 geladen.")
 (princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG")
 (princ (strcat "\nPraefix: " *LXI:prefix* "* | Speicherort: " *LXI:base-path*))
 (princ)
