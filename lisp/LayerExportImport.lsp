@@ -1,9 +1,9 @@
 ;;; ========================================================================
 ;;; LayerExportImport.lsp
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
-;;; Erkennt Umbenennungen via Handle-Mapping
+;;; MasterID-System fuer zeichnungsuebergreifendes Tracking
 ;;; 
-;;; Version: 0.6.0
+;;; Version: 0.7.0
 ;;; Datum:   2026-03-09
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -15,11 +15,13 @@
 ;;; Befehle:
 ;;;   LAYEXP - Exportiert Layer (S_*) in Master-Datei
 ;;;   LAYIMP - Importiert Layer aus Master (Master gewinnt immer)
+;;;   LAYLOG - Zeigt Layer-Aenderungshistorie an
 ;;;   LAYCFG - Konfiguration anzeigen / aendern
 ;;;
 ;;; Dateien im LayerSync-Ordner:
-;;;   LayerMaster.csv  - Layer-Daten (Semikolon-getrennt, Excel-kompatibel)
-;;;   LayerMapper.csv  - Handle-Zuordnung (Zeichnung > Layer > Handle)
+;;;   LayerMaster.csv  - Layer-Daten mit MasterID (Primary Key)
+;;;   LayerMapper.csv  - Handle-Zuordnung (Zeichnung+Handle -> MasterID)
+;;;   LayerHistory.csv - Aenderungsprotokoll (append-only, loescht nie)
 ;;;   LayerSync.cfg    - Konfiguration (Pfad, Praefix, Debug)
 ;;; ========================================================================
 
@@ -33,12 +35,9 @@
 (setq *LXI:default-prefix* "S_")
 (setq *LXI:default-debug*  "OFF")
 
-;; Aktive Config (wird beim Laden aus .cfg gelesen)
 (setq *LXI:base-path* *LXI:default-path*)
 (setq *LXI:prefix*    *LXI:default-prefix*)
 (setq *LXI:debug*     nil)
-
-;; CSV-Trennzeichen (Semikolon fuer deutsche Excel-Locale)
 (setq *LXI:sep* ";")
 
 
@@ -46,18 +45,10 @@
 ;;; CONFIG-DATEI FUNKTIONEN
 ;;; ========================================================================
 
-
-;;; ------------------------------------------------------------------------
-;;; Gibt Pfad zur Config-Datei zurueck
-;;; ------------------------------------------------------------------------
 (defun LXI:get-config-path ( / )
   (strcat *LXI:base-path* "\\LayerSync.cfg")
 )
 
-
-;;; ------------------------------------------------------------------------
-;;; Liest Config-Datei und setzt globale Variablen
-;;; ------------------------------------------------------------------------
 (defun LXI:read-config ( / filepath fp line pos key val)
   (setq filepath (LXI:get-config-path))
   (if (findfile filepath)
@@ -77,8 +68,7 @@
                   ((= key "PATH")   (setq *LXI:base-path* val))
                   ((= key "PREFIX") (setq *LXI:prefix* val))
                   ((= key "DEBUG")
-                    (setq *LXI:debug* (= (strcase val) "ON"))
-                  )
+                    (setq *LXI:debug* (= (strcase val) "ON")))
                 )
               )
             )
@@ -90,22 +80,14 @@
   )
 )
 
-
-;;; ------------------------------------------------------------------------
-;;; Schreibt Config-Datei mit aktuellen Einstellungen
-;;; ------------------------------------------------------------------------
 (defun LXI:write-config ( / filepath fp)
   (LXI:ensure-directory *LXI:base-path*)
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if (null fp)
+    nil
     (progn
-      (princ (strcat "\n*** Fehler: Kann Config nicht schreiben: " filepath))
-      nil
-    )
-    (progn
-      (write-line ";;; LayerSync Konfiguration v0.6.0" fp)
-      (write-line ";;; Aenderungen ueber LAYCFG Befehl oder manuell hier" fp)
+      (write-line ";;; LayerSync Konfiguration v0.7.0" fp)
       (write-line ";;;" fp)
       (write-line (strcat "PATH=" *LXI:base-path*) fp)
       (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
@@ -121,27 +103,14 @@
 ;;; ALLGEMEINE HILFSFUNKTIONEN
 ;;; ========================================================================
 
-
-;;; ------------------------------------------------------------------------
-;;; Prueft ob ein Layername von einem Xref stammt
-;;; ------------------------------------------------------------------------
 (defun LXI:xref-layer-p (lay-name / )
   (wcmatch lay-name "*|*")
 )
 
-
-;;; ------------------------------------------------------------------------
-;;; Prueft ob ein Layer zum Sync-Praefix passt
-;;; ------------------------------------------------------------------------
-(defun LXI:sync-layer-p (lay-name / pattern)
-  (setq pattern (strcat *LXI:prefix* "*"))
-  (wcmatch lay-name pattern)
+(defun LXI:sync-layer-p (lay-name / )
+  (wcmatch lay-name (strcat *LXI:prefix* "*"))
 )
 
-
-;;; ------------------------------------------------------------------------
-;;; Erstellt Ordner falls nicht vorhanden
-;;; ------------------------------------------------------------------------
 (defun LXI:ensure-directory (dir-path / )
   (if (not (vl-file-directory-p dir-path))
     (vl-mkdir dir-path)
@@ -149,10 +118,6 @@
   (vl-file-directory-p dir-path)
 )
 
-
-;;; ------------------------------------------------------------------------
-;;; Gibt den LayerSync-Ordner zurueck, erstellt ihn falls noetig
-;;; ------------------------------------------------------------------------
 (defun LXI:get-sync-folder ( / )
   (if (LXI:ensure-directory *LXI:base-path*)
     *LXI:base-path*
@@ -163,10 +128,6 @@
   )
 )
 
-
-;;; ------------------------------------------------------------------------
-;;; Splittet einen String am Trennzeichen
-;;; ------------------------------------------------------------------------
 (defun LXI:split-string (str del / pos result part)
   (setq result nil)
   (while (setq pos (vl-string-search del str))
@@ -178,44 +139,69 @@
   (reverse result)
 )
 
-
-;;; ------------------------------------------------------------------------
-;;; Debug-Ausgabe (nur wenn Debug aktiv)
-;;; ------------------------------------------------------------------------
 (defun LXI:debug-print (msg / )
   (if *LXI:debug*
     (princ (strcat "\n  [DBG] " msg))
   )
 )
 
-
-;;; ------------------------------------------------------------------------
-;;; Aktuelles Datum/Uhrzeit als String
-;;; ------------------------------------------------------------------------
 (defun LXI:timestamp ( / )
   (menucmd "M=$(edtime,0,YYYY-MO-DD HH:MM)")
 )
 
-
-;;; ------------------------------------------------------------------------
-;;; Aktueller Zeichnungsname (Dateiname mit .dwg)
-;;; ------------------------------------------------------------------------
 (defun LXI:dwg-name ( / )
   (strcat (vl-filename-base (getvar "DWGNAME")) ".dwg")
 )
 
 
 ;;; ========================================================================
+;;; MASTERID FUNKTIONEN
+;;; ========================================================================
+
+
+;;; ------------------------------------------------------------------------
+;;; Formatiert eine ID-Nummer als M000001
+;;; ------------------------------------------------------------------------
+(defun LXI:format-id (num / str)
+  (setq str (itoa num))
+  (while (< (strlen str) 6)
+    (setq str (strcat "0" str))
+  )
+  (strcat "M" str)
+)
+
+
+;;; ------------------------------------------------------------------------
+;;; Ermittelt die naechste freie MasterID aus dem Master
+;;; Parameter:
+;;;   master-data - Aktuelle Master-Liste
+;;; Rueckgabe: Naechste ID als String "M000001"
+;;; ------------------------------------------------------------------------
+(defun LXI:next-master-id (master-data / max-num id-str id-num)
+  (setq max-num 0)
+  (foreach lay master-data
+    (setq id-str (car lay))
+    ;; "M000042" -> 42
+    (if (and id-str (> (strlen id-str) 1) (= (substr id-str 1 1) "M"))
+      (progn
+        (setq id-num (atoi (substr id-str 2)))
+        (if (> id-num max-num)
+          (setq max-num id-num)
+        )
+      )
+    )
+  )
+  (LXI:format-id (1+ max-num))
+)
+
+
+;;; ========================================================================
 ;;; MASTER-DATEI FUNKTIONEN (.csv)
 ;;; ========================================================================
-;;; Format (Semikolon-getrennt, 10 Felder):
-;;;   Name;Color;Linetype;Lineweight;Plot;OnOff;Freeze;Lock;Source;LastModified
+;;; Format (11 Felder):
+;;;   MasterID;Name;Color;Linetype;Lineweight;Plot;OnOff;Freeze;Lock;Source;LastModified
 
 
-;;; ------------------------------------------------------------------------
-;;; Liest den Master ein
-;;; Rueckgabe: Liste von Layer-Listen (10 Felder) oder nil
-;;; ------------------------------------------------------------------------
 (defun LXI:read-master ( / sync-dir filepath fp line fields result)
   (setq sync-dir (LXI:get-sync-folder))
   (if (null sync-dir)
@@ -231,15 +217,22 @@
             (progn
               (setq result nil)
               (while (setq line (read-line fp))
-                ;; Kommentarzeilen und Header ueberspringen
                 (if (and (> (strlen line) 0)
-                         (/= (substr line 1 1) ";")
-                         (/= (substr line 1 4) "Name")
+                         (/= (substr line 1 1) "M")
+                         (/= (substr line 1 8) "MasterID")
                     )
-                  (progn
-                    (setq fields (LXI:split-string line *LXI:sep*))
-                    (if (= (length fields) 10)
-                      (setq result (cons fields result))
+                  ;; Ueberspringe nur Header-Zeile
+                  nil
+                  ;; Datenzeilen: beginnen mit M und nicht "MasterID"
+                  (if (and (> (strlen line) 0)
+                           (= (substr line 1 1) "M")
+                           (/= (substr line 1 8) "MasterID")
+                      )
+                    (progn
+                      (setq fields (LXI:split-string line *LXI:sep*))
+                      (if (= (length fields) 11)
+                        (setq result (cons fields result))
+                      )
                     )
                   )
                 )
@@ -255,10 +248,6 @@
 )
 
 
-;;; ------------------------------------------------------------------------
-;;; Schreibt den Master
-;;; Rueckgabe: T bei Erfolg
-;;; ------------------------------------------------------------------------
 (defun LXI:write-master (master-data / sync-dir filepath fp lay s)
   (setq sync-dir (LXI:get-sync-folder))
   (setq s *LXI:sep*)
@@ -268,29 +257,25 @@
       (setq filepath (strcat sync-dir "\\LayerMaster.csv"))
       (setq fp (open filepath "w"))
       (if (null fp)
+        nil
         (progn
-          (princ (strcat "\n*** Fehler: Kann Master nicht schreiben: " filepath))
-          nil
-        )
-        (progn
-          ;; Spalten-Header (erste Zeile = Excel erkennt Spalten)
+          ;; Header
           (write-line
-            (strcat "Name" s "Color" s "Linetype" s "Lineweight"
+            (strcat "MasterID" s "Name" s "Color" s "Linetype" s "Lineweight"
                     s "Plot" s "OnOff" s "Freeze" s "Lock"
                     s "Source" s "LastModified")
             fp
           )
-          ;; Alphabetisch sortiert
+          ;; Sortiert nach MasterID
           (setq master-data
             (vl-sort master-data '(lambda (a b) (< (car a) (car b))))
           )
-          ;; Daten
           (foreach lay master-data
             (write-line
               (strcat (nth 0 lay) s (nth 1 lay) s (nth 2 lay) s
                       (nth 3 lay) s (nth 4 lay) s (nth 5 lay) s
                       (nth 6 lay) s (nth 7 lay) s (nth 8 lay) s
-                      (nth 9 lay))
+                      (nth 9 lay) s (nth 10 lay))
               fp
             )
           )
@@ -304,12 +289,12 @@
 
 
 ;;; ------------------------------------------------------------------------
-;;; Sucht einen Layer im Master nach Name
+;;; Sucht im Master nach MasterID
 ;;; ------------------------------------------------------------------------
-(defun LXI:find-in-master (master-data lay-name / result)
+(defun LXI:find-by-id (master-data mid / result)
   (setq result nil)
   (foreach lay master-data
-    (if (= (strcase (car lay)) (strcase lay-name))
+    (if (= (strcase (car lay)) (strcase mid))
       (setq result lay)
     )
   )
@@ -318,11 +303,25 @@
 
 
 ;;; ------------------------------------------------------------------------
-;;; Entfernt einen Layer aus der Master-Liste nach Name
+;;; Sucht im Master nach Layername
 ;;; ------------------------------------------------------------------------
-(defun LXI:remove-from-master (master-data lay-name / )
+(defun LXI:find-by-name (master-data lay-name / result)
+  (setq result nil)
+  (foreach lay master-data
+    (if (= (strcase (nth 1 lay)) (strcase lay-name))
+      (setq result lay)
+    )
+  )
+  result
+)
+
+
+;;; ------------------------------------------------------------------------
+;;; Entfernt einen Layer aus dem Master nach MasterID
+;;; ------------------------------------------------------------------------
+(defun LXI:remove-by-id (master-data mid / )
   (vl-remove-if
-    '(lambda (lay) (= (strcase (car lay)) (strcase lay-name)))
+    '(lambda (lay) (= (strcase (car lay)) (strcase mid)))
     master-data
   )
 )
@@ -331,14 +330,10 @@
 ;;; ========================================================================
 ;;; MAPPER-DATEI FUNKTIONEN (.csv)
 ;;; ========================================================================
-;;; Format (Semikolon-getrennt, 3 Felder):
-;;;   DwgName;LayerName;Handle
+;;; Format (4 Felder):
+;;;   DwgName;LayerName;Handle;MasterID
 
 
-;;; ------------------------------------------------------------------------
-;;; Liest den Mapper ein
-;;; Rueckgabe: Liste von '("dwg" "layername" "handle") oder nil
-;;; ------------------------------------------------------------------------
 (defun LXI:read-mapper ( / sync-dir filepath fp line fields result)
   (setq sync-dir (LXI:get-sync-folder))
   (if (null sync-dir)
@@ -354,13 +349,12 @@
             (progn
               (setq result nil)
               (while (setq line (read-line fp))
-                ;; Header ueberspringen
                 (if (and (> (strlen line) 0)
-                         (/= (substr line 1 3) "Dwg")
+                         (/= (substr line 1 7) "DwgName")
                     )
                   (progn
                     (setq fields (LXI:split-string line *LXI:sep*))
-                    (if (= (length fields) 3)
+                    (if (= (length fields) 4)
                       (setq result (cons fields result))
                     )
                   )
@@ -377,10 +371,6 @@
 )
 
 
-;;; ------------------------------------------------------------------------
-;;; Schreibt den Mapper
-;;; Rueckgabe: T bei Erfolg
-;;; ------------------------------------------------------------------------
 (defun LXI:write-mapper (mapper-data / sync-dir filepath fp entry s)
   (setq sync-dir (LXI:get-sync-folder))
   (setq s *LXI:sep*)
@@ -390,14 +380,9 @@
       (setq filepath (strcat sync-dir "\\LayerMapper.csv"))
       (setq fp (open filepath "w"))
       (if (null fp)
+        nil
         (progn
-          (princ (strcat "\n*** Fehler: Kann Mapper nicht schreiben: " filepath))
-          nil
-        )
-        (progn
-          ;; Spalten-Header
-          (write-line (strcat "DwgName" s "LayerName" s "Handle") fp)
-          ;; Sortiert nach Zeichnung, dann Layer
+          (write-line (strcat "DwgName" s "LayerName" s "Handle" s "MasterID") fp)
           (setq mapper-data
             (vl-sort mapper-data
               '(lambda (a b)
@@ -410,7 +395,8 @@
           )
           (foreach entry mapper-data
             (write-line
-              (strcat (nth 0 entry) s (nth 1 entry) s (nth 2 entry))
+              (strcat (nth 0 entry) s (nth 1 entry) s
+                      (nth 2 entry) s (nth 3 entry))
               fp
             )
           )
@@ -424,13 +410,29 @@
 
 
 ;;; ------------------------------------------------------------------------
-;;; Sucht im Mapper: Zeichnung + Handle -> Layername
+;;; Sucht im Mapper: Zeichnung + Handle -> MasterID
 ;;; ------------------------------------------------------------------------
-(defun LXI:mapper-find-by-handle (mapper-data dwg handle / result)
+(defun LXI:mapper-get-mid (mapper-data dwg handle / result)
   (setq result nil)
   (foreach entry mapper-data
     (if (and (= (strcase (nth 0 entry)) (strcase dwg))
              (= (strcase (nth 2 entry)) (strcase handle))
+        )
+      (setq result (nth 3 entry))
+    )
+  )
+  result
+)
+
+
+;;; ------------------------------------------------------------------------
+;;; Sucht im Mapper: Zeichnung + MasterID -> Layername
+;;; ------------------------------------------------------------------------
+(defun LXI:mapper-get-name (mapper-data dwg mid / result)
+  (setq result nil)
+  (foreach entry mapper-data
+    (if (and (= (strcase (nth 0 entry)) (strcase dwg))
+             (= (strcase (nth 3 entry)) (strcase mid))
         )
       (setq result (nth 1 entry))
     )
@@ -440,28 +442,102 @@
 
 
 ;;; ------------------------------------------------------------------------
-;;; Sucht im Mapper: Zeichnung + Layername -> Handle
-;;; ------------------------------------------------------------------------
-(defun LXI:mapper-find-by-name (mapper-data dwg lay-name / result)
-  (setq result nil)
-  (foreach entry mapper-data
-    (if (and (= (strcase (nth 0 entry)) (strcase dwg))
-             (= (strcase (nth 1 entry)) (strcase lay-name))
-        )
-      (setq result (nth 2 entry))
-    )
-  )
-  result
-)
-
-
-;;; ------------------------------------------------------------------------
-;;; Entfernt alle Eintraege einer Zeichnung aus dem Mapper
+;;; Entfernt alle Eintraege einer Zeichnung
 ;;; ------------------------------------------------------------------------
 (defun LXI:mapper-remove-dwg (mapper-data dwg / )
   (vl-remove-if
     '(lambda (entry) (= (strcase (car entry)) (strcase dwg)))
     mapper-data
+  )
+)
+
+
+;;; ========================================================================
+;;; HISTORY-DATEI FUNKTIONEN (.csv) - APPEND ONLY
+;;; ========================================================================
+;;; Format (6 Felder):
+;;;   Datum;Aktion;LayerName;Detail;Source;MasterID
+
+
+;;; ------------------------------------------------------------------------
+;;; Haengt Eintraege an die History an (erstellt Datei falls noetig)
+;;; Parameter:
+;;;   entries - Liste von '("datum" "aktion" "name" "detail" "source" "mid")
+;;; ------------------------------------------------------------------------
+(defun LXI:append-history (entries / sync-dir filepath fp entry s needs-header)
+  (setq sync-dir (LXI:get-sync-folder))
+  (setq s *LXI:sep*)
+  (if (null sync-dir)
+    nil
+    (progn
+      (setq filepath (strcat sync-dir "\\LayerHistory.csv"))
+      ;; Pruefen ob Header geschrieben werden muss
+      (setq needs-header (not (findfile filepath)))
+      ;; Append-Modus
+      (setq fp (open filepath "a"))
+      (if (null fp)
+        nil
+        (progn
+          (if needs-header
+            (write-line
+              (strcat "Datum" s "Aktion" s "LayerName" s "Detail"
+                      s "Source" s "MasterID")
+              fp
+            )
+          )
+          (foreach entry entries
+            (write-line
+              (strcat (nth 0 entry) s (nth 1 entry) s (nth 2 entry) s
+                      (nth 3 entry) s (nth 4 entry) s (nth 5 entry))
+              fp
+            )
+          )
+          (close fp)
+          T
+        )
+      )
+    )
+  )
+)
+
+
+;;; ------------------------------------------------------------------------
+;;; Liest die komplette History
+;;; Rueckgabe: Liste von History-Eintraegen (6 Felder) oder nil
+;;; ------------------------------------------------------------------------
+(defun LXI:read-history ( / sync-dir filepath fp line fields result)
+  (setq sync-dir (LXI:get-sync-folder))
+  (if (null sync-dir)
+    nil
+    (progn
+      (setq filepath (strcat sync-dir "\\LayerHistory.csv"))
+      (if (not (findfile filepath))
+        nil
+        (progn
+          (setq fp (open filepath "r"))
+          (if (null fp)
+            nil
+            (progn
+              (setq result nil)
+              (while (setq line (read-line fp))
+                (if (and (> (strlen line) 0)
+                         (/= (substr line 1 5) "Datum")
+                    )
+                  (progn
+                    (setq fields (LXI:split-string line *LXI:sep*))
+                    (if (= (length fields) 6)
+                      (setq result (cons fields result))
+                    )
+                  )
+                )
+              )
+              (close fp)
+              (reverse result)
+            )
+          )
+        )
+      )
+    )
   )
 )
 
@@ -484,29 +560,24 @@
              (LXI:sync-layer-p lay-name)
         )
       (progn
-        ;; Handle ueber tblobjname + entget holen
         (setq ent-data (entget (tblobjname "LAYER" lay-name)))
         (setq handle (cdr (assoc 5 ent-data)))
         (if (null handle) (setq handle "0"))
         
-        ;; Farbe (DXF 62)
         (setq col (cdr (assoc 62 ent-data)))
         (if (null col) (setq col 7))
         (setq on-off (if (< col 0) "OFF" "ON"))
         (setq col (abs col))
         
-        ;; Linientyp
         (setq ltype (cdr (assoc 6 ent-data)))
         (if (null ltype) (setq ltype "Continuous"))
         
-        ;; Freeze / Lock via DXF 70
         (setq frz (cdr (assoc 70 ent-data)))
         (if (null frz) (setq frz 0))
         (setq lck frz)
         (setq frz (if (= (logand frz 1) 1) "FROZEN" "THAWED"))
         (setq lck (if (= (logand lck 4) 4) "LOCKED" "UNLOCKED"))
         
-        ;; Linienstaerke & Plot-Flag
         (setq lw "Default")
         (setq plot-flag (cdr (assoc 290 ent-data)))
         (setq plot-flag (if (or (null plot-flag) (= plot-flag 1))
@@ -533,112 +604,31 @@
 
 
 ;;; ========================================================================
-;;; LAYER ANWENDEN (Import in aktuelle Zeichnung)
+;;; EXPORT-LOGIK (Layer -> Master + Mapper + History)
 ;;; ========================================================================
 
 
 ;;; ------------------------------------------------------------------------
-;;; Wendet Master-Daten auf die aktuelle Zeichnung an
-;;; Master gewinnt immer.
-;;; Rueckgabe: Liste '(neue aktualisierte umbenannte uebersprungene)
+;;; Vergleicht zwei Werte und gibt Aenderungs-Detail zurueck
+;;; Rueckgabe: "alt->neu" oder nil wenn gleich
 ;;; ------------------------------------------------------------------------
-(defun LXI:apply-layers (master-data mapper-data dwg
-                          / lay master-name col ltype lw plot-flag
-                            on-off frz lck
-                            existing ent-data new-col changed
-                            cnt-new cnt-upd cnt-ren cnt-skip)
-  (setq cnt-new 0 cnt-upd 0 cnt-ren 0 cnt-skip 0)
-  
-  (foreach lay master-data
-    (setq master-name (nth 0 lay)
-          col         (atoi (nth 1 lay))
-          ltype       (nth 2 lay)
-          lw          (nth 3 lay)
-          plot-flag   (nth 4 lay)
-          on-off      (nth 5 lay)
-          frz         (nth 6 lay)
-          lck         (nth 7 lay)
-    )
-    
-    (LXI:debug-print (strcat "Verarbeite: " master-name))
-    
-    (setq existing (tblsearch "LAYER" master-name))
-    
-    (if existing
-      ;; --- Layer existiert: Eigenschaften pruefen ---
-      (progn
-        (setq changed nil)
-        (setq ent-data (entget (tblobjname "LAYER" master-name)))
-        
-        (if (/= (abs (cdr (assoc 62 ent-data))) col)
-          (setq changed T))
-        (if (and (cdr (assoc 6 ent-data))
-                 (/= (strcase (cdr (assoc 6 ent-data))) (strcase ltype)))
-          (setq changed T))
-        (if (and (= on-off "OFF") (> (cdr (assoc 62 ent-data)) 0))
-          (setq changed T))
-        (if (and (= on-off "ON") (< (cdr (assoc 62 ent-data)) 0))
-          (setq changed T))
-        (if (cdr (assoc 290 ent-data))
-          (if (/= (cdr (assoc 290 ent-data))
-                   (if (= plot-flag "PLOT") 1 0))
-            (setq changed T)))
-        
-        (if changed
-          (progn
-            (LXI:debug-print (strcat "  Update: " master-name))
-            (setq new-col (if (= on-off "OFF") (- col) col))
-            (setq ent-data (subst (cons 62 new-col) (assoc 62 ent-data) ent-data))
-            (if (assoc 6 ent-data)
-              (setq ent-data (subst (cons 6 ltype) (assoc 6 ent-data) ent-data)))
-            (if (assoc 290 ent-data)
-              (setq ent-data
-                (subst (cons 290 (if (= plot-flag "PLOT") 1 0))
-                       (assoc 290 ent-data) ent-data)))
-            (entmod ent-data)
-            (setq cnt-upd (1+ cnt-upd))
-          )
-          (progn
-            (LXI:debug-print (strcat "  Skip: " master-name " (identisch)"))
-            (setq cnt-skip (1+ cnt-skip))
-          )
-        )
-      )
-      ;; --- Layer existiert NICHT: neu anlegen ---
-      (progn
-        (LXI:debug-print (strcat "  Neu: " master-name))
-        (setq new-col (if (= on-off "OFF") (- col) col))
-        (entmake
-          (list
-            '(0 . "LAYER")
-            '(100 . "AcDbSymbolTableRecord")
-            '(100 . "AcDbLayerTableRecord")
-            (cons 2 master-name)
-            (cons 62 new-col)
-            (cons 6 ltype)
-            '(370 . -3)
-            (cons 290 (if (= plot-flag "PLOT") 1 0))
-            (cons 70 (+ (if (= frz "FROZEN") 1 0)
-                        (if (= lck "LOCKED") 4 0)))
-          )
-        )
-        (setq cnt-new (1+ cnt-new))
-      )
-    ) ;_ if existing
-  ) ;_ foreach
-  
-  (list cnt-new cnt-upd cnt-ren cnt-skip)
+(defun LXI:compare-field (old-val new-val / )
+  (if (/= (strcase old-val) (strcase new-val))
+    (strcat old-val "->" new-val)
+    nil
+  )
 )
 
 
 ;;; ========================================================================
 ;;; Hauptbefehl: LAYEXP
-;;; Exportiert Layer in Master + aktualisiert Mapper
 ;;; ========================================================================
 (defun c:LAYEXP ( / *error* old-cmdecho
                     dwg layers master-data mapper-data
-                    lay lay-name handle old-master-name
-                    timestamp cnt-new cnt-upd cnt-ren)
+                    lay lay-name handle mid old-mid old-name
+                    existing-master change-details detail
+                    timestamp history-entries new-mid
+                    cnt-new cnt-upd cnt-ren)
   
   (defun *error* (msg)
     (if (not (wcmatch (strcase msg T) "*cancel*,*quit*"))
@@ -653,12 +643,13 @@
   (setq dwg (LXI:dwg-name))
   (setq timestamp (LXI:timestamp))
   (setq cnt-new 0 cnt-upd 0 cnt-ren 0)
+  (setq history-entries nil)
   
   (setq layers (LXI:collect-layers))
   
   (if (null layers)
     (princ (strcat "\n*** Keine Layer mit Praefix \""
-                   *LXI:prefix* "\" zum Exportieren gefunden."))
+                   *LXI:prefix* "\" gefunden."))
     (progn
       (setq master-data (LXI:read-master))
       (if (null master-data) (setq master-data nil))
@@ -669,48 +660,113 @@
         (setq lay-name (nth 0 lay))
         (setq handle   (nth 8 lay))
         
-        ;; Umbenennung pruefen via Mapper
-        (setq old-master-name
-          (LXI:mapper-find-by-handle mapper-data dwg handle)
-        )
+        ;; MasterID ueber Mapper suchen (Zeichnung + Handle)
+        (setq mid (LXI:mapper-get-mid mapper-data dwg handle))
         
         (cond
-          ;; FALL 1: Umbenennung erkannt
-          ((and old-master-name
-                (/= (strcase old-master-name) (strcase lay-name))
-           )
+          ;; ============================================================
+          ;; FALL 1: Handle hat MasterID -> Layer ist bekannt
+          ;; ============================================================
+          (mid
             (progn
-              (princ (strcat "\n  Umbenennung: "
-                             old-master-name " -> " lay-name))
-              (LXI:debug-print
-                (strcat "Handle " handle " war " old-master-name
-                        " jetzt " lay-name))
-              (setq master-data
-                (mapcar
-                  '(lambda (m)
-                    (if (= (strcase (car m)) (strcase old-master-name))
-                      (list lay-name
+              (setq existing-master (LXI:find-by-id master-data mid))
+              
+              (if existing-master
+                (progn
+                  (setq old-name (nth 1 existing-master))
+                  
+                  ;; Umbenennung pruefen
+                  (if (/= (strcase old-name) (strcase lay-name))
+                    (progn
+                      (princ (strcat "\n  Umbenennung: "
+                                     old-name " -> " lay-name
+                                     " [" mid "]"))
+                      (setq history-entries
+                        (cons
+                          (list timestamp "UMBENENNUNG" lay-name
+                                (strcat old-name "->" lay-name) dwg mid)
+                          history-entries
+                        )
+                      )
+                      (setq cnt-ren (1+ cnt-ren))
+                    )
+                  )
+                  
+                  ;; Eigenschafts-Aenderungen pruefen und loggen
+                  (setq change-details nil)
+                  
+                  (setq detail (LXI:compare-field (nth 2 existing-master) (nth 1 lay)))
+                  (if detail
+                    (setq change-details (cons (strcat "Farbe:" detail) change-details))
+                  )
+                  (setq detail (LXI:compare-field (nth 3 existing-master) (nth 2 lay)))
+                  (if detail
+                    (setq change-details (cons (strcat "Linientyp:" detail) change-details))
+                  )
+                  (setq detail (LXI:compare-field (nth 6 existing-master) (nth 5 lay)))
+                  (if detail
+                    (setq change-details (cons (strcat "OnOff:" detail) change-details))
+                  )
+                  (setq detail (LXI:compare-field (nth 5 existing-master) (nth 4 lay)))
+                  (if detail
+                    (setq change-details (cons (strcat "Plot:" detail) change-details))
+                  )
+                  (setq detail (LXI:compare-field (nth 7 existing-master) (nth 6 lay)))
+                  (if detail
+                    (setq change-details (cons (strcat "Freeze:" detail) change-details))
+                  )
+                  (setq detail (LXI:compare-field (nth 8 existing-master) (nth 7 lay)))
+                  (if detail
+                    (setq change-details (cons (strcat "Lock:" detail) change-details))
+                  )
+                  
+                  ;; Wenn Aenderungen: History-Eintrag + Master updaten
+                  (if change-details
+                    (progn
+                      (setq history-entries
+                        (cons
+                          (list timestamp "AENDERUNG" lay-name
+                                (apply 'strcat
+                                  (mapcar '(lambda (d) (strcat d " "))
+                                    (reverse change-details)))
+                                dwg mid)
+                          history-entries
+                        )
+                      )
+                      (setq cnt-upd (1+ cnt-upd))
+                    )
+                  )
+                  
+                  ;; Master-Eintrag aktualisieren (immer, auch ohne Aenderung)
+                  (setq master-data (LXI:remove-by-id master-data mid))
+                  (setq master-data
+                    (cons
+                      (list mid lay-name
                             (nth 1 lay) (nth 2 lay) (nth 3 lay)
                             (nth 4 lay) (nth 5 lay) (nth 6 lay) (nth 7 lay)
                             dwg timestamp)
-                      m
+                      master-data
                     )
                   )
-                  master-data
                 )
-              )
-              (setq cnt-ren (1+ cnt-ren))
+              ) ;_ if existing-master
             )
           )
           
-          ;; FALL 2: Layer existiert im Master -> updaten
-          ((LXI:find-in-master master-data lay-name)
+          ;; ============================================================
+          ;; FALL 2: Kein Handle im Mapper, aber Name existiert im Master
+          ;; (z.B. Layer aus Import, Mapper war noch leer fuer diese DWG)
+          ;; ============================================================
+          ((setq existing-master (LXI:find-by-name master-data lay-name))
             (progn
-              (LXI:debug-print (strcat "Update: " lay-name))
-              (setq master-data (LXI:remove-from-master master-data lay-name))
+              (setq mid (car existing-master))
+              (LXI:debug-print
+                (strcat "Name-Match: " lay-name " -> " mid))
+              ;; Master-Eintrag aktualisieren
+              (setq master-data (LXI:remove-by-id master-data mid))
               (setq master-data
                 (cons
-                  (list lay-name
+                  (list mid lay-name
                         (nth 1 lay) (nth 2 lay) (nth 3 lay)
                         (nth 4 lay) (nth 5 lay) (nth 6 lay) (nth 7 lay)
                         dwg timestamp)
@@ -721,17 +777,28 @@
             )
           )
           
-          ;; FALL 3: Neuer Layer
+          ;; ============================================================
+          ;; FALL 3: Komplett neuer Layer
+          ;; ============================================================
           (T
             (progn
-              (LXI:debug-print (strcat "Neu: " lay-name))
+              (setq new-mid (LXI:next-master-id master-data))
+              (LXI:debug-print
+                (strcat "Neu: " lay-name " -> " new-mid))
               (setq master-data
                 (cons
-                  (list lay-name
+                  (list new-mid lay-name
                         (nth 1 lay) (nth 2 lay) (nth 3 lay)
                         (nth 4 lay) (nth 5 lay) (nth 6 lay) (nth 7 lay)
                         dwg timestamp)
                   master-data
+                )
+              )
+              ;; History: NEU
+              (setq history-entries
+                (cons
+                  (list timestamp "NEU" lay-name "" dwg new-mid)
+                  history-entries
                 )
               )
               (setq cnt-new (1+ cnt-new))
@@ -740,11 +807,17 @@
         ) ;_ cond
       ) ;_ foreach
       
-      ;; Mapper: Eintraege dieser Zeichnung ersetzen
+      ;; Mapper aktualisieren: Eintraege dieser Zeichnung ersetzen
       (setq mapper-data (LXI:mapper-remove-dwg mapper-data dwg))
       (foreach lay layers
-        (setq mapper-data
-          (cons (list dwg (nth 0 lay) (nth 8 lay)) mapper-data)
+        (setq lay-name (nth 0 lay))
+        (setq handle   (nth 8 lay))
+        ;; MasterID fuer diesen Layer finden
+        (setq mid (car (LXI:find-by-name master-data lay-name)))
+        (if mid
+          (setq mapper-data
+            (cons (list dwg lay-name handle mid) mapper-data)
+          )
         )
       )
       
@@ -752,6 +825,10 @@
       (if (and (LXI:write-master master-data)
                (LXI:write-mapper mapper-data))
         (progn
+          ;; History schreiben (nur wenn Eintraege vorhanden)
+          (if history-entries
+            (LXI:append-history (reverse history-entries))
+          )
           (princ (strcat "\n--- Export Ergebnis (" dwg ") ---"))
           (princ (strcat "\n  Neu im Master:  " (itoa cnt-new)))
           (princ (strcat "\n  Aktualisiert:   " (itoa cnt-upd)))
@@ -774,8 +851,11 @@
 ;;; Importiert Layer aus Master. Master gewinnt immer.
 ;;; ========================================================================
 (defun c:LAYIMP ( / *error* old-cmdecho
-                    dwg master-data mapper-data counts
-                    lay-tbl lay-name handle new-mapper)
+                    dwg master-data mapper-data
+                    lay mid master-name col ltype lw plot-flag on-off frz lck
+                    existing ent-data new-col changed
+                    lay-tbl handle new-mapper
+                    cnt-new cnt-upd cnt-skip)
   
   (defun *error* (msg)
     (if (not (wcmatch (strcase msg T) "*cancel*,*quit*"))
@@ -788,6 +868,7 @@
   (setq old-cmdecho (getvar "CMDECHO"))
   (setvar "CMDECHO" 0)
   (setq dwg (LXI:dwg-name))
+  (setq cnt-new 0 cnt-upd 0 cnt-skip 0)
   
   (setq master-data (LXI:read-master))
   
@@ -804,23 +885,102 @@
       (setq mapper-data (LXI:read-mapper))
       (if (null mapper-data) (setq mapper-data nil))
       
-      ;; Layer anwenden
-      (setq counts (LXI:apply-layers master-data mapper-data dwg))
+      ;; Jeden Master-Layer verarbeiten
+      (foreach lay master-data
+        (setq mid         (nth 0 lay)
+              master-name (nth 1 lay)
+              col         (atoi (nth 2 lay))
+              ltype       (nth 3 lay)
+              lw          (nth 4 lay)
+              plot-flag   (nth 5 lay)
+              on-off      (nth 6 lay)
+              frz         (nth 7 lay)
+              lck         (nth 8 lay)
+        )
+        
+        (LXI:debug-print (strcat "Import: " master-name " [" mid "]"))
+        
+        (setq existing (tblsearch "LAYER" master-name))
+        
+        (if existing
+          ;; --- Layer existiert: Eigenschaften pruefen ---
+          (progn
+            (setq changed nil)
+            (setq ent-data (entget (tblobjname "LAYER" master-name)))
+            
+            (if (/= (abs (cdr (assoc 62 ent-data))) col)
+              (setq changed T))
+            (if (and (cdr (assoc 6 ent-data))
+                     (/= (strcase (cdr (assoc 6 ent-data))) (strcase ltype)))
+              (setq changed T))
+            (if (and (= on-off "OFF") (> (cdr (assoc 62 ent-data)) 0))
+              (setq changed T))
+            (if (and (= on-off "ON") (< (cdr (assoc 62 ent-data)) 0))
+              (setq changed T))
+            (if (cdr (assoc 290 ent-data))
+              (if (/= (cdr (assoc 290 ent-data))
+                       (if (= plot-flag "PLOT") 1 0))
+                (setq changed T)))
+            
+            (if changed
+              (progn
+                (LXI:debug-print (strcat "  Update: " master-name))
+                (setq new-col (if (= on-off "OFF") (- col) col))
+                (setq ent-data (subst (cons 62 new-col) (assoc 62 ent-data) ent-data))
+                (if (assoc 6 ent-data)
+                  (setq ent-data (subst (cons 6 ltype) (assoc 6 ent-data) ent-data)))
+                (if (assoc 290 ent-data)
+                  (setq ent-data
+                    (subst (cons 290 (if (= plot-flag "PLOT") 1 0))
+                           (assoc 290 ent-data) ent-data)))
+                (entmod ent-data)
+                (setq cnt-upd (1+ cnt-upd))
+              )
+              (setq cnt-skip (1+ cnt-skip))
+            )
+          )
+          ;; --- Neu anlegen ---
+          (progn
+            (LXI:debug-print (strcat "  Neu: " master-name))
+            (setq new-col (if (= on-off "OFF") (- col) col))
+            (entmake
+              (list
+                '(0 . "LAYER")
+                '(100 . "AcDbSymbolTableRecord")
+                '(100 . "AcDbLayerTableRecord")
+                (cons 2 master-name)
+                (cons 62 new-col)
+                (cons 6 ltype)
+                '(370 . -3)
+                (cons 290 (if (= plot-flag "PLOT") 1 0))
+                (cons 70 (+ (if (= frz "FROZEN") 1 0)
+                            (if (= lck "LOCKED") 4 0)))
+              )
+            )
+            (setq cnt-new (1+ cnt-new))
+          )
+        ) ;_ if existing
+      ) ;_ foreach
       
-      ;; Mapper aktualisieren
+      ;; Mapper aktualisieren mit aktuellen Handles
       (setq mapper-data (LXI:mapper-remove-dwg mapper-data dwg))
       (setq new-mapper nil)
       (while (setq lay-tbl (tblnext "LAYER" (not lay-tbl)))
         (setq lay-name (cdr (assoc 2 lay-tbl)))
         (if (and (not (LXI:xref-layer-p lay-name))
                  (LXI:sync-layer-p lay-name)
-                 (LXI:find-in-master master-data lay-name)
             )
           (progn
-            (setq handle (cdr (assoc 5
-              (entget (tblobjname "LAYER" lay-name)))))
-            (setq new-mapper
-              (cons (list dwg lay-name handle) new-mapper))
+            (setq existing (LXI:find-by-name master-data lay-name))
+            (if existing
+              (progn
+                (setq handle (cdr (assoc 5
+                  (entget (tblobjname "LAYER" lay-name)))))
+                (setq mid (car existing))
+                (setq new-mapper
+                  (cons (list dwg lay-name handle mid) new-mapper))
+              )
+            )
           )
         )
       )
@@ -829,12 +989,11 @@
       
       ;; Ergebnis
       (princ (strcat "\n--- Import Ergebnis (" dwg ") ---"))
-      (princ (strcat "\n  Neu angelegt:   " (itoa (nth 0 counts))))
-      (princ (strcat "\n  Aktualisiert:   " (itoa (nth 1 counts))))
-      (princ (strcat "\n  Umbenannt:      " (itoa (nth 2 counts))))
-      (princ (strcat "\n  Unveraendert:   " (itoa (nth 3 counts))))
-    )
-  )
+      (princ (strcat "\n  Neu angelegt:   " (itoa cnt-new)))
+      (princ (strcat "\n  Aktualisiert:   " (itoa cnt-upd)))
+      (princ (strcat "\n  Unveraendert:   " (itoa cnt-skip)))
+    ) ;_ progn
+  ) ;_ if master-data
   
   (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
   (princ)
@@ -842,8 +1001,189 @@
 
 
 ;;; ========================================================================
+;;; Hauptbefehl: LAYLOG
+;;; Zeigt Layer-Aenderungshistorie an
+;;; Optionen: Alle letzte / Nach Layer filtern / Nach MasterID
+;;; ========================================================================
+(defun c:LAYLOG ( / *error* old-cmdecho
+                    choice history filter-name filter-mid
+                    mapper-data master-data
+                    handle mid results count entry)
+  
+  (defun *error* (msg)
+    (if (not (wcmatch (strcase msg T) "*cancel*,*quit*"))
+      (princ (strcat "\nFehler: " msg))
+    )
+    (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
+    (princ)
+  )
+  
+  (setq old-cmdecho (getvar "CMDECHO"))
+  (setvar "CMDECHO" 0)
+  
+  (setq history (LXI:read-history))
+  
+  (if (null history)
+    (princ "\n*** Keine History-Daten vorhanden.")
+    (progn
+      (princ (strcat "\n" (itoa (length history)) " History-Eintraege vorhanden."))
+      
+      ;; Auswahl
+      (initget "Alle Layer")
+      (setq choice
+        (getkword "\nAnzeige? [Alle/Layer] <Alle>: ")
+      )
+      (if (null choice) (setq choice "Alle"))
+      
+      (cond
+        ;; Alle (letzte 30)
+        ((= choice "Alle")
+          (progn
+            (setq results (reverse history))
+            (setq count (min 30 (length results)))
+            (princ (strcat "\n\n=== Letzte " (itoa count) " Aenderungen ==="))
+            (princ "\nDatum              Aktion        Layer                    Quelle          Detail")
+            (princ "\n-----------------------------------------------------------------------------")
+            (repeat count
+              (setq entry (car results))
+              (princ (strcat "\n"
+                (nth 0 entry) "  "
+                (LXI:pad-str (nth 1 entry) 13)
+                (LXI:pad-str (nth 2 entry) 25)
+                (LXI:pad-str (nth 4 entry) 16)
+                (nth 3 entry)
+              ))
+              (setq results (cdr results))
+            )
+            (princ "\n")
+          )
+        )
+        
+        ;; Nach Layer filtern
+        ((= choice "Layer")
+          (progn
+            (setq filter-name
+              (getstring T "\nLayername (oder Teil davon): ")
+            )
+            (if (and filter-name (/= filter-name ""))
+              (progn
+                ;; Zuerst: MasterID fuer diesen Layer suchen
+                ;; (ueber Mapper der aktuellen Zeichnung)
+                (setq mapper-data (LXI:read-mapper))
+                (setq master-data (LXI:read-master))
+                (setq filter-mid nil)
+                
+                ;; Exakten Match im Master suchen
+                (if master-data
+                  (foreach lay master-data
+                    (if (wcmatch (strcase (nth 1 lay))
+                                 (strcat "*" (strcase filter-name) "*"))
+                      (progn
+                        (setq filter-mid (car lay))
+                        (princ (strcat "\nGefunden: " (nth 1 lay)
+                                       " [" filter-mid "]"))
+                      )
+                    )
+                  )
+                )
+                
+                ;; History filtern
+                (if filter-mid
+                  (progn
+                    (setq results
+                      (vl-remove-if-not
+                        '(lambda (e) (= (strcase (nth 5 e)) (strcase filter-mid)))
+                        history
+                      )
+                    )
+                    (if results
+                      (progn
+                        (princ (strcat "\n\n=== Historie fuer " filter-name
+                                       " [" filter-mid "] ==="))
+                        (princ "\nDatum              Aktion        LayerName                Quelle          Detail")
+                        (princ "\n-----------------------------------------------------------------------------")
+                        (foreach entry results
+                          (princ (strcat "\n"
+                            (nth 0 entry) "  "
+                            (LXI:pad-str (nth 1 entry) 13)
+                            (LXI:pad-str (nth 2 entry) 25)
+                            (LXI:pad-str (nth 4 entry) 16)
+                            (nth 3 entry)
+                          ))
+                        )
+                        (princ "\n")
+                      )
+                      (princ "\n*** Keine History-Eintraege fuer diesen Layer.")
+                    )
+                  )
+                  ;; Fallback: nach Name in History suchen
+                  (progn
+                    (setq results
+                      (vl-remove-if-not
+                        '(lambda (e)
+                          (wcmatch (strcase (nth 2 e))
+                                   (strcat "*" (strcase filter-name) "*"))
+                        )
+                        history
+                      )
+                    )
+                    (if results
+                      (progn
+                        (princ (strcat "\n\n=== Historie fuer *"
+                                       filter-name "* (Namenssuche) ==="))
+                        (princ "\nDatum              Aktion        LayerName                Quelle          MasterID")
+                        (princ "\n-----------------------------------------------------------------------------")
+                        (foreach entry results
+                          (princ (strcat "\n"
+                            (nth 0 entry) "  "
+                            (LXI:pad-str (nth 1 entry) 13)
+                            (LXI:pad-str (nth 2 entry) 25)
+                            (LXI:pad-str (nth 4 entry) 16)
+                            (nth 5 entry)
+                          ))
+                        )
+                        (princ "\n")
+                      )
+                      (princ (strcat "\n*** Kein Layer mit \""
+                                     filter-name "\" gefunden."))
+                    )
+                  )
+                ) ;_ if filter-mid
+              )
+              (princ "\n*** Kein Name eingegeben.")
+            )
+          )
+        )
+      ) ;_ cond
+    ) ;_ progn
+  ) ;_ if history
+  
+  (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
+  (princ)
+)
+
+
+;;; ------------------------------------------------------------------------
+;;; Hilfsfunktion: String rechts mit Leerzeichen auffuellen (fuer LAYLOG)
+;;; ------------------------------------------------------------------------
+(defun LXI:pad-str (str width / pad)
+  (if (null str) (setq str ""))
+  (if (> (strlen str) width)
+    (strcat (substr str 1 (- width 2)) "..")
+    (progn
+      (setq pad (- width (strlen str)))
+      (while (> pad 0)
+        (setq str (strcat str " "))
+        (setq pad (1- pad))
+      )
+      str
+    )
+  )
+)
+
+
+;;; ========================================================================
 ;;; Hauptbefehl: LAYCFG
-;;; Konfiguration anzeigen und interaktiv aendern
 ;;; ========================================================================
 (defun c:LAYCFG ( / *error* old-cmdecho choice new-val)
   
@@ -883,7 +1223,7 @@
                 (princ (strcat "\nPfad geaendert: " *LXI:base-path*))
               )
               (progn
-                (princ "\n*** Fehler: Ordner konnte nicht erstellt werden!")
+                (princ "\n*** Fehler: Ordner nicht erstellt!")
                 (setq *LXI:base-path* *LXI:default-path*)
               )
             )
@@ -892,7 +1232,6 @@
         )
       )
     )
-    
     ((= choice "pRaefix")
       (progn
         (princ (strcat "\nAktuell: " *LXI:prefix*))
@@ -902,21 +1241,18 @@
             (setq *LXI:prefix* new-val)
             (LXI:write-config)
             (princ (strcat "\nPraefix geaendert: " *LXI:prefix*))
-            (princ (strcat "\nLayer-Filter ist jetzt: " *LXI:prefix* "*"))
           )
           (princ "\nPraefix beibehalten.")
         )
       )
     )
-    
     ((= choice "Debug")
       (progn
         (setq *LXI:debug* (not *LXI:debug*))
         (LXI:write-config)
-        (princ (strcat "\nDebug ist jetzt: " (if *LXI:debug* "ON" "OFF")))
+        (princ (strcat "\nDebug: " (if *LXI:debug* "ON" "OFF")))
       )
     )
-    
     (T (princ "\nKeine Aenderung."))
   )
   
@@ -930,10 +1266,8 @@
 ;;; ========================================================================
 (vl-load-com)
 
-;; Config laden (falls vorhanden)
 (LXI:read-config)
 
-;; Config-Datei erstellen falls nicht vorhanden
 (if (not (findfile (LXI:get-config-path)))
   (progn
     (LXI:ensure-directory *LXI:base-path*)
@@ -941,8 +1275,8 @@
   )
 )
 
-(princ "\nLayerExportImport.lsp v0.6.0 geladen.")
-(princ "\nBefehle: LAYEXP | LAYIMP | LAYCFG")
+(princ "\nLayerExportImport.lsp v0.7.0 geladen.")
+(princ "\nBefehle: LAYEXP | LAYIMP | LAYLOG | LAYCFG")
 (princ (strcat "\nPraefix: " *LXI:prefix*
                "* | Speicherort: " *LXI:base-path*))
 (princ)
