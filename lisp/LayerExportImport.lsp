@@ -3,7 +3,7 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System | Custom Property GUID | ObjectDBX Batch-Sync
 ;;; 
-;;; Version: 1.3.0
+;;; Version: 1.4.0
 ;;; Datum:   2026-03-10
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -77,7 +77,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v1.3.0" fp)
+    (write-line ";;; LayerSync Konfiguration v1.4.0" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -432,7 +432,96 @@
 
 
 ;;; ========================================================================
-;;; LAYER SAMMELN (VLA-basiert, aktuelle Zeichnung)
+;;; SYNCLOG (.csv) - Letzter Sync-Zeitpunkt pro DWG
+;;; DwgName;DwgGUID;LastSync
+;;; Fuer Konflikterkennung: Master.LastModified > DWG.LastSync = Warnung
+;;; ========================================================================
+
+;;; Liest SyncLog
+;;; Rueckgabe: Liste von '("DwgName" "DwgGUID" "LastSync")
+(defun LXI:read-synclog ( / sync-dir filepath fp line fields result)
+  (setq sync-dir (LXI:get-sync-folder))
+  (if (null sync-dir) nil
+    (progn
+      (setq filepath (strcat sync-dir "\\LayerSyncLog.csv"))
+      (if (not (findfile filepath)) nil
+        (progn
+          (setq fp (open filepath "r"))
+          (if (null fp) nil
+            (progn
+              (setq result nil)
+              (while (setq line (read-line fp))
+                (if (and (> (strlen line) 0) (/= (substr line 1 7) "DwgName"))
+                  (progn
+                    (setq fields (LXI:split-string line *LXI:sep*))
+                    (if (= (length fields) 3)
+                      (setq result (cons fields result))))))
+              (close fp) (reverse result))))))))
+
+;;; Schreibt SyncLog (komplett neu)
+(defun LXI:write-synclog (synclog-data / sync-dir filepath fp entry s)
+  (setq sync-dir (LXI:get-sync-folder)) (setq s *LXI:sep*)
+  (if (null sync-dir) nil
+    (progn
+      (setq filepath (strcat sync-dir "\\LayerSyncLog.csv"))
+      (setq fp (open filepath "w"))
+      (if (null fp) nil
+        (progn
+          (write-line (strcat "DwgName" s "DwgGUID" s "LastSync") fp)
+          (foreach entry synclog-data
+            (write-line (strcat (nth 0 entry) s (nth 1 entry) s (nth 2 entry)) fp))
+          (close fp) T)))))
+
+;;; Holt LastSync fuer eine DWG (ueber GUID, Fallback Name)
+;;; Rueckgabe: Timestamp-String oder nil (noch nie gesynced)
+(defun LXI:get-last-sync (synclog-data guid dwg / result)
+  (setq result nil)
+  ;; Zuerst ueber GUID
+  (if (and guid (/= guid "") (/= guid "NO-GUID"))
+    (foreach entry synclog-data
+      (if (and (null result)
+               (= (strcase (nth 1 entry)) (strcase guid)))
+        (setq result (nth 2 entry)))))
+  ;; Fallback: Name
+  (if (null result)
+    (foreach entry synclog-data
+      (if (and (null result)
+               (= (strcase (nth 0 entry)) (strcase dwg)))
+        (setq result (nth 2 entry)))))
+  result)
+
+;;; Aktualisiert LastSync fuer eine DWG (oder fuegt neu ein)
+;;; Rueckgabe: Aktualisierte synclog-data Liste
+(defun LXI:update-last-sync (synclog-data dwg guid / found new-entry timestamp)
+  (if (null synclog-data) (setq synclog-data nil))
+  (setq timestamp (LXI:timestamp))
+  (setq new-entry (list dwg guid timestamp))
+  (setq found nil)
+  ;; Bestehenden Eintrag ersetzen (ueber GUID oder Name)
+  (setq synclog-data
+    (mapcar
+      '(lambda (entry)
+        (if (or (and guid (/= guid "") (/= guid "NO-GUID")
+                     (= (strcase (nth 1 entry)) (strcase guid)))
+                (= (strcase (nth 0 entry)) (strcase dwg)))
+          (progn (setq found T) new-entry)
+          entry))
+      synclog-data))
+  ;; Wenn nicht gefunden: neuen Eintrag anhaengen
+  (if (null found)
+    (setq synclog-data (append synclog-data (list new-entry))))
+  synclog-data)
+
+;;; Prueft ob Master-Eintrag neuer ist als letzter Sync
+;;; Parameter: master-modified - Timestamp aus Master, last-sync - aus SyncLog
+;;; Rueckgabe: T wenn Master neuer (= jemand anders hat geaendert)
+(defun LXI:master-newer-p (master-modified last-sync / )
+  (if (or (null last-sync) (= last-sync ""))
+    nil  ;; Noch nie gesynced -> kein Konflikt (erster Sync)
+    (if (or (null master-modified) (= master-modified ""))
+      nil  ;; Kein Master-Timestamp -> kein Konflikt
+      ;; String-Vergleich funktioniert weil Format "YYYY-MO-DD HH:MM"
+      (> (strcase master-modified) (strcase last-sync)))))
 ;;; Rueckgabe: Sortierte Liste von Layer-Property-Listen (12 Werte)
 ;;; Index: 0=Name 1=Color 2=Linetype 3=Lineweight 4=OnOff 5=Freeze
 ;;;        6=Lock 7=Plot 8=VPDefault 9=Description 10=Transparency 11=Handle
@@ -1812,7 +1901,7 @@
 (LXI:read-config)
 (if (not (findfile (LXI:get-config-path)))
   (progn (LXI:ensure-directory *LXI:base-path*) (LXI:write-config)))
-(princ "\nLayerExportImport.lsp v1.3.0 geladen.")
+(princ "\nLayerExportImport.lsp v1.4.0 geladen.")
 (princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG")
 (princ (strcat "\nPraefix: " *LXI:prefix* "* | Speicherort: " *LXI:base-path*))
 (princ)
