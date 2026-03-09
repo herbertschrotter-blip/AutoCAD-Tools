@@ -2,9 +2,9 @@
 ;;; LayerExportImport.lsp
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System fuer zeichnungsuebergreifendes Tracking
-;;; FINGERPRINTGUID fuer DWG-Umbenennungserkennung
+;;; FINGERPRINTGUID durch Custom Property LayerSyncGUID ersetzt
 ;;; 
-;;; Version: 0.10.0
+;;; Version: 0.10.2
 ;;; Datum:   2026-03-09
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -74,7 +74,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v0.10.0" fp)
+    (write-line ";;; LayerSync Konfiguration v0.10.2" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -115,15 +115,76 @@
 (defun LXI:dwg-name ( / )
   (strcat (vl-filename-base (getvar "DWGNAME")) ".dwg"))
 
-;;; Gibt die FINGERPRINTGUID der aktuellen Zeichnung zurueck
-;;; Bleibt gleich bei SaveAs, Kopie, Umbenennung
-(defun LXI:dwg-guid ( / guid)
-  (setq guid (getvar "FINGERPRINTGUID"))
-  (if (or (null guid) (= guid ""))
+;;; Gibt die LayerSyncGUID der aktuellen Zeichnung zurueck
+;;; Liest aus Custom Property "LayerSyncGUID"
+;;; Erstellt eine neue GUID falls nicht vorhanden
+;;; Cached in globaler Variable fuer die Session
+;;; Bleibt permanent in der DWG (ueberlebt SaveAs, Kopie, Umbenennung)
+(defun LXI:dwg-guid ( / si guid num-props i key val found)
+  ;; Session-Cache: wenn schon gelesen, direkt zurueckgeben
+  (if (and *LXI:cached-guid*
+           (/= *LXI:cached-guid* "")
+           ;; Cache nur gueltig fuer gleiche Zeichnung
+           (= *LXI:cached-guid-dwg* (LXI:dwg-name)))
     (progn
-      (LXI:debug-print "WARNUNG: Keine FINGERPRINTGUID vorhanden!")
-      "NO-GUID")
-    guid))
+      (LXI:debug-print (strcat "GUID (cached): " *LXI:cached-guid*))
+      *LXI:cached-guid*)
+    ;; Nicht gecached: aus DWG lesen
+    (progn
+      (setq si (vla-get-SummaryInfo
+                 (vla-get-ActiveDocument (vlax-get-acad-object))))
+      (setq found nil)
+      (setq guid nil)
+      
+      ;; Custom Properties durchsuchen
+      (setq num-props (vla-NumCustomInfo si))
+      (if (> num-props 0)
+        (progn
+          (setq i 0)
+          (while (and (< i num-props) (null found))
+            (setq key (vlax-make-variant "" vlax-vbString))
+            (setq val (vlax-make-variant "" vlax-vbString))
+            (vl-catch-all-apply
+              '(lambda ()
+                (vla-GetCustomByIndex si i 'key 'val)
+                (if (= (strcase (vlax-variant-value key)) "LAYERSYNCGUID")
+                  (progn
+                    (setq guid (vlax-variant-value val))
+                    (setq found T)))))
+            (setq i (1+ i)))))
+      
+      ;; Falls keine GUID vorhanden: neue generieren und speichern
+      (if (or (null guid) (= guid ""))
+        (progn
+          (setq guid (LXI:generate-guid))
+          (vl-catch-all-apply
+            '(lambda ()
+              (vla-AddCustomInfo si "LayerSyncGUID" guid)))
+          (LXI:debug-print (strcat "Neue LayerSyncGUID erstellt: " guid))
+          (princ (strcat "\n  LayerSyncGUID erstellt: " guid))
+          (princ "\n  WICHTIG: Zeichnung speichern damit GUID permanent wird!"))
+        (LXI:debug-print (strcat "LayerSyncGUID: " guid)))
+      
+      ;; In Session-Cache speichern
+      (setq *LXI:cached-guid* guid)
+      (setq *LXI:cached-guid-dwg* (LXI:dwg-name))
+      
+      guid)))
+
+;; Session-Cache initialisieren
+(setq *LXI:cached-guid* nil)
+(setq *LXI:cached-guid-dwg* nil)
+
+
+;;; Generiert eine eindeutige ID
+;;; Format: LXI-YYYYMMDD-HHMMSS-RAND
+(defun LXI:generate-guid ( / date-str rand-str)
+  (setq date-str (menucmd "M=$(edtime,0,YYYYMODDHHMMSS)"))
+  ;; Zufallszahl aus Millisekunden-Anteil der Zeit
+  (setq rand-str (itoa (rem (getvar "MILLISECS") 100000)))
+  (while (< (strlen rand-str) 5)
+    (setq rand-str (strcat "0" rand-str)))
+  (strcat "LXI-" date-str "-" rand-str))
 
 (defun LXI:pad-str (str width / pad)
   (if (null str) (setq str ""))
@@ -329,18 +390,20 @@
 
 
 ;;; ------------------------------------------------------------------------
-;;; Entfernt alle Eintraege einer Zeichnung (ueber GUID oder Name)
+;;; Entfernt alle Eintraege einer Zeichnung (ueber GUID UND Name)
+;;; Entfernt beides um alte Eintraege mit anderer GUID zu bereinigen
 ;;; ------------------------------------------------------------------------
 (defun LXI:mapper-remove-dwg (mapper-data guid dwg / )
-  (if (and guid (/= guid "") (/= guid "NO-GUID"))
-    ;; Ueber GUID entfernen (sicherer)
-    (vl-remove-if
-      '(lambda (entry) (= (strcase (nth 1 entry)) (strcase guid)))
-      mapper-data)
-    ;; Fallback: ueber Name
-    (vl-remove-if
-      '(lambda (entry) (= (strcase (car entry)) (strcase dwg)))
-      mapper-data)))
+  ;; Entferne ALLE Eintraege die entweder gleiche GUID oder gleichen Namen haben
+  (vl-remove-if
+    '(lambda (entry)
+      (or
+        ;; Ueber GUID entfernen
+        (and guid (/= guid "") (/= guid "NO-GUID")
+             (= (strcase (nth 1 entry)) (strcase guid)))
+        ;; Ueber Name entfernen (raeumt alte Eintraege mit anderer GUID auf)
+        (= (strcase (car entry)) (strcase dwg))))
+    mapper-data))
 
 
 ;;; ========================================================================
@@ -1040,7 +1103,7 @@
 (LXI:read-config)
 (if (not (findfile (LXI:get-config-path)))
   (progn (LXI:ensure-directory *LXI:base-path*) (LXI:write-config)))
-(princ "\nLayerExportImport.lsp v0.10.0 geladen.")
+(princ "\nLayerExportImport.lsp v0.10.2 geladen.")
 (princ "\nBefehle: LAYSYNC | LAYEXP | LAYIMP | LAYLOG | LAYCFG")
 (princ (strcat "\nPraefix: " *LXI:prefix* "* | Speicherort: " *LXI:base-path*))
 (princ "\nTipp: LAYSYNC auf Strg+Shift+L legen (CUI)")
