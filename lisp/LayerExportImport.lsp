@@ -3,7 +3,7 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; Erkennt Umbenennungen via Handle-Mapping
 ;;; 
-;;; Version: 0.5.0
+;;; Version: 0.6.0
 ;;; Datum:   2026-03-09
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -18,8 +18,8 @@
 ;;;   LAYCFG - Konfiguration anzeigen / aendern
 ;;;
 ;;; Dateien im LayerSync-Ordner:
-;;;   LayerMaster.txt  - Layer-Daten (Name, Farbe, Linientyp, ...)
-;;;   LayerMapper.txt  - Handle-Zuordnung (Zeichnung > Layer > Handle)
+;;;   LayerMaster.csv  - Layer-Daten (Semikolon-getrennt, Excel-kompatibel)
+;;;   LayerMapper.csv  - Handle-Zuordnung (Zeichnung > Layer > Handle)
 ;;;   LayerSync.cfg    - Konfiguration (Pfad, Praefix, Debug)
 ;;; ========================================================================
 
@@ -38,6 +38,9 @@
 (setq *LXI:prefix*    *LXI:default-prefix*)
 (setq *LXI:debug*     nil)
 
+;; CSV-Trennzeichen (Semikolon fuer deutsche Excel-Locale)
+(setq *LXI:sep* ";")
+
 
 ;;; ========================================================================
 ;;; CONFIG-DATEI FUNKTIONEN
@@ -46,8 +49,6 @@
 
 ;;; ------------------------------------------------------------------------
 ;;; Gibt Pfad zur Config-Datei zurueck
-;;; Config liegt immer im Basispfad (auch wenn Pfad geaendert wird,
-;;; wird Config im AKTUELLEN Pfad gesucht/geschrieben)
 ;;; ------------------------------------------------------------------------
 (defun LXI:get-config-path ( / )
   (strcat *LXI:base-path* "\\LayerSync.cfg")
@@ -56,7 +57,6 @@
 
 ;;; ------------------------------------------------------------------------
 ;;; Liest Config-Datei und setzt globale Variablen
-;;; Format: Key=Value pro Zeile
 ;;; ------------------------------------------------------------------------
 (defun LXI:read-config ( / filepath fp line pos key val)
   (setq filepath (LXI:get-config-path))
@@ -93,10 +93,8 @@
 
 ;;; ------------------------------------------------------------------------
 ;;; Schreibt Config-Datei mit aktuellen Einstellungen
-;;; Rueckgabe: T bei Erfolg
 ;;; ------------------------------------------------------------------------
 (defun LXI:write-config ( / filepath fp)
-  ;; Ordner sicherstellen
   (LXI:ensure-directory *LXI:base-path*)
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
@@ -106,7 +104,7 @@
       nil
     )
     (progn
-      (write-line ";;; LayerSync Konfiguration v0.5.0" fp)
+      (write-line ";;; LayerSync Konfiguration v0.6.0" fp)
       (write-line ";;; Aenderungen ueber LAYCFG Befehl oder manuell hier" fp)
       (write-line ";;;" fp)
       (write-line (strcat "PATH=" *LXI:base-path*) fp)
@@ -208,23 +206,22 @@
 
 
 ;;; ========================================================================
-;;; MASTER-DATEI FUNKTIONEN
+;;; MASTER-DATEI FUNKTIONEN (.csv)
 ;;; ========================================================================
-;;; Format (Tab-getrennt, 10 Felder):
-;;;   Name  Color  Linetype  Lineweight  Plot  OnOff  Freeze  Lock  Source  LastModified
+;;; Format (Semikolon-getrennt, 10 Felder):
+;;;   Name;Color;Linetype;Lineweight;Plot;OnOff;Freeze;Lock;Source;LastModified
 
 
 ;;; ------------------------------------------------------------------------
 ;;; Liest den Master ein
 ;;; Rueckgabe: Liste von Layer-Listen (10 Felder) oder nil
 ;;; ------------------------------------------------------------------------
-(defun LXI:read-master ( / sync-dir filepath fp line fields result sep)
+(defun LXI:read-master ( / sync-dir filepath fp line fields result)
   (setq sync-dir (LXI:get-sync-folder))
   (if (null sync-dir)
     nil
     (progn
-      (setq filepath (strcat sync-dir "\\LayerMaster.txt"))
-      (setq sep "\t")
+      (setq filepath (strcat sync-dir "\\LayerMaster.csv"))
       (if (not (findfile filepath))
         nil
         (progn
@@ -234,12 +231,13 @@
             (progn
               (setq result nil)
               (while (setq line (read-line fp))
+                ;; Kommentarzeilen und Header ueberspringen
                 (if (and (> (strlen line) 0)
-                         (/= (substr line 1 3) ";;;")
+                         (/= (substr line 1 1) ";")
                          (/= (substr line 1 4) "Name")
                     )
                   (progn
-                    (setq fields (LXI:split-string line sep))
+                    (setq fields (LXI:split-string line *LXI:sep*))
                     (if (= (length fields) 10)
                       (setq result (cons fields result))
                     )
@@ -261,13 +259,13 @@
 ;;; Schreibt den Master
 ;;; Rueckgabe: T bei Erfolg
 ;;; ------------------------------------------------------------------------
-(defun LXI:write-master (master-data / sync-dir filepath fp lay sep)
+(defun LXI:write-master (master-data / sync-dir filepath fp lay s)
   (setq sync-dir (LXI:get-sync-folder))
+  (setq s *LXI:sep*)
   (if (null sync-dir)
     nil
     (progn
-      (setq filepath (strcat sync-dir "\\LayerMaster.txt"))
-      (setq sep "\t")
+      (setq filepath (strcat sync-dir "\\LayerMaster.csv"))
       (setq fp (open filepath "w"))
       (if (null fp)
         (progn
@@ -275,26 +273,23 @@
           nil
         )
         (progn
-          (write-line ";;; LayerMaster v0.5.0" fp)
-          (write-line (strcat ";;; Letzte Aktualisierung: " (LXI:timestamp)) fp)
-          (write-line (strcat ";;; Anzahl Layer: " (itoa (length master-data))) fp)
-          (write-line (strcat ";;; Praefix: " *LXI:prefix*) fp)
-          (write-line ";;;" fp)
+          ;; Spalten-Header (erste Zeile = Excel erkennt Spalten)
           (write-line
-            (strcat "Name" sep "Color" sep "Linetype" sep "Lineweight"
-                    sep "Plot" sep "OnOff" sep "Freeze" sep "Lock"
-                    sep "Source" sep "LastModified")
+            (strcat "Name" s "Color" s "Linetype" s "Lineweight"
+                    s "Plot" s "OnOff" s "Freeze" s "Lock"
+                    s "Source" s "LastModified")
             fp
           )
           ;; Alphabetisch sortiert
           (setq master-data
             (vl-sort master-data '(lambda (a b) (< (car a) (car b))))
           )
+          ;; Daten
           (foreach lay master-data
             (write-line
-              (strcat (nth 0 lay) sep (nth 1 lay) sep (nth 2 lay) sep
-                      (nth 3 lay) sep (nth 4 lay) sep (nth 5 lay) sep
-                      (nth 6 lay) sep (nth 7 lay) sep (nth 8 lay) sep
+              (strcat (nth 0 lay) s (nth 1 lay) s (nth 2 lay) s
+                      (nth 3 lay) s (nth 4 lay) s (nth 5 lay) s
+                      (nth 6 lay) s (nth 7 lay) s (nth 8 lay) s
                       (nth 9 lay))
               fp
             )
@@ -334,23 +329,22 @@
 
 
 ;;; ========================================================================
-;;; MAPPER-DATEI FUNKTIONEN
+;;; MAPPER-DATEI FUNKTIONEN (.csv)
 ;;; ========================================================================
-;;; Format (Tab-getrennt, 3 Felder):
-;;;   DwgName  LayerName  Handle
+;;; Format (Semikolon-getrennt, 3 Felder):
+;;;   DwgName;LayerName;Handle
 
 
 ;;; ------------------------------------------------------------------------
 ;;; Liest den Mapper ein
 ;;; Rueckgabe: Liste von '("dwg" "layername" "handle") oder nil
 ;;; ------------------------------------------------------------------------
-(defun LXI:read-mapper ( / sync-dir filepath fp line fields result sep)
+(defun LXI:read-mapper ( / sync-dir filepath fp line fields result)
   (setq sync-dir (LXI:get-sync-folder))
   (if (null sync-dir)
     nil
     (progn
-      (setq filepath (strcat sync-dir "\\LayerMapper.txt"))
-      (setq sep "\t")
+      (setq filepath (strcat sync-dir "\\LayerMapper.csv"))
       (if (not (findfile filepath))
         nil
         (progn
@@ -360,12 +354,12 @@
             (progn
               (setq result nil)
               (while (setq line (read-line fp))
+                ;; Header ueberspringen
                 (if (and (> (strlen line) 0)
-                         (/= (substr line 1 3) ";;;")
                          (/= (substr line 1 3) "Dwg")
                     )
                   (progn
-                    (setq fields (LXI:split-string line sep))
+                    (setq fields (LXI:split-string line *LXI:sep*))
                     (if (= (length fields) 3)
                       (setq result (cons fields result))
                     )
@@ -387,13 +381,13 @@
 ;;; Schreibt den Mapper
 ;;; Rueckgabe: T bei Erfolg
 ;;; ------------------------------------------------------------------------
-(defun LXI:write-mapper (mapper-data / sync-dir filepath fp entry sep)
+(defun LXI:write-mapper (mapper-data / sync-dir filepath fp entry s)
   (setq sync-dir (LXI:get-sync-folder))
+  (setq s *LXI:sep*)
   (if (null sync-dir)
     nil
     (progn
-      (setq filepath (strcat sync-dir "\\LayerMapper.txt"))
-      (setq sep "\t")
+      (setq filepath (strcat sync-dir "\\LayerMapper.csv"))
       (setq fp (open filepath "w"))
       (if (null fp)
         (progn
@@ -401,10 +395,8 @@
           nil
         )
         (progn
-          (write-line ";;; LayerMapper v0.5.0" fp)
-          (write-line (strcat ";;; Letzte Aktualisierung: " (LXI:timestamp)) fp)
-          (write-line ";;;" fp)
-          (write-line (strcat "DwgName" sep "LayerName" sep "Handle") fp)
+          ;; Spalten-Header
+          (write-line (strcat "DwgName" s "LayerName" s "Handle") fp)
           ;; Sortiert nach Zeichnung, dann Layer
           (setq mapper-data
             (vl-sort mapper-data
@@ -418,7 +410,7 @@
           )
           (foreach entry mapper-data
             (write-line
-              (strcat (nth 0 entry) sep (nth 1 entry) sep (nth 2 entry))
+              (strcat (nth 0 entry) s (nth 1 entry) s (nth 2 entry))
               fp
             )
           )
@@ -483,7 +475,7 @@
 ;;; Sammelt Layer-Daten inkl. Handle (nur Sync-Praefix, ohne Xref)
 ;;; Rueckgabe: Liste von '("Name" "Color" ... "Handle") - 9 Felder
 ;;; ------------------------------------------------------------------------
-(defun LXI:collect-layers ( / lay-tbl lay-name result
+(defun LXI:collect-layers ( / lay-tbl lay-name result ent-data
                               col ltype lw plot-flag on-off frz lck handle)
   (while (setq lay-tbl (tblnext "LAYER" (not lay-tbl)))
     (setq lay-name (cdr (assoc 2 lay-tbl)))
@@ -492,20 +484,33 @@
              (LXI:sync-layer-p lay-name)
         )
       (progn
-        (setq col (cdr (assoc 62 lay-tbl)))
+        ;; Handle ueber tblobjname + entget holen
+        (setq ent-data (entget (tblobjname "LAYER" lay-name)))
+        (setq handle (cdr (assoc 5 ent-data)))
+        (if (null handle) (setq handle "0"))
+        
+        ;; Farbe (DXF 62)
+        (setq col (cdr (assoc 62 ent-data)))
+        (if (null col) (setq col 7))
         (setq on-off (if (< col 0) "OFF" "ON"))
         (setq col (abs col))
-        (setq ltype (cdr (assoc 6 lay-tbl)))
+        
+        ;; Linientyp
+        (setq ltype (cdr (assoc 6 ent-data)))
         (if (null ltype) (setq ltype "Continuous"))
-        (setq frz (cdr (assoc 70 lay-tbl)))
+        
+        ;; Freeze / Lock via DXF 70
+        (setq frz (cdr (assoc 70 ent-data)))
+        (if (null frz) (setq frz 0))
         (setq lck frz)
         (setq frz (if (= (logand frz 1) 1) "FROZEN" "THAWED"))
         (setq lck (if (= (logand lck 4) 4) "LOCKED" "UNLOCKED"))
+        
+        ;; Linienstaerke & Plot-Flag
         (setq lw "Default")
-        (setq plot-flag (cdr (assoc 290 lay-tbl)))
+        (setq plot-flag (cdr (assoc 290 ent-data)))
         (setq plot-flag (if (or (null plot-flag) (= plot-flag 1))
                            "PLOT" "NOPLOT"))
-        (setq handle (cdr (assoc 5 lay-tbl)))
         
         (LXI:debug-print
           (strcat "Gefunden: " lay-name " [" handle "] Farbe=" (itoa col))
@@ -534,7 +539,7 @@
 
 ;;; ------------------------------------------------------------------------
 ;;; Wendet Master-Daten auf die aktuelle Zeichnung an
-;;; Master gewinnt immer. Erkennt Umbenennungen via Mapper.
+;;; Master gewinnt immer.
 ;;; Rueckgabe: Liste '(neue aktualisierte umbenannte uebersprungene)
 ;;; ------------------------------------------------------------------------
 (defun LXI:apply-layers (master-data mapper-data dwg
@@ -560,7 +565,7 @@
     (setq existing (tblsearch "LAYER" master-name))
     
     (if existing
-      ;; --- Layer existiert mit gleichem Namen: Eigenschaften pruefen ---
+      ;; --- Layer existiert: Eigenschaften pruefen ---
       (progn
         (setq changed nil)
         (setq ent-data (entget (tblobjname "LAYER" master-name)))
@@ -649,20 +654,17 @@
   (setq timestamp (LXI:timestamp))
   (setq cnt-new 0 cnt-upd 0 cnt-ren 0)
   
-  ;; Layer sammeln
   (setq layers (LXI:collect-layers))
   
   (if (null layers)
     (princ (strcat "\n*** Keine Layer mit Praefix \""
                    *LXI:prefix* "\" zum Exportieren gefunden."))
     (progn
-      ;; Master und Mapper einlesen
       (setq master-data (LXI:read-master))
       (if (null master-data) (setq master-data nil))
       (setq mapper-data (LXI:read-mapper))
       (if (null mapper-data) (setq mapper-data nil))
       
-      ;; Jeden Layer verarbeiten
       (foreach lay layers
         (setq lay-name (nth 0 lay))
         (setq handle   (nth 8 lay))
@@ -673,7 +675,7 @@
         )
         
         (cond
-          ;; FALL 1: Handle bekannt unter anderem Namen = Umbenennung
+          ;; FALL 1: Umbenennung erkannt
           ((and old-master-name
                 (/= (strcase old-master-name) (strcase lay-name))
            )
@@ -683,7 +685,6 @@
               (LXI:debug-print
                 (strcat "Handle " handle " war " old-master-name
                         " jetzt " lay-name))
-              ;; Im Master umbenennen
               (setq master-data
                 (mapcar
                   '(lambda (m)
@@ -720,7 +721,7 @@
             )
           )
           
-          ;; FALL 3: Neuer Layer -> hinzufuegen
+          ;; FALL 3: Neuer Layer
           (T
             (progn
               (LXI:debug-print (strcat "Neu: " lay-name))
@@ -771,7 +772,6 @@
 ;;; ========================================================================
 ;;; Hauptbefehl: LAYIMP
 ;;; Importiert Layer aus Master. Master gewinnt immer.
-;;; Aktualisiert Mapper nach Import.
 ;;; ========================================================================
 (defun c:LAYIMP ( / *error* old-cmdecho
                     dwg master-data mapper-data counts
@@ -789,12 +789,11 @@
   (setvar "CMDECHO" 0)
   (setq dwg (LXI:dwg-name))
   
-  ;; Master lesen
   (setq master-data (LXI:read-master))
   
   (if (null master-data)
     (progn
-      (princ "\n*** Kein LayerMaster.txt gefunden oder leer.")
+      (princ "\n*** Kein LayerMaster.csv gefunden oder leer.")
       (princ (strcat "\n    Ordner: " *LXI:base-path*))
       (princ "\n    Zuerst LAYEXP in einer Zeichnung ausfuehren.")
     )
@@ -802,14 +801,13 @@
       (princ (strcat "\n" (itoa (length master-data))
                      " Layer im Master gefunden."))
       
-      ;; Mapper lesen
       (setq mapper-data (LXI:read-mapper))
       (if (null mapper-data) (setq mapper-data nil))
       
-      ;; Layer anwenden (Master gewinnt)
+      ;; Layer anwenden
       (setq counts (LXI:apply-layers master-data mapper-data dwg))
       
-      ;; Mapper aktualisieren mit aktuellen Handles
+      ;; Mapper aktualisieren
       (setq mapper-data (LXI:mapper-remove-dwg mapper-data dwg))
       (setq new-mapper nil)
       (while (setq lay-tbl (tblnext "LAYER" (not lay-tbl)))
@@ -819,7 +817,8 @@
                  (LXI:find-in-master master-data lay-name)
             )
           (progn
-            (setq handle (cdr (assoc 5 lay-tbl)))
+            (setq handle (cdr (assoc 5
+              (entget (tblobjname "LAYER" lay-name)))))
             (setq new-mapper
               (cons (list dwg lay-name handle) new-mapper))
           )
@@ -834,8 +833,8 @@
       (princ (strcat "\n  Aktualisiert:   " (itoa (nth 1 counts))))
       (princ (strcat "\n  Umbenannt:      " (itoa (nth 2 counts))))
       (princ (strcat "\n  Unveraendert:   " (itoa (nth 3 counts))))
-    ) ;_ progn
-  ) ;_ if master-data
+    )
+  )
   
   (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
   (princ)
@@ -859,21 +858,18 @@
   (setq old-cmdecho (getvar "CMDECHO"))
   (setvar "CMDECHO" 0)
   
-  ;; Aktuelle Config anzeigen
   (princ "\n\n=== LayerSync Konfiguration ===")
   (princ (strcat "\n  [P]fad:    " *LXI:base-path*))
   (princ (strcat "\n  P[r]aefix: " *LXI:prefix*))
   (princ (strcat "\n  [D]ebug:   " (if *LXI:debug* "ON" "OFF")))
   (princ "\n===============================\n")
   
-  ;; Auswahl
   (initget "Pfad pRaefix Debug")
   (setq choice
     (getkword "\nWas aendern? [Pfad/pRaefix/Debug] <Enter=Abbruch>: ")
   )
   
   (cond
-    ;; Pfad aendern
     ((= choice "Pfad")
       (progn
         (princ (strcat "\nAktuell: " *LXI:base-path*))
@@ -881,7 +877,6 @@
         (if (and new-val (/= new-val ""))
           (progn
             (setq *LXI:base-path* new-val)
-            ;; Ordner erstellen falls noetig
             (if (LXI:ensure-directory *LXI:base-path*)
               (progn
                 (LXI:write-config)
@@ -898,7 +893,6 @@
       )
     )
     
-    ;; Praefix aendern
     ((= choice "pRaefix")
       (progn
         (princ (strcat "\nAktuell: " *LXI:prefix*))
@@ -915,7 +909,6 @@
       )
     )
     
-    ;; Debug umschalten
     ((= choice "Debug")
       (progn
         (setq *LXI:debug* (not *LXI:debug*))
@@ -924,7 +917,6 @@
       )
     )
     
-    ;; Abbruch
     (T (princ "\nKeine Aenderung."))
   )
   
@@ -949,7 +941,7 @@
   )
 )
 
-(princ "\nLayerExportImport.lsp v0.5.0 geladen.")
+(princ "\nLayerExportImport.lsp v0.6.0 geladen.")
 (princ "\nBefehle: LAYEXP | LAYIMP | LAYCFG")
 (princ (strcat "\nPraefix: " *LXI:prefix*
                "* | Speicherort: " *LXI:base-path*))
