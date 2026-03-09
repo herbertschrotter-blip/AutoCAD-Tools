@@ -3,7 +3,7 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System | Custom Property GUID | ObjectDBX Batch-Sync
 ;;; 
-;;; Version: 1.4.0
+;;; Version: 1.5.0
 ;;; Datum:   2026-03-10
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -23,9 +23,10 @@
 ;;;   LAYCFG     - Konfiguration anzeigen / aendern
 ;;;
 ;;; Dateien im LayerSync-Ordner:
-;;;   LayerMaster.csv  - Layer-Daten mit MasterID (Primary Key)
+;;;   LayerMaster.csv  - Layer-Daten mit MasterID (14 Felder)
 ;;;   LayerMapper.csv  - Handle+GUID+Pfad-Zuordnung (6 Felder)
 ;;;   LayerHistory.csv - Aenderungsprotokoll (append-only)
+;;;   LayerSyncLog.csv - Letzter Sync-Zeitpunkt pro DWG (3 Felder)
 ;;;   LayerSync.cfg    - Konfiguration
 ;;; ========================================================================
 
@@ -77,7 +78,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v1.4.0" fp)
+    (write-line ";;; LayerSync Konfiguration v1.5.0" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -207,10 +208,11 @@
 
 ;;; ========================================================================
 ;;; MASTER (.csv) - 11 Felder
-;;; MasterID;Name;Color;Linetype;Lineweight;Plot;OnOff;Freeze;Lock;Source;LastModified
+;;; MasterID;Name;Color;Linetype;Lineweight;Plot;OnOff;Freeze;Lock;VPDefault;Description;Transparency;Source;LastModified
+;;; Index: 0  1    2     3        4         5    6      7     8    9         10          11           12     13
 ;;; ========================================================================
 
-(defun LXI:read-master ( / sync-dir filepath fp line fields result)
+(defun LXI:read-master ( / sync-dir filepath fp line fields result nf)
   (setq sync-dir (LXI:get-sync-folder))
   (if (null sync-dir) nil
     (progn
@@ -227,8 +229,21 @@
                          (/= (substr line 1 8) "MasterID"))
                   (progn
                     (setq fields (LXI:split-string line *LXI:sep*))
-                    (if (= (length fields) 11)
-                      (setq result (cons fields result))))))
+                    (setq nf (length fields))
+                    (cond
+                      ;; 14 Felder = aktuelles Format v2.0
+                      ((= nf 14)
+                        (setq result (cons fields result)))
+                      ;; 11 Felder = altes Format v1.x -> migrieren
+                      ((= nf 11)
+                        (setq result
+                          (cons
+                            (list (nth 0 fields) (nth 1 fields) (nth 2 fields)
+                                  (nth 3 fields) (nth 4 fields) (nth 5 fields)
+                                  (nth 6 fields) (nth 7 fields) (nth 8 fields)
+                                  "0" "" "0"  ;; VPDefault, Description, Transparency
+                                  (nth 9 fields) (nth 10 fields))
+                            result)))))))
               (close fp) (reverse result))))))))
 
 (defun LXI:write-master (master-data / sync-dir filepath fp lay s)
@@ -241,13 +256,16 @@
         (progn
           (write-line
             (strcat "MasterID" s "Name" s "Color" s "Linetype" s "Lineweight"
-                    s "Plot" s "OnOff" s "Freeze" s "Lock" s "Source" s "LastModified") fp)
+                    s "Plot" s "OnOff" s "Freeze" s "Lock"
+                    s "VPDefault" s "Description" s "Transparency"
+                    s "Source" s "LastModified") fp)
           (setq master-data (vl-sort master-data '(lambda (a b) (< (car a) (car b)))))
           (foreach lay master-data
             (write-line
               (strcat (nth 0 lay) s (nth 1 lay) s (nth 2 lay) s (nth 3 lay) s
                       (nth 4 lay) s (nth 5 lay) s (nth 6 lay) s (nth 7 lay) s
-                      (nth 8 lay) s (nth 9 lay) s (nth 10 lay)) fp))
+                      (nth 8 lay) s (nth 9 lay) s (nth 10 lay) s (nth 11 lay) s
+                      (nth 12 lay) s (nth 13 lay)) fp))
           (close fp) T)))))
 
 (defun LXI:find-by-id (master-data mid / result)
@@ -1901,7 +1919,7 @@
 (LXI:read-config)
 (if (not (findfile (LXI:get-config-path)))
   (progn (LXI:ensure-directory *LXI:base-path*) (LXI:write-config)))
-(princ "\nLayerExportImport.lsp v1.4.0 geladen.")
+(princ "\nLayerExportImport.lsp v1.5.0 geladen.")
 (princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG")
 (princ (strcat "\nPraefix: " *LXI:prefix* "* | Speicherort: " *LXI:base-path*))
 (princ)
