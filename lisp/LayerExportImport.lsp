@@ -4,7 +4,7 @@
 ;;; MasterID-System fuer zeichnungsuebergreifendes Tracking
 ;;; FINGERPRINTGUID durch Custom Property LayerSyncGUID ersetzt
 ;;; 
-;;; Version: 0.10.2
+;;; Version: 0.11.0
 ;;; Datum:   2026-03-09
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -74,7 +74,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v0.10.2" fp)
+    (write-line ";;; LayerSync Konfiguration v0.11.0" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -498,11 +498,73 @@
       (setq found (cdr (assoc 2 lay-tbl)))))
   found)
 
-(defun LXI:create-layer (lay-name col ltype plot-flag on-off frz lck / new-col)
-  (if (not (tblsearch "LTYPE" ltype))
+;;; ------------------------------------------------------------------------
+;;; Stellt sicher dass ein Linientyp verfuegbar ist
+;;; Versucht: 1) acadiso.lin  2) Dateiauswahl-Dialog  3) Fallback Continuous
+;;; Parameter:
+;;;   ltype - Gewuenschter Linientyp-Name
+;;; Rueckgabe: Verfuegbarer Linientyp-Name (original oder "Continuous")
+;;; ------------------------------------------------------------------------
+(defun LXI:ensure-linetype (ltype / lin-file)
+  ;; Wenn Continuous oder schon vorhanden: nichts tun
+  (if (or (= (strcase ltype) "CONTINUOUS")
+          (tblsearch "LTYPE" ltype))
+    ltype
+    ;; Versuche aus acadiso.lin zu laden
     (progn
-      (LXI:debug-print (strcat "  Linientyp \"" ltype "\" fehlt, verwende Continuous"))
-      (setq ltype "Continuous")))
+      (LXI:debug-print (strcat "  Linientyp \"" ltype "\" fehlt, versuche zu laden..."))
+      (setq lin-file (findfile "acadiso.lin"))
+      (if lin-file
+        (progn
+          (vl-catch-all-apply
+            '(lambda ()
+              (command "._-LINETYPE" "L" ltype lin-file "")))
+          ;; Pruefen ob erfolgreich geladen
+          (if (tblsearch "LTYPE" ltype)
+            (progn
+              (princ (strcat "\n  Linientyp \"" ltype "\" aus acadiso.lin geladen."))
+              ltype)
+            ;; Nicht in acadiso.lin -> Dateiauswahl
+            (progn
+              (princ (strcat "\n  Linientyp \"" ltype
+                             "\" nicht in acadiso.lin gefunden."))
+              (LXI:load-linetype-from-dialog ltype))))
+        ;; acadiso.lin nicht gefunden -> Dateiauswahl
+        (progn
+          (princ "\n  acadiso.lin nicht gefunden.")
+          (LXI:load-linetype-from-dialog ltype))))))
+
+
+;;; ------------------------------------------------------------------------
+;;; Versucht Linientyp ueber Dateiauswahl-Dialog zu laden
+;;; Rueckgabe: Linientyp-Name oder "Continuous" bei Abbruch
+;;; ------------------------------------------------------------------------
+(defun LXI:load-linetype-from-dialog (ltype / lin-file)
+  (princ (strcat "\n  Bitte .lin-Datei fuer \"" ltype "\" waehlen:"))
+  (setq lin-file
+    (getfiled (strcat "LIN-Datei fuer Linientyp \"" ltype "\"")
+              "" "lin" 4))
+  (if lin-file
+    (progn
+      (vl-catch-all-apply
+        '(lambda ()
+          (command "._-LINETYPE" "L" ltype lin-file "")))
+      (if (tblsearch "LTYPE" ltype)
+        (progn
+          (princ (strcat "\n  Linientyp \"" ltype "\" geladen aus " lin-file))
+          ltype)
+        (progn
+          (princ (strcat "\n  *** Linientyp \"" ltype
+                         "\" konnte nicht geladen werden. Verwende Continuous."))
+          "Continuous")))
+    (progn
+      (princ (strcat "\n  *** Abbruch. Verwende Continuous fuer \"" ltype "\"."))
+      "Continuous")))
+
+
+(defun LXI:create-layer (lay-name col ltype plot-flag on-off frz lck / new-col)
+  ;; Linientyp sicherstellen (laden wenn noetig)
+  (setq ltype (LXI:ensure-linetype ltype))
   (setq new-col (if (= on-off "OFF") (- col) col))
   (if (entmake
         (list '(0 . "LAYER") '(100 . "AcDbSymbolTableRecord")
@@ -518,9 +580,10 @@
     (progn
       (setq new-col (if (= on-off "OFF") (- col) col))
       (setq ent-data (subst (cons 62 new-col) (assoc 62 ent-data) ent-data))
-      (if (tblsearch "LTYPE" ltype)
-        (if (assoc 6 ent-data)
-          (setq ent-data (subst (cons 6 ltype) (assoc 6 ent-data) ent-data))))
+      ;; Linientyp sicherstellen (laden wenn noetig)
+      (setq ltype (LXI:ensure-linetype ltype))
+      (if (and (/= (strcase ltype) "CONTINUOUS") (assoc 6 ent-data))
+        (setq ent-data (subst (cons 6 ltype) (assoc 6 ent-data) ent-data)))
       (if (assoc 290 ent-data)
         (setq ent-data (subst (cons 290 (if (= plot-flag "PLOT") 1 0))
                               (assoc 290 ent-data) ent-data)))
@@ -639,8 +702,13 @@
                   (setq change-details nil)
                   (setq detail (LXI:compare-field (nth 2 existing-master) (nth 1 lay)))
                   (if detail (setq change-details (cons (strcat "Farbe:" detail) change-details)))
-                  (setq detail (LXI:compare-field (nth 3 existing-master) (nth 2 lay)))
-                  (if detail (setq change-details (cons (strcat "Linientyp:" detail) change-details)))
+                  ;; Linientyp: Nur loggen wenn lokal NICHT Continuous ist
+                  ;; (Continuous koennte Fallback sein weil Sonder-Linientyp fehlt)
+                  (if (and (/= (strcase (nth 2 lay)) "CONTINUOUS")
+                           (LXI:compare-field (nth 3 existing-master) (nth 2 lay)))
+                    (setq change-details
+                      (cons (strcat "Linientyp:" (LXI:compare-field (nth 3 existing-master) (nth 2 lay)))
+                            change-details)))
                   (setq detail (LXI:compare-field (nth 6 existing-master) (nth 5 lay)))
                   (if detail (setq change-details (cons (strcat "OnOff:" detail) change-details)))
                   (setq detail (LXI:compare-field (nth 5 existing-master) (nth 4 lay)))
@@ -654,9 +722,23 @@
                                     dwg mid)
                               history-entries))
                       (setq cnt-upd (1+ cnt-upd))))
+                  ;; Master aktualisieren - Linientyp: Master behalten wenn lokal Continuous
+                  ;; und Master etwas anderes hat (= Fallback-Schutz)
                   (setq master-data (LXI:remove-by-id master-data mid))
                   (setq master-data
-                    (cons (list mid lay-name (nth 1 lay) (nth 2 lay) (nth 3 lay)
+                    (cons (list mid lay-name (nth 1 lay)
+                                ;; Linientyp: Master behalten wenn lokal Continuous
+                                ;; und Master einen Sonder-Linientyp hat
+                                (if (and (= (strcase (nth 2 lay)) "CONTINUOUS")
+                                         (/= (strcase (nth 3 existing-master)) "CONTINUOUS"))
+                                  (progn
+                                    (LXI:debug-print
+                                      (strcat "  Linientyp beibehalten: "
+                                              (nth 3 existing-master)
+                                              " (lokal=Continuous)"))
+                                    (nth 3 existing-master))
+                                  (nth 2 lay))
+                                (nth 3 lay)
                                 (nth 4 lay) (nth 5 lay) (nth 6 lay) (nth 7 lay)
                                 dwg timestamp) master-data))))))
           
@@ -1103,7 +1185,7 @@
 (LXI:read-config)
 (if (not (findfile (LXI:get-config-path)))
   (progn (LXI:ensure-directory *LXI:base-path*) (LXI:write-config)))
-(princ "\nLayerExportImport.lsp v0.10.2 geladen.")
+(princ "\nLayerExportImport.lsp v0.11.0 geladen.")
 (princ "\nBefehle: LAYSYNC | LAYEXP | LAYIMP | LAYLOG | LAYCFG")
 (princ (strcat "\nPraefix: " *LXI:prefix* "* | Speicherort: " *LXI:base-path*))
 (princ "\nTipp: LAYSYNC auf Strg+Shift+L legen (CUI)")
