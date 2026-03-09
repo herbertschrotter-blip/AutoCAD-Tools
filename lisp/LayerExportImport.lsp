@@ -3,7 +3,7 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System | Custom Property GUID | ObjectDBX Batch-Sync
 ;;; 
-;;; Version: 1.0.1
+;;; Version: 1.1.0
 ;;; Datum:   2026-03-09
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -77,7 +77,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v1.0.1" fp)
+    (write-line ";;; LayerSync Konfiguration v1.1.0" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -945,14 +945,25 @@
 ;;; ------------------------------------------------------------------------
 ;;; Synced Layer in einer geoeffneten Zeichnung (Documents-Collection)
 ;;; Master gewinnt, Konflikte werden gesammelt
-;;; Rueckgabe: Liste '(cnt-new cnt-upd cnt-skip conflicts)
+;;; Entfernt/deaktiviert Layer die nicht mehr im Master sind
+;;; Rueckgabe: Liste '(cnt-new cnt-upd cnt-skip conflicts cnt-del del-info)
+;;; del-info = Liste von '("LayerName" "geloescht"|"OFF")
 ;;; ------------------------------------------------------------------------
 (defun LXI:doc-sync-layers (doc master-data / layers-coll lay-obj
                               lay master-name col ltype plot-flag on-off
                               local-col local-onoff local-plot
-                              cnt-new cnt-upd cnt-skip conflicts)
-  (setq cnt-new 0 cnt-upd 0 cnt-skip 0 conflicts nil)
+                              cnt-new cnt-upd cnt-skip conflicts
+                              cnt-del del-info
+                              master-names lay-name del-result ss)
+  (setq cnt-new 0 cnt-upd 0 cnt-skip 0 cnt-del 0 conflicts nil del-info nil)
   (setq layers-coll (vla-get-Layers doc))
+  
+  ;; Master-Layernamen sammeln (fuer Loeschpruefung)
+  (setq master-names nil)
+  (foreach lay master-data
+    (setq master-names (cons (strcase (nth 1 lay)) master-names)))
+  
+  ;; 1) Layer anlegen/aktualisieren
   (foreach lay master-data
     (setq master-name (nth 1 lay) col (atoi (nth 2 lay))
           ltype (nth 3 lay) plot-flag (nth 5 lay) on-off (nth 6 lay))
@@ -990,7 +1001,29 @@
             (vla-put-Plottable lay-obj (if (= plot-flag "PLOT") :vlax-true :vlax-false))
             (setq cnt-upd (1+ cnt-upd)))
           (setq cnt-skip (1+ cnt-skip))))))
-  (list cnt-new cnt-upd cnt-skip conflicts))
+  
+  ;; 2) Layer entfernen die nicht mehr im Master sind
+  (vlax-for lay-obj layers-coll
+    (setq lay-name (vla-get-Name lay-obj))
+    (if (and (LXI:sync-layer-p lay-name)
+             (not (LXI:xref-layer-p lay-name))
+             (not (member (strcase lay-name) master-names)))
+      (progn
+        ;; Versuche zu loeschen
+        (setq del-result
+          (vl-catch-all-apply 'vla-Delete (list lay-obj)))
+        (if (vl-catch-all-error-p del-result)
+          ;; Loeschen fehlgeschlagen (Objekte drauf) -> OFF setzen
+          (progn
+            (vl-catch-all-apply 'vla-put-LayerOn (list lay-obj :vlax-false))
+            (setq del-info (cons (list lay-name "OFF") del-info))
+            (setq cnt-del (1+ cnt-del)))
+          ;; Erfolgreich geloescht
+          (progn
+            (setq del-info (cons (list lay-name "geloescht") del-info))
+            (setq cnt-del (1+ cnt-del)))))))
+  
+  (list cnt-new cnt-upd cnt-skip conflicts cnt-del del-info))
 
 
 ;;; ------------------------------------------------------------------------
@@ -1017,70 +1050,72 @@
 
 
 ;;; ------------------------------------------------------------------------
-;;; Erstellt/aktualisiert Layer in einer DBX-Zeichnung (geschlossen)
-;;; Gleiche Logik wie doc-sync-layers
-;;; Rueckgabe: Liste '(cnt-new cnt-upd cnt-skip conflicts)
+;;; Synced Layer in einer DBX-Zeichnung (geschlossen)
+;;; Layer die nicht im Master sind werden auf OFF gesetzt (kein Loeschen)
+;;; Rueckgabe: Liste '(cnt-new cnt-upd cnt-skip conflicts cnt-del del-info)
 ;;; ------------------------------------------------------------------------
 (defun LXI:dbx-sync-layers (dbx-doc master-data / layers-coll lay-obj
                               lay master-name col ltype plot-flag on-off
-                              local-lay local-col local-ltype local-onoff local-plot
-                              cnt-new cnt-upd cnt-skip conflicts)
-  (setq cnt-new 0 cnt-upd 0 cnt-skip 0 conflicts nil)
+                              local-col local-ltype local-onoff local-plot
+                              cnt-new cnt-upd cnt-skip conflicts
+                              cnt-del del-info master-names lay-name)
+  (setq cnt-new 0 cnt-upd 0 cnt-skip 0 cnt-del 0 conflicts nil del-info nil)
   (setq layers-coll (vla-get-Layers dbx-doc))
   
+  ;; Master-Layernamen sammeln
+  (setq master-names nil)
   (foreach lay master-data
-    (setq master-name (nth 1 lay)
-          col (atoi (nth 2 lay))
-          ltype (nth 3 lay)
-          plot-flag (nth 5 lay)
-          on-off (nth 6 lay))
-    
-    ;; Pruefen ob Layer existiert
+    (setq master-names (cons (strcase (nth 1 lay)) master-names)))
+  
+  ;; 1) Layer anlegen/aktualisieren
+  (foreach lay master-data
+    (setq master-name (nth 1 lay) col (atoi (nth 2 lay))
+          ltype (nth 3 lay) plot-flag (nth 5 lay) on-off (nth 6 lay))
     (setq lay-obj
       (vl-catch-all-apply 'vla-Item (list layers-coll master-name)))
-    
     (if (vl-catch-all-error-p lay-obj)
-      ;; Neuer Layer
       (progn
         (setq lay-obj
           (vl-catch-all-apply 'vla-Add (list layers-coll master-name)))
         (if (not (vl-catch-all-error-p lay-obj))
           (progn
             (vl-catch-all-apply 'vla-put-Color (list lay-obj col))
-            ;; Linientyp nur setzen wenn vorhanden in Zielzeichnung
             (vl-catch-all-apply 'vla-put-Linetype (list lay-obj ltype))
             (vla-put-LayerOn lay-obj (if (= on-off "ON") :vlax-true :vlax-false))
             (vla-put-Plottable lay-obj (if (= plot-flag "PLOT") :vlax-true :vlax-false))
             (setq cnt-new (1+ cnt-new)))))
-      ;; Layer existiert: vergleichen
       (progn
         (setq local-col (abs (vla-get-Color lay-obj)))
         (setq local-onoff (if (= (vla-get-LayerOn lay-obj) :vlax-true) "ON" "OFF"))
-        (setq local-ltype (vla-get-Linetype lay-obj))
         (setq local-plot (if (= (vla-get-Plottable lay-obj) :vlax-true) "PLOT" "NOPLOT"))
-        
         (if (or (/= local-col col)
                 (/= (strcase local-onoff) (strcase on-off))
                 (/= (strcase local-plot) (strcase plot-flag)))
           (progn
-            ;; Konflikte sammeln
             (if (/= local-col col)
-              (setq conflicts
-                (cons (list master-name "Farbe" (itoa col) (itoa local-col)) conflicts)))
+              (setq conflicts (cons (list master-name "Farbe" (itoa col) (itoa local-col)) conflicts)))
             (if (/= (strcase local-onoff) (strcase on-off))
-              (setq conflicts
-                (cons (list master-name "OnOff" on-off local-onoff) conflicts)))
+              (setq conflicts (cons (list master-name "OnOff" on-off local-onoff) conflicts)))
             (if (/= (strcase local-plot) (strcase plot-flag))
-              (setq conflicts
-                (cons (list master-name "Plot" plot-flag local-plot) conflicts)))
-            ;; Master anwenden
+              (setq conflicts (cons (list master-name "Plot" plot-flag local-plot) conflicts)))
             (vla-put-Color lay-obj col)
             (vla-put-LayerOn lay-obj (if (= on-off "ON") :vlax-true :vlax-false))
             (vla-put-Plottable lay-obj (if (= plot-flag "PLOT") :vlax-true :vlax-false))
             (setq cnt-upd (1+ cnt-upd)))
           (setq cnt-skip (1+ cnt-skip))))))
   
-  (list cnt-new cnt-upd cnt-skip conflicts))
+  ;; 2) Layer auf OFF setzen die nicht mehr im Master sind
+  (vlax-for lay-obj layers-coll
+    (setq lay-name (vla-get-Name lay-obj))
+    (if (and (LXI:sync-layer-p lay-name)
+             (not (LXI:xref-layer-p lay-name))
+             (not (member (strcase lay-name) master-names)))
+      (progn
+        (vl-catch-all-apply 'vla-put-LayerOn (list lay-obj :vlax-false))
+        (setq del-info (cons (list lay-name "OFF") del-info))
+        (setq cnt-del (1+ cnt-del)))))
+  
+  (list cnt-new cnt-upd cnt-skip conflicts cnt-del del-info))
 
 
 ;;; ------------------------------------------------------------------------
@@ -1117,7 +1152,7 @@
                         master-data mapper-data dwg-list
                         dwg-entry dwg-name dwg-guid dwg-path fullpath
                         open-doc dbx-doc result current-dwg
-                        all-conflicts total-new total-upd total-skip
+                        all-conflicts all-del-info total-new total-upd total-skip total-del
                         cnt cnt-open cnt-dbx cnt-err)
   (defun *error* (msg)
     (if (not (wcmatch (strcase msg T) "*cancel*,*quit*"))
@@ -1145,7 +1180,8 @@
     (princ "\n*** Kein Master vorhanden.")
     (progn
       (setq dwg-list (LXI:mapper-get-dwg-list mapper-data))
-      (setq all-conflicts nil total-new 0 total-upd 0 total-skip 0
+      (setq all-conflicts nil all-del-info nil
+            total-new 0 total-upd 0 total-skip 0 total-del 0
             cnt 0 cnt-open 0 cnt-dbx 0 cnt-err 0)
       
       (princ (strcat "\n\n>> " (itoa (length dwg-list)) " Zeichnungen registriert."))
@@ -1180,17 +1216,23 @@
                   (setq result (LXI:doc-sync-layers open-doc master-data))
                   (setq total-new (+ total-new (nth 0 result))
                         total-upd (+ total-upd (nth 1 result))
-                        total-skip (+ total-skip (nth 2 result)))
+                        total-skip (+ total-skip (nth 2 result))
+                        total-del (+ total-del (nth 4 result)))
                   (if (nth 3 result)
                     (setq all-conflicts
                       (cons (list dwg-name (nth 3 result)) all-conflicts)))
+                  (if (nth 5 result)
+                    (setq all-del-info
+                      (cons (list dwg-name (nth 5 result)) all-del-info)))
                   ;; Mapper
                   (setq mapper-data
                     (LXI:doc-update-mapper open-doc dwg-name dwg-guid
                                            dwg-path master-data mapper-data))
                   (princ (strcat "[O] +" (itoa (nth 0 result))
                                  " ~"   (itoa (nth 1 result))
-                                 " ="   (itoa (nth 2 result))))))
+                                 " ="   (itoa (nth 2 result))
+                                 (if (> (nth 4 result) 0)
+                                   (strcat " -" (itoa (nth 4 result))) "")))))
               
               ;; === GESCHLOSSEN: via ObjectDBX ===
               (T
@@ -1212,10 +1254,14 @@
                             (setq result (LXI:dbx-sync-layers dbx-doc master-data))
                             (setq total-new (+ total-new (nth 0 result))
                                   total-upd (+ total-upd (nth 1 result))
-                                  total-skip (+ total-skip (nth 2 result)))
+                                  total-skip (+ total-skip (nth 2 result))
+                                  total-del (+ total-del (nth 4 result)))
                             (if (nth 3 result)
                               (setq all-conflicts
                                 (cons (list dwg-name (nth 3 result)) all-conflicts)))
+                            (if (nth 5 result)
+                              (setq all-del-info
+                                (cons (list dwg-name (nth 5 result)) all-del-info)))
                             (setq mapper-data
                               (LXI:dbx-update-mapper dbx-doc dwg-name dwg-guid
                                                      dwg-path master-data mapper-data))
@@ -1223,7 +1269,9 @@
                             (vlax-release-object dbx-doc)
                             (princ (strcat "[D] +" (itoa (nth 0 result))
                                            " ~"   (itoa (nth 1 result))
-                                           " ="   (itoa (nth 2 result)))))
+                                           " ="   (itoa (nth 2 result))
+                                           (if (> (nth 4 result) 0)
+                                             (strcat " -" (itoa (nth 4 result))) ""))))
                           (progn
                             (princ "[!] GESPERRT")
                             (setq cnt-err (1+ cnt-err)))))))))))))
@@ -1241,7 +1289,10 @@
       (princ (strcat "\n    Neu angelegt: " (itoa total-new)))
       (princ (strcat "\n    Aktualisiert: " (itoa total-upd)))
       (princ (strcat "\n    Synchron:     " (itoa total-skip)))
+      (if (> total-del 0)
+        (princ (strcat "\n    Entfernt/OFF: " (itoa total-del))))
       
+      ;; Konflikte anzeigen
       (if all-conflicts
         (progn
           (princ "\n\n  KONFLIKTE (Master wurde angewendet):")
@@ -1253,6 +1304,16 @@
                              "Master=" (nth 2 detail) " war=" (nth 3 detail)))))
         )
         (princ "\n    Keine Konflikte."))
+      
+      ;; Geloeschte/deaktivierte Layer anzeigen
+      (if all-del-info
+        (progn
+          (princ "\n\n  ENTFERNTE LAYER (nicht mehr im Master):")
+          (foreach d all-del-info
+            (princ (strcat "\n  " (car d) ":"))
+            (foreach detail (cadr d)
+              (princ (strcat "\n    " (LXI:pad-str (nth 0 detail) 30)
+                             " -> " (nth 1 detail)))))))
       
       (princ "\n========================================")))
   
@@ -1508,7 +1569,7 @@
 (LXI:read-config)
 (if (not (findfile (LXI:get-config-path)))
   (progn (LXI:ensure-directory *LXI:base-path*) (LXI:write-config)))
-(princ "\nLayerExportImport.lsp v1.0.1 geladen.")
+(princ "\nLayerExportImport.lsp v1.1.0 geladen.")
 (princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG")
 (princ (strcat "\nPraefix: " *LXI:prefix* "* | Speicherort: " *LXI:base-path*))
 (princ)
