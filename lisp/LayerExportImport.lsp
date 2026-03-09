@@ -502,6 +502,66 @@
 
 
 ;;; ========================================================================
+;;; TRANSPARENZ (XData-basiert)
+;;; ========================================================================
+
+;;; ------------------------------------------------------------------------
+;;; Liest Transparenz eines Layers in Prozent (0-90)
+;;; Zugriff ueber XData "AcCmTransparency" (kein VLA-Property verfuegbar)
+;;; Parameter: lay-name - Layername als String
+;;; Rueckgabe: Integer 0-90 (0 = keine Transparenz)
+;;; ------------------------------------------------------------------------
+(defun LXI:get-transparency (lay-name / ent xdata trans-val)
+  (setq ent (tblobjname "LAYER" lay-name))
+  (if (null ent) 0
+    (progn
+      (setq xdata
+        (cdr (assoc -3
+          (entget ent '("AcCmTransparency")))))
+      (if (null xdata) 0
+        (progn
+          (setq trans-val
+            (cdr (assoc 1071 (cdar xdata))))
+          (if (or (null trans-val) (= trans-val 0)) 0
+            (progn
+              ;; Unteres Byte extrahieren (0..255 = 100%..0%)
+              (setq trans-val (lsh (lsh trans-val 24) -24))
+              ;; In Prozent umrechnen (0-100 Bereich)
+              (fix (- 100 (/ trans-val 2.55))))))))))
+
+
+;;; ------------------------------------------------------------------------
+;;; Setzt Transparenz eines Layers (0-90)
+;;; Nur in aktueller Zeichnung und offenen DWGs moeglich (command-basiert)
+;;; Parameter: lay-name - Layername, trans-pct - Prozent 0-90
+;;; Rueckgabe: T bei Erfolg
+;;; ------------------------------------------------------------------------
+(defun LXI:set-transparency (lay-name trans-pct / )
+  (if (or (null trans-pct) (= trans-pct 0))
+    ;; Transparenz entfernen (auf 0 setzen)
+    (progn
+      (vl-catch-all-apply
+        '(lambda () (command "._-LAYER" "TR" "0" lay-name "")))
+      T)
+    ;; Transparenz setzen
+    (progn
+      (vl-catch-all-apply
+        '(lambda () (command "._-LAYER" "TR" (itoa trans-pct) lay-name "")))
+      T)))
+
+
+;;; ------------------------------------------------------------------------
+;;; Setzt Transparenz ueber SendCommand (fuer offene DWGs via Documents)
+;;; Parameter: doc - VLA Document, lay-name - Layername, trans-pct - 0-90
+;;; Rueckgabe: T (fire-and-forget, keine Fehlerprüfung moeglich)
+;;; ------------------------------------------------------------------------
+(defun LXI:set-transparency-doc (doc lay-name trans-pct / cmd)
+  (setq cmd (strcat "._-LAYER TR " (itoa trans-pct) " " lay-name " \n"))
+  (vl-catch-all-apply 'vla-SendCommand (list doc cmd))
+  T)
+
+
+;;; ========================================================================
 ;;; IMPORT HILFSFUNKTIONEN
 ;;; ========================================================================
 
