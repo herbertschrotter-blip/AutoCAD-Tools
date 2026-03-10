@@ -3,7 +3,7 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System | Custom Property GUID | ObjectDBX Batch-Sync
 ;;; 
-;;; Version: 2.0.2
+;;; Version: 2.0.3
 ;;; Datum:   2026-03-10
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -79,7 +79,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v2.0.2" fp)
+    (write-line ";;; LayerSync Konfiguration v2.0.3" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -126,7 +126,7 @@
   (setq fp (open filepath "w"))
   (if fp (progn
     (write-line (strcat "=== LayerSync Log - " (LXI:timestamp-sec) " ===") fp)
-    (write-line (strcat "Version: 2.0.2") fp)
+    (write-line (strcat "Version: 2.0.3") fp)
     (write-line (strcat "DWG: " (vl-filename-base (getvar "DWGNAME")) ".dwg") fp)
     (write-line "" fp)
     (close fp))))
@@ -197,7 +197,12 @@
             '(lambda () (vla-AddCustomInfo si "LayerSyncGUID" guid)))
           (LXI:debug-print (strcat "Neue GUID: " guid))
           (princ (strcat "\n  LayerSyncGUID erstellt: " guid))
-          (princ "\n  Zeichnung speichern damit GUID permanent wird!"))
+          (initget "Ja Nein")
+          (if (= (getkword "\n  Zeichnung speichern? [Ja/Nein] <Ja>: ") "Nein")
+            (princ "\n  GUID wird beim naechsten Speichern permanent.")
+            (progn
+              (vla-Save (vla-get-ActiveDocument (vlax-get-acad-object)))
+              (princ "\n  Gespeichert."))))
         (LXI:debug-print (strcat "GUID: " guid)))
       (setq *LXI:cached-guid* guid)
       (setq *LXI:cached-guid-dwg* (LXI:dwg-name))
@@ -2151,7 +2156,7 @@
 (if (not (findfile (LXI:get-config-path)))
   (progn (LXI:ensure-directory *LXI:base-path*) (LXI:write-config)))
 (LXI:log-init)
-(princ "\nLayerExportImport.lsp v2.0.2 geladen.")
+(princ "\nLayerExportImport.lsp v2.0.3 geladen.")
 (princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG")
 (princ (strcat "\nPraefix: " *LXI:prefix* "* | Speicherort: " *LXI:base-path*))
 (princ)
