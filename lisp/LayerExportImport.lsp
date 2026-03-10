@@ -3,7 +3,7 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System | Custom Property GUID | ObjectDBX Batch-Sync
 ;;; 
-;;; Version: 2.1.0
+;;; Version: 2.2.0
 ;;; Datum:   2026-03-10
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -45,9 +45,12 @@
 (setq *LXI:base-path* *LXI:default-path*)
 (setq *LXI:prefix*    *LXI:default-prefix*)
 (setq *LXI:debug*     nil)
+(setq *LXI:autosync*  nil)
+(setq *LXI:notify*    T)
 (setq *LXI:sep* ";")
 (setq *LXI:cached-guid* nil)
 (setq *LXI:cached-guid-dwg* nil)
+(setq *LXI:reactor* nil)
 
 
 ;;; ========================================================================
@@ -73,7 +76,9 @@
               (cond
                 ((= key "PATH")   (setq *LXI:base-path* val))
                 ((= key "PREFIX") (setq *LXI:prefix* val))
-                ((= key "DEBUG")  (setq *LXI:debug* (= (strcase val) "ON")))))))
+                ((= key "DEBUG")  (setq *LXI:debug* (= (strcase val) "ON")))
+                ((= key "AUTOSYNC") (setq *LXI:autosync* (= (strcase val) "ON")))
+                ((= key "NOTIFY") (setq *LXI:notify* (= (strcase val) "ON")))))))
         (close fp))))))
 
 (defun LXI:write-config ( / filepath fp)
@@ -81,10 +86,12 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v2.1.0" fp)
+    (write-line ";;; LayerSync Konfiguration v2.2.0" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
+    (write-line (strcat "AUTOSYNC=" (if *LXI:autosync* "ON" "OFF")) fp)
+    (write-line (strcat "NOTIFY=" (if *LXI:notify* "ON" "OFF")) fp)
     (close fp) T)))
 
 
@@ -128,7 +135,7 @@
   (setq fp (open filepath "w"))
   (if fp (progn
     (write-line (strcat "=== LayerSync Log - " (LXI:timestamp-sec) " ===") fp)
-    (write-line (strcat "Version: 2.1.0") fp)
+    (write-line (strcat "Version: 2.2.0") fp)
     (write-line (strcat "DWG: " (vl-filename-base (getvar "DWGNAME")) ".dwg") fp)
     (write-line "" fp)
     (close fp))))
@@ -2183,13 +2190,15 @@
   (setq old-cmdecho (getvar "CMDECHO"))
   (setvar "CMDECHO" 0)
   (princ "\n\n=== LayerSync Konfiguration ===")
-  (princ (strcat "\n  [P]fad:    " *LXI:base-path*))
-  (princ (strcat "\n  P[r]aefix: " *LXI:prefix*))
-  (princ (strcat "\n  [D]ebug:   " (if *LXI:debug* "ON" "OFF")))
-  (princ (strcat "\n  DWG-GUID:  " (LXI:dwg-guid)))
+  (princ (strcat "\n  [P]fad:      " *LXI:base-path*))
+  (princ (strcat "\n  P[r]aefix:   " *LXI:prefix*))
+  (princ (strcat "\n  [D]ebug:     " (if *LXI:debug* "ON" "OFF")))
+  (princ (strcat "\n  [A]utoSync:  " (if *LXI:autosync* "ON" "OFF")))
+  (princ (strcat "\n  [N]otify:    " (if *LXI:notify* "ON" "OFF")))
+  (princ (strcat "\n  DWG-GUID:    " (LXI:dwg-guid)))
   (princ "\n===============================\n")
-  (initget "Pfad pRaefix Debug")
-  (setq choice (getkword "\n[Pfad/pRaefix/Debug] <Abbruch>: "))
+  (initget "Pfad pRaefix Debug Autosync Notify")
+  (setq choice (getkword "\n[Pfad/pRaefix/Debug/Autosync/Notify] <Abbruch>: "))
   (cond
     ((= choice "Pfad")
       (progn
@@ -2208,7 +2217,16 @@
                  (princ (strcat "\nPraefix: " *LXI:prefix* "*"))))))
     ((= choice "Debug")
       (progn (setq *LXI:debug* (not *LXI:debug*)) (LXI:write-config)
-             (princ (strcat "\nDebug: " (if *LXI:debug* "ON" "OFF"))))))
+             (princ (strcat "\nDebug: " (if *LXI:debug* "ON" "OFF")))))
+    ((= choice "Autosync")
+      (progn
+        (setq *LXI:autosync* (not *LXI:autosync*))
+        (if *LXI:autosync* (LXI:reactor-enable) (LXI:reactor-disable))
+        (LXI:write-config)
+        (princ (strcat "\nAutoSync: " (if *LXI:autosync* "ON" "OFF")))))
+    ((= choice "Notify")
+      (progn (setq *LXI:notify* (not *LXI:notify*)) (LXI:write-config)
+             (princ (strcat "\nNotify: " (if *LXI:notify* "ON" "OFF"))))))
   (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
   (princ))
 
@@ -2363,12 +2381,93 @@
           " | OK" "")))))
   (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
   (princ))
+
+
+;;; ========================================================================
+;;; AUTO-SYNC REACTOR (bei Speichern)
+;;; ========================================================================
+
+;;; Callback: Wird vor dem Speichern aufgerufen
+(defun LXI:on-save-callback (reactor args / )
+  (if *LXI:autosync*
+    (progn
+      (LXI:log-write "=== Auto-Sync (Speichern) ===")
+      (princ "\n  [AutoSync] Layer synchronisieren...")
+      (LXI:do-import)
+      (LXI:do-export)
+      (princ "\n  [AutoSync] Fertig."))))
+
+;;; Reactor registrieren/entfernen
+(defun LXI:reactor-enable ( / )
+  (if (null *LXI:reactor*)
+    (progn
+      (setq *LXI:reactor*
+        (vlr-dwg-reactor nil '((:vlr-beginSave . LXI:on-save-callback))))
+      (LXI:log-write "Reactor registriert (Auto-Sync ON)")
+      T)
+    T))
+
+(defun LXI:reactor-disable ( / )
+  (if *LXI:reactor*
+    (progn
+      (vl-catch-all-apply 'vlr-remove (list *LXI:reactor*))
+      (setq *LXI:reactor* nil)
+      (LXI:log-write "Reactor entfernt (Auto-Sync OFF)")
+      T)
+    T))
+
+
+;;; ========================================================================
+;;; NOTIFICATION beim Zeichnungsstart
+;;; Prueft ob Master neuer ist als letzter Sync
+;;; ========================================================================
+(defun LXI:check-on-open ( / dwg guid synclog-data last-sync master-data
+                             master-modified cnt-newer)
+  (if (null *LXI:notify*) nil
+    (progn
+      (setq dwg (LXI:dwg-name) guid (LXI:dwg-guid))
+      (setq synclog-data (LXI:read-synclog))
+      (setq last-sync (LXI:get-last-sync synclog-data guid dwg))
+      (if (null last-sync)
+        ;; Noch nie gesynced
+        (progn
+          (setq master-data (LXI:read-master))
+          (if master-data
+            (princ (strcat "\n  [LayerSync] Noch nie synchronisiert! "
+                           (itoa (length master-data)) " Layer im Master. "
+                           "LAYSYNC ausfuehren."))))
+        ;; Schon mal gesynced: pruefen ob Master neuer
+        (progn
+          (setq master-data (LXI:read-master))
+          (if master-data
+            (progn
+              (setq cnt-newer 0)
+              (foreach lay master-data
+                (setq master-modified (nth 13 lay))
+                (if (and master-modified
+                         (LXI:master-newer-p master-modified last-sync))
+                  (setq cnt-newer (1+ cnt-newer))))
+              (if (> cnt-newer 0)
+                (princ (strcat "\n  [LayerSync] " (itoa cnt-newer)
+                               " Layer seit letztem Sync geaendert. "
+                               "LAYSYNC empfohlen."))))))))))
+
+
+;;; ========================================================================
+;;; Initialisierung
+;;; ========================================================================
 (vl-load-com)
 (LXI:read-config)
 (if (not (findfile (LXI:get-config-path)))
   (progn (LXI:ensure-directory *LXI:base-path*) (LXI:write-config)))
 (LXI:log-init)
-(princ "\nLayerExportImport.lsp v2.1.0 geladen.")
+;; Reactor
+(if *LXI:autosync* (LXI:reactor-enable))
+(princ "\nLayerExportImport.lsp v2.2.0 geladen.")
 (princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG | LAYDIFF | LAYCOUNT")
 (princ (strcat "\nPraefix: " *LXI:prefix* "* | Speicherort: " *LXI:base-path*))
+(if *LXI:autosync* (princ "\nAutoSync: ON (sync bei Speichern)"))
+(if *LXI:notify* (princ "\nNotification: ON"))
+;; Notification beim Laden
+(LXI:check-on-open)
 (princ)
