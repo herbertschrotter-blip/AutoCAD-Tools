@@ -3,7 +3,7 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System | Custom Property GUID | ObjectDBX Batch-Sync
 ;;; 
-;;; Version: 1.7.0
+;;; Version: 1.8.0
 ;;; Datum:   2026-03-10
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -78,7 +78,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v1.7.0" fp)
+    (write-line ";;; LayerSync Konfiguration v1.8.0" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -1405,31 +1405,78 @@
             dbx-doc))))))
 
 
+
+;;; ------------------------------------------------------------------------
+;;; Gemeinsame Batch-Sync Logik fuer Documents und ObjectDBX
+;;; Setzt alle 10 Properties auf einem VLA Layer-Objekt
+;;; Parameter: lay-obj - VLA Layer, Master-Werte als Strings
+;;; Rueckgabe: Liste von Konflikten oder nil
+;;; ------------------------------------------------------------------------
+(defun LXI:batch-apply-props (lay-obj col ltype lw plot-flag on-off frz lck
+                               vpdef desc / local-data conflicts)
+  (setq conflicts nil)
+  ;; Lokale Werte lesen via read-layer-vla
+  (setq local-data (LXI:read-layer-vla lay-obj))
+  ;; local-data: 0=Name 1=Color 2=Ltype 3=LW 4=OnOff 5=Frz 6=Lock 7=Plot 8=VPDef 9=Desc 10=Trans 11=Handle
+  
+  ;; Konflikte sammeln (nur fuer Report, Master wird trotzdem angewendet)
+  (if (/= (nth 1 local-data) col)
+    (setq conflicts (cons (list (nth 0 local-data) "Farbe" col (nth 1 local-data)) conflicts)))
+  (if (/= (strcase (nth 4 local-data)) (strcase on-off))
+    (setq conflicts (cons (list (nth 0 local-data) "OnOff" on-off (nth 4 local-data)) conflicts)))
+  (if (/= (strcase (nth 7 local-data)) (strcase plot-flag))
+    (setq conflicts (cons (list (nth 0 local-data) "Plot" plot-flag (nth 7 local-data)) conflicts)))
+  (if (/= (nth 3 local-data) lw)
+    (setq conflicts (cons (list (nth 0 local-data) "LStaerke" lw (nth 3 local-data)) conflicts)))
+  (if (/= (strcase (nth 5 local-data)) (strcase frz))
+    (setq conflicts (cons (list (nth 0 local-data) "Freeze" frz (nth 5 local-data)) conflicts)))
+  (if (/= (strcase (nth 6 local-data)) (strcase lck))
+    (setq conflicts (cons (list (nth 0 local-data) "Lock" lck (nth 6 local-data)) conflicts)))
+  
+  ;; Master anwenden
+  (vl-catch-all-apply 'vla-put-Color (list lay-obj (atoi col)))
+  (vl-catch-all-apply 'vla-put-Linetype (list lay-obj ltype))
+  (vl-catch-all-apply 'vla-put-Lineweight (list lay-obj (atoi lw)))
+  (vla-put-LayerOn lay-obj (if (= on-off "ON") :vlax-true :vlax-false))
+  (vl-catch-all-apply 'vla-put-Freeze
+    (list lay-obj (if (= frz "FROZEN") :vlax-true :vlax-false)))
+  (vla-put-Lock lay-obj (if (= lck "LOCKED") :vlax-true :vlax-false))
+  (vla-put-Plottable lay-obj (if (= plot-flag "PLOT") :vlax-true :vlax-false))
+  (vl-catch-all-apply 'vlax-put-property
+    (list lay-obj 'ViewportDefault (if (= vpdef "1") :vlax-true :vlax-false)))
+  (if desc (vl-catch-all-apply 'vla-put-Description (list lay-obj desc)))
+  ;; Transparenz: nicht via VLA moeglich (nur command)
+  
+  conflicts)
+
+
 ;;; ------------------------------------------------------------------------
 ;;; Synced Layer in einer geoeffneten Zeichnung (Documents-Collection)
-;;; Master gewinnt, Konflikte werden gesammelt
-;;; Entfernt/deaktiviert Layer die nicht mehr im Master sind
+;;; Alle 10 Properties + Loeschen nicht mehr vorhandener Layer
+;;; Master: 0=MID 1=Name 2=Color 3=Ltype 4=LW 5=Plot 6=OnOff
+;;;   7=Frz 8=Lock 9=VPDef 10=Desc 11=Trans 12=Source 13=LastMod
 ;;; Rueckgabe: Liste '(cnt-new cnt-upd cnt-skip conflicts cnt-del del-info)
-;;; del-info = Liste von '("LayerName" "geloescht"|"OFF")
 ;;; ------------------------------------------------------------------------
 (defun LXI:doc-sync-layers (doc master-data / layers-coll lay-obj
-                              lay master-name col ltype plot-flag on-off
-                              local-col local-onoff local-plot
+                              lay master-name col ltype lw plot-flag on-off frz lck
+                              vpdef desc trans
+                              local-data local-conflicts has-diff
                               cnt-new cnt-upd cnt-skip conflicts
-                              cnt-del del-info
-                              master-names lay-name del-result ss)
+                              cnt-del del-info master-names lay-name del-result)
   (setq cnt-new 0 cnt-upd 0 cnt-skip 0 cnt-del 0 conflicts nil del-info nil)
   (setq layers-coll (vla-get-Layers doc))
   
-  ;; Master-Layernamen sammeln (fuer Loeschpruefung)
+  ;; Master-Namen sammeln
   (setq master-names nil)
   (foreach lay master-data
     (setq master-names (cons (strcase (nth 1 lay)) master-names)))
   
   ;; 1) Layer anlegen/aktualisieren
   (foreach lay master-data
-    (setq master-name (nth 1 lay) col (atoi (nth 2 lay))
-          ltype (nth 3 lay) plot-flag (nth 5 lay) on-off (nth 6 lay))
+    (setq master-name (nth 1 lay) col (nth 2 lay) ltype (nth 3 lay)
+          lw (nth 4 lay) plot-flag (nth 5 lay) on-off (nth 6 lay)
+          frz (nth 7 lay) lck (nth 8 lay) vpdef (nth 9 lay)
+          desc (nth 10 lay) trans (nth 11 lay))
     (setq lay-obj
       (vl-catch-all-apply 'vla-Item (list layers-coll master-name)))
     (if (vl-catch-all-error-p lay-obj)
@@ -1439,49 +1486,44 @@
           (vl-catch-all-apply 'vla-Add (list layers-coll master-name)))
         (if (not (vl-catch-all-error-p lay-obj))
           (progn
-            (vl-catch-all-apply 'vla-put-Color (list lay-obj col))
+            (vl-catch-all-apply 'vla-put-Color (list lay-obj (atoi col)))
             (vl-catch-all-apply 'vla-put-Linetype (list lay-obj ltype))
+            (vl-catch-all-apply 'vla-put-Lineweight (list lay-obj (atoi lw)))
             (vla-put-LayerOn lay-obj (if (= on-off "ON") :vlax-true :vlax-false))
+            (vl-catch-all-apply 'vla-put-Freeze
+              (list lay-obj (if (= frz "FROZEN") :vlax-true :vlax-false)))
+            (vla-put-Lock lay-obj (if (= lck "LOCKED") :vlax-true :vlax-false))
             (vla-put-Plottable lay-obj (if (= plot-flag "PLOT") :vlax-true :vlax-false))
+            (if (= vpdef "1")
+              (vl-catch-all-apply 'vlax-put-property
+                (list lay-obj 'ViewportDefault :vlax-true)))
+            (if (and desc (/= desc ""))
+              (vl-catch-all-apply 'vla-put-Description (list lay-obj desc)))
             (setq cnt-new (1+ cnt-new)))))
-      ;; Existiert: vergleichen
+      ;; Existiert: vergleichen und aktualisieren
       (progn
-        (setq local-col (abs (vla-get-Color lay-obj)))
-        (setq local-onoff (if (= (vla-get-LayerOn lay-obj) :vlax-true) "ON" "OFF"))
-        (setq local-plot (if (= (vla-get-Plottable lay-obj) :vlax-true) "PLOT" "NOPLOT"))
-        (if (or (/= local-col col)
-                (/= (strcase local-onoff) (strcase on-off))
-                (/= (strcase local-plot) (strcase plot-flag)))
+        (setq local-conflicts
+          (LXI:batch-apply-props lay-obj col ltype lw plot-flag on-off frz lck vpdef desc))
+        (if local-conflicts
           (progn
-            (if (/= local-col col)
-              (setq conflicts (cons (list master-name "Farbe" (itoa col) (itoa local-col)) conflicts)))
-            (if (/= (strcase local-onoff) (strcase on-off))
-              (setq conflicts (cons (list master-name "OnOff" on-off local-onoff) conflicts)))
-            (if (/= (strcase local-plot) (strcase plot-flag))
-              (setq conflicts (cons (list master-name "Plot" plot-flag local-plot) conflicts)))
-            (vla-put-Color lay-obj col)
-            (vla-put-LayerOn lay-obj (if (= on-off "ON") :vlax-true :vlax-false))
-            (vla-put-Plottable lay-obj (if (= plot-flag "PLOT") :vlax-true :vlax-false))
+            (setq conflicts (append conflicts local-conflicts))
             (setq cnt-upd (1+ cnt-upd)))
           (setq cnt-skip (1+ cnt-skip))))))
   
-  ;; 2) Layer entfernen die nicht mehr im Master sind
+  ;; 2) Layer entfernen die nicht im Master sind
   (vlax-for lay-obj layers-coll
     (setq lay-name (vla-get-Name lay-obj))
     (if (and (LXI:sync-layer-p lay-name)
              (not (LXI:xref-layer-p lay-name))
              (not (member (strcase lay-name) master-names)))
       (progn
-        ;; Versuche zu loeschen
         (setq del-result
           (vl-catch-all-apply 'vla-Delete (list lay-obj)))
         (if (vl-catch-all-error-p del-result)
-          ;; Loeschen fehlgeschlagen (Objekte drauf) -> OFF setzen
           (progn
             (vl-catch-all-apply 'vla-put-LayerOn (list lay-obj :vlax-false))
             (setq del-info (cons (list lay-name "OFF") del-info))
             (setq cnt-del (1+ cnt-del)))
-          ;; Erfolgreich geloescht
           (progn
             (setq del-info (cons (list lay-name "geloescht") del-info))
             (setq cnt-del (1+ cnt-del)))))))
@@ -1514,26 +1556,29 @@
 
 ;;; ------------------------------------------------------------------------
 ;;; Synced Layer in einer DBX-Zeichnung (geschlossen)
-;;; Layer die nicht im Master sind werden auf OFF gesetzt (kein Loeschen)
+;;; Alle 10 Properties + OFF fuer entfernte Layer
+;;; Transparenz nicht moeglich via ObjectDBX
 ;;; Rueckgabe: Liste '(cnt-new cnt-upd cnt-skip conflicts cnt-del del-info)
 ;;; ------------------------------------------------------------------------
 (defun LXI:dbx-sync-layers (dbx-doc master-data / layers-coll lay-obj
-                              lay master-name col ltype plot-flag on-off
-                              local-col local-ltype local-onoff local-plot
+                              lay master-name col ltype lw plot-flag on-off frz lck
+                              vpdef desc trans
+                              local-conflicts
                               cnt-new cnt-upd cnt-skip conflicts
                               cnt-del del-info master-names lay-name)
   (setq cnt-new 0 cnt-upd 0 cnt-skip 0 cnt-del 0 conflicts nil del-info nil)
   (setq layers-coll (vla-get-Layers dbx-doc))
   
-  ;; Master-Layernamen sammeln
   (setq master-names nil)
   (foreach lay master-data
     (setq master-names (cons (strcase (nth 1 lay)) master-names)))
   
   ;; 1) Layer anlegen/aktualisieren
   (foreach lay master-data
-    (setq master-name (nth 1 lay) col (atoi (nth 2 lay))
-          ltype (nth 3 lay) plot-flag (nth 5 lay) on-off (nth 6 lay))
+    (setq master-name (nth 1 lay) col (nth 2 lay) ltype (nth 3 lay)
+          lw (nth 4 lay) plot-flag (nth 5 lay) on-off (nth 6 lay)
+          frz (nth 7 lay) lck (nth 8 lay) vpdef (nth 9 lay)
+          desc (nth 10 lay) trans (nth 11 lay))
     (setq lay-obj
       (vl-catch-all-apply 'vla-Item (list layers-coll master-name)))
     (if (vl-catch-all-error-p lay-obj)
@@ -1542,32 +1587,31 @@
           (vl-catch-all-apply 'vla-Add (list layers-coll master-name)))
         (if (not (vl-catch-all-error-p lay-obj))
           (progn
-            (vl-catch-all-apply 'vla-put-Color (list lay-obj col))
+            (vl-catch-all-apply 'vla-put-Color (list lay-obj (atoi col)))
             (vl-catch-all-apply 'vla-put-Linetype (list lay-obj ltype))
+            (vl-catch-all-apply 'vla-put-Lineweight (list lay-obj (atoi lw)))
             (vla-put-LayerOn lay-obj (if (= on-off "ON") :vlax-true :vlax-false))
+            (vl-catch-all-apply 'vla-put-Freeze
+              (list lay-obj (if (= frz "FROZEN") :vlax-true :vlax-false)))
+            (vla-put-Lock lay-obj (if (= lck "LOCKED") :vlax-true :vlax-false))
             (vla-put-Plottable lay-obj (if (= plot-flag "PLOT") :vlax-true :vlax-false))
+            (if (= vpdef "1")
+              (vl-catch-all-apply 'vlax-put-property
+                (list lay-obj 'ViewportDefault :vlax-true)))
+            (if (and desc (/= desc ""))
+              (vl-catch-all-apply 'vla-put-Description (list lay-obj desc)))
             (setq cnt-new (1+ cnt-new)))))
+      ;; Existiert: vergleichen
       (progn
-        (setq local-col (abs (vla-get-Color lay-obj)))
-        (setq local-onoff (if (= (vla-get-LayerOn lay-obj) :vlax-true) "ON" "OFF"))
-        (setq local-plot (if (= (vla-get-Plottable lay-obj) :vlax-true) "PLOT" "NOPLOT"))
-        (if (or (/= local-col col)
-                (/= (strcase local-onoff) (strcase on-off))
-                (/= (strcase local-plot) (strcase plot-flag)))
+        (setq local-conflicts
+          (LXI:batch-apply-props lay-obj col ltype lw plot-flag on-off frz lck vpdef desc))
+        (if local-conflicts
           (progn
-            (if (/= local-col col)
-              (setq conflicts (cons (list master-name "Farbe" (itoa col) (itoa local-col)) conflicts)))
-            (if (/= (strcase local-onoff) (strcase on-off))
-              (setq conflicts (cons (list master-name "OnOff" on-off local-onoff) conflicts)))
-            (if (/= (strcase local-plot) (strcase plot-flag))
-              (setq conflicts (cons (list master-name "Plot" plot-flag local-plot) conflicts)))
-            (vla-put-Color lay-obj col)
-            (vla-put-LayerOn lay-obj (if (= on-off "ON") :vlax-true :vlax-false))
-            (vla-put-Plottable lay-obj (if (= plot-flag "PLOT") :vlax-true :vlax-false))
+            (setq conflicts (append conflicts local-conflicts))
             (setq cnt-upd (1+ cnt-upd)))
           (setq cnt-skip (1+ cnt-skip))))))
   
-  ;; 2) Layer auf OFF setzen die nicht mehr im Master sind
+  ;; 2) OFF setzen
   (vlax-for lay-obj layers-coll
     (setq lay-name (vla-get-Name lay-obj))
     (if (and (LXI:sync-layer-p lay-name)
@@ -1582,7 +1626,7 @@
 
 
 ;;; ------------------------------------------------------------------------
-;;; Aktualisiert Mapper-Eintraege fuer eine DBX-Zeichnung
+;;; Aktualisiert Mapper fuer eine DBX-Zeichnung
 ;;; ------------------------------------------------------------------------
 (defun LXI:dbx-update-mapper (dbx-doc dwg-name dwg-guid dwg-path
                                master-data mapper-data
@@ -1591,11 +1635,9 @@
   (setq mapper-data (LXI:mapper-remove-dwg mapper-data dwg-guid dwg-name))
   (setq new-entries nil)
   (setq layers-coll (vla-get-Layers dbx-doc))
-  
   (vlax-for lay-obj layers-coll
     (setq lay-name (vla-get-Name lay-obj))
-    (if (and (not (LXI:xref-layer-p lay-name))
-             (LXI:sync-layer-p lay-name))
+    (if (and (not (LXI:xref-layer-p lay-name)) (LXI:sync-layer-p lay-name))
       (progn
         (setq handle (vla-get-Handle lay-obj))
         (setq mid (car (LXI:find-by-name master-data lay-name)))
@@ -1603,7 +1645,6 @@
           (setq new-entries
             (cons (list dwg-name dwg-guid dwg-path lay-name handle mid)
                   new-entries))))))
-  
   (append mapper-data new-entries))
 
 
@@ -2032,7 +2073,7 @@
 (LXI:read-config)
 (if (not (findfile (LXI:get-config-path)))
   (progn (LXI:ensure-directory *LXI:base-path*) (LXI:write-config)))
-(princ "\nLayerExportImport.lsp v1.7.0 geladen.")
+(princ "\nLayerExportImport.lsp v1.8.0 geladen.")
 (princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG")
 (princ (strcat "\nPraefix: " *LXI:prefix* "* | Speicherort: " *LXI:base-path*))
 (princ)
