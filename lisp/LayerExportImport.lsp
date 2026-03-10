@@ -3,7 +3,7 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System | Custom Property GUID | ObjectDBX Batch-Sync
 ;;; 
-;;; Version: 2.0.4
+;;; Version: 2.0.5
 ;;; Datum:   2026-03-10
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -79,7 +79,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v2.0.4" fp)
+    (write-line ";;; LayerSync Konfiguration v2.0.5" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -126,7 +126,7 @@
   (setq fp (open filepath "w"))
   (if fp (progn
     (write-line (strcat "=== LayerSync Log - " (LXI:timestamp-sec) " ===") fp)
-    (write-line (strcat "Version: 2.0.4") fp)
+    (write-line (strcat "Version: 2.0.5") fp)
     (write-line (strcat "DWG: " (vl-filename-base (getvar "DWGNAME")) ".dwg") fp)
     (write-line "" fp)
     (close fp))))
@@ -158,6 +158,23 @@
       (setq pad (- width (strlen str)))
       (while (> pad 0) (setq str (strcat str " ")) (setq pad (1- pad)))
       str)))
+
+;;; Prueft ob Error-Message ein Abbruch ist (Deutsch + Englisch)
+(defun LXI:cancel-p (msg / m)
+  (setq m (strcase msg T))
+  (or (wcmatch m "*cancel*")
+      (wcmatch m "*quit*")
+      (wcmatch m "*abgebrochen*")
+      (wcmatch m "*abbruch*")))
+
+;;; Sichere String-zu-Integer Konvertierung mit Default
+;;; Rueckgabe: Integer, Default bei leerem/ungueltigem String
+(defun LXI:safe-atoi (str default / val)
+  (if (or (null str) (= str ""))
+    default
+    (progn
+      (setq val (atoi str))
+      (if (and (= val 0) (/= str "0")) default val))))
 
 
 ;;; ========================================================================
@@ -827,9 +844,9 @@
   (if (null vpdef) (setq vpdef "0"))
   (if (null desc) (setq desc ""))
   (if (null trans) (setq trans 0))
-  (if (numberp col) nil (setq col (atoi col)))
-  (if (numberp lw) nil (setq lw (atoi lw)))
-  (if (numberp trans) nil (setq trans (atoi trans)))
+  (if (numberp col) nil (setq col (LXI:safe-atoi col 7)))
+  (if (numberp lw) nil (setq lw (LXI:safe-atoi lw -3)))
+  (if (numberp trans) nil (setq trans (LXI:safe-atoi trans 0)))
   
   (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)))
   (setq layers-coll (vla-get-Layers doc))
@@ -873,9 +890,9 @@
   (if (null vpdef) (setq vpdef "0"))
   (if (null desc) (setq desc ""))
   (if (null trans) (setq trans 0))
-  (if (numberp col) nil (setq col (atoi col)))
-  (if (numberp lw) nil (setq lw (atoi lw)))
-  (if (numberp trans) nil (setq trans (atoi trans)))
+  (if (numberp col) nil (setq col (LXI:safe-atoi col 7)))
+  (if (numberp lw) nil (setq lw (LXI:safe-atoi lw -3)))
+  (if (numberp trans) nil (setq trans (LXI:safe-atoi trans 0)))
   
   (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)))
   (setq layers-coll (vla-get-Layers doc))
@@ -1326,8 +1343,8 @@
                     (cond
                       ((= choice "Neu")
                         (if (LXI:create-layer master-name
-                              (atoi col) ltype (atoi lw) plot-flag on-off frz lck
-                              vpdef desc (atoi trans))
+                              (LXI:safe-atoi col 7) ltype (LXI:safe-atoi lw -3) plot-flag on-off frz lck
+                              vpdef desc (LXI:safe-atoi trans 0))
                           (progn (princ (strcat "\n  + " master-name))
                                  (setq cnt-new (1+ cnt-new)))
                           (princ (strcat "\n  *** Fehler: " master-name))))
@@ -1362,8 +1379,8 @@
                     (setq cnt-skip (1+ cnt-skip))))
                 ;; Neuer Layer anlegen
                 (if (LXI:create-layer master-name
-                      (atoi col) ltype (atoi lw) plot-flag on-off frz lck
-                      vpdef desc (atoi trans))
+                      (LXI:safe-atoi col 7) ltype (LXI:safe-atoi lw -3) plot-flag on-off frz lck
+                      vpdef desc (LXI:safe-atoi trans 0))
                   (progn (LXI:debug-print (strcat "  + " master-name))
                          (setq cnt-new (1+ cnt-new)))
                   (princ (strcat "\n  *** Fehler: " master-name))))))))
@@ -1511,9 +1528,9 @@
     (setq conflicts (cons (list (nth 0 local-data) "Lock" lck (nth 6 local-data)) conflicts)))
   
   ;; Master anwenden
-  (vl-catch-all-apply 'vla-put-Color (list lay-obj (atoi col)))
+  (vl-catch-all-apply 'vla-put-Color (list lay-obj (LXI:safe-atoi col 7)))
   (vl-catch-all-apply 'vla-put-Linetype (list lay-obj ltype))
-  (vl-catch-all-apply 'vla-put-Lineweight (list lay-obj (atoi lw)))
+  (vl-catch-all-apply 'vla-put-Lineweight (list lay-obj (LXI:safe-atoi lw -3)))
   (vla-put-LayerOn lay-obj (if (= on-off "ON") :vlax-true :vlax-false))
   (vl-catch-all-apply 'vla-put-Freeze
     (list lay-obj (if (= frz "FROZEN") :vlax-true :vlax-false)))
@@ -1563,9 +1580,9 @@
           (vl-catch-all-apply 'vla-Add (list layers-coll master-name)))
         (if (not (vl-catch-all-error-p lay-obj))
           (progn
-            (vl-catch-all-apply 'vla-put-Color (list lay-obj (atoi col)))
+            (vl-catch-all-apply 'vla-put-Color (list lay-obj (LXI:safe-atoi col 7)))
             (vl-catch-all-apply 'vla-put-Linetype (list lay-obj ltype))
-            (vl-catch-all-apply 'vla-put-Lineweight (list lay-obj (atoi lw)))
+            (vl-catch-all-apply 'vla-put-Lineweight (list lay-obj (LXI:safe-atoi lw -3)))
             (vla-put-LayerOn lay-obj (if (= on-off "ON") :vlax-true :vlax-false))
             (vl-catch-all-apply 'vla-put-Freeze
               (list lay-obj (if (= frz "FROZEN") :vlax-true :vlax-false)))
@@ -1664,9 +1681,9 @@
           (vl-catch-all-apply 'vla-Add (list layers-coll master-name)))
         (if (not (vl-catch-all-error-p lay-obj))
           (progn
-            (vl-catch-all-apply 'vla-put-Color (list lay-obj (atoi col)))
+            (vl-catch-all-apply 'vla-put-Color (list lay-obj (LXI:safe-atoi col 7)))
             (vl-catch-all-apply 'vla-put-Linetype (list lay-obj ltype))
-            (vl-catch-all-apply 'vla-put-Lineweight (list lay-obj (atoi lw)))
+            (vl-catch-all-apply 'vla-put-Lineweight (list lay-obj (LXI:safe-atoi lw -3)))
             (vla-put-LayerOn lay-obj (if (= on-off "ON") :vlax-true :vlax-false))
             (vl-catch-all-apply 'vla-put-Freeze
               (list lay-obj (if (= frz "FROZEN") :vlax-true :vlax-false)))
@@ -1736,14 +1753,16 @@
                         all-conflicts all-del-info total-new total-upd total-skip total-del
                         cnt cnt-open cnt-dbx cnt-err)
   (defun *error* (msg)
-    (if (not (wcmatch (strcase msg T) "*cancel*,*quit*"))
-      (princ (strcat "\nFehler: " msg)))
+    (if (not (LXI:cancel-p msg))
+      (progn
+        (princ (strcat "\nFehler: " msg))
+        (LXI:log-write (strcat "*** FEHLER in LAYSYNCALL: " msg))))
+    (if (and (boundp 'dbx-doc) dbx-doc)
+      (progn
+        (vl-catch-all-apply 'vlax-release-object (list dbx-doc))
+        (setq dbx-doc nil)))
     (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
     (princ))
-  (setq old-cmdecho (getvar "CMDECHO"))
-  (setvar "CMDECHO" 0)
-  (setq current-dwg (LXI:dwg-name))
-  (LXI:log-write (strcat "=== LAYSYNCALL gestartet von: " current-dwg " ==="))
   
   (princ "\n\n========================================")
   (princ "\n  LAYSYNCALL - Batch-Synchronisation")
@@ -1908,8 +1927,10 @@
 ;;; ========================================================================
 (defun c:LAYSYNC ( / *error* old-cmdecho imp-ok exp-ok choice)
   (defun *error* (msg)
-    (if (not (wcmatch (strcase msg T) "*cancel*,*quit*"))
-      (princ (strcat "\nFehler: " msg)))
+    (if (not (LXI:cancel-p msg))
+      (progn
+        (princ (strcat "\nFehler: " msg))
+        (LXI:log-write (strcat "*** FEHLER: " msg))))
     (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
     (princ))
   (setq old-cmdecho (getvar "CMDECHO"))
@@ -1947,8 +1968,10 @@
 ;;; ========================================================================
 (defun c:LAYEXP ( / *error* old-cmdecho)
   (defun *error* (msg)
-    (if (not (wcmatch (strcase msg T) "*cancel*,*quit*"))
-      (princ (strcat "\nFehler: " msg)))
+    (if (not (LXI:cancel-p msg))
+      (progn
+        (princ (strcat "\nFehler: " msg))
+        (LXI:log-write (strcat "*** FEHLER: " msg))))
     (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
     (princ))
   (setq old-cmdecho (getvar "CMDECHO"))
@@ -1964,8 +1987,10 @@
 ;;; ========================================================================
 (defun c:LAYIMP ( / *error* old-cmdecho)
   (defun *error* (msg)
-    (if (not (wcmatch (strcase msg T) "*cancel*,*quit*"))
-      (princ (strcat "\nFehler: " msg)))
+    (if (not (LXI:cancel-p msg))
+      (progn
+        (princ (strcat "\nFehler: " msg))
+        (LXI:log-write (strcat "*** FEHLER: " msg))))
     (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
     (princ))
   (setq old-cmdecho (getvar "CMDECHO"))
@@ -1982,8 +2007,10 @@
 (defun c:LAYLOG ( / *error* old-cmdecho choice history filter-name filter-mid
                     master-data results count entry)
   (defun *error* (msg)
-    (if (not (wcmatch (strcase msg T) "*cancel*,*quit*"))
-      (princ (strcat "\nFehler: " msg)))
+    (if (not (LXI:cancel-p msg))
+      (progn
+        (princ (strcat "\nFehler: " msg))
+        (LXI:log-write (strcat "*** FEHLER: " msg))))
     (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
     (princ))
   (setq old-cmdecho (getvar "CMDECHO"))
@@ -2054,8 +2081,10 @@
                        dwg-list dwg-entry dwg-name dwg-guid dwg-path last-sync
                        total-master master-ids dwg-mids dwg-count dwg-missing mid)
   (defun *error* (msg)
-    (if (not (wcmatch (strcase msg T) "*cancel*,*quit*"))
-      (princ (strcat "\nFehler: " msg)))
+    (if (not (LXI:cancel-p msg))
+      (progn
+        (princ (strcat "\nFehler: " msg))
+        (LXI:log-write (strcat "*** FEHLER: " msg))))
     (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
     (princ))
   (setq old-cmdecho (getvar "CMDECHO"))
@@ -2125,8 +2154,10 @@
 ;;; ========================================================================
 (defun c:LAYCFG ( / *error* old-cmdecho choice new-val)
   (defun *error* (msg)
-    (if (not (wcmatch (strcase msg T) "*cancel*,*quit*"))
-      (princ (strcat "\nFehler: " msg)))
+    (if (not (LXI:cancel-p msg))
+      (progn
+        (princ (strcat "\nFehler: " msg))
+        (LXI:log-write (strcat "*** FEHLER: " msg))))
     (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
     (princ))
   (setq old-cmdecho (getvar "CMDECHO"))
@@ -2170,7 +2201,7 @@
 (if (not (findfile (LXI:get-config-path)))
   (progn (LXI:ensure-directory *LXI:base-path*) (LXI:write-config)))
 (LXI:log-init)
-(princ "\nLayerExportImport.lsp v2.0.4 geladen.")
+(princ "\nLayerExportImport.lsp v2.0.5 geladen.")
 (princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG")
 (princ (strcat "\nPraefix: " *LXI:prefix* "* | Speicherort: " *LXI:base-path*))
 (princ)
