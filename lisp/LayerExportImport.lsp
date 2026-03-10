@@ -3,7 +3,7 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System | Custom Property GUID | ObjectDBX Batch-Sync
 ;;; 
-;;; Version: 2.0.5
+;;; Version: 2.0.8
 ;;; Datum:   2026-03-10
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -79,7 +79,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v2.0.5" fp)
+    (write-line ";;; LayerSync Konfiguration v2.0.8" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -126,7 +126,7 @@
   (setq fp (open filepath "w"))
   (if fp (progn
     (write-line (strcat "=== LayerSync Log - " (LXI:timestamp-sec) " ===") fp)
-    (write-line (strcat "Version: 2.0.5") fp)
+    (write-line (strcat "Version: 2.0.8") fp)
     (write-line (strcat "DWG: " (vl-filename-base (getvar "DWGNAME")) ".dwg") fp)
     (write-line "" fp)
     (close fp))))
@@ -395,26 +395,34 @@
                 (< (nth 3 a) (nth 3 b))
                 (< (car a) (car b))))))
           (foreach entry mapper-data
-            (write-line
-              (strcat (nth 0 entry) s (nth 1 entry) s (nth 2 entry) s
-                      (nth 3 entry) s (nth 4 entry) s (nth 5 entry)) fp))
+            (if (and (nth 0 entry) (nth 1 entry) (nth 3 entry))
+              (write-line
+                (strcat (nth 0 entry) s (nth 1 entry) s
+                        (if (nth 2 entry) (nth 2 entry) "") s
+                        (nth 3 entry) s
+                        (if (nth 4 entry) (nth 4 entry) "") s
+                        (if (nth 5 entry) (nth 5 entry) "")) fp)))
           (close fp) T)))))
 
 ;;; Mapper-Lookup: DwgGUID + Handle -> MasterID
 ;;; Neues Format: 0=MID 1=LayerName 2=Handle 3=DwgName 4=DwgPath 5=DwgGUID
-(defun LXI:mapper-get-mid (mapper-data guid dwg handle / result)
+(defun LXI:mapper-get-mid (mapper-data guid dwg handle / result e5 e2 e3)
   (setq result nil)
   ;; Zuerst GUID + Handle
   (if (and guid (/= guid "") (/= guid "NO-GUID"))
     (foreach entry mapper-data
-      (if (and (= (strcase (nth 5 entry)) (strcase guid))
-               (= (strcase (nth 2 entry)) (strcase handle)))
+      (setq e5 (nth 5 entry) e2 (nth 2 entry))
+      (if (and e5 e2
+               (= (strcase e5) (strcase guid))
+               (= (strcase e2) (strcase handle)))
         (setq result (nth 0 entry)))))
   ;; Fallback: DwgName + Handle
   (if (null result)
     (foreach entry mapper-data
-      (if (and (= (strcase (nth 3 entry)) (strcase dwg))
-               (= (strcase (nth 2 entry)) (strcase handle)))
+      (setq e3 (nth 3 entry) e2 (nth 2 entry))
+      (if (and e3 e2
+               (= (strcase e3) (strcase dwg))
+               (= (strcase e2) (strcase handle)))
         (setq result (nth 0 entry)))))
   result)
 
@@ -424,12 +432,12 @@
   (if (and guid (/= guid "") (/= guid "NO-GUID"))
     (setq guid-entries
       (vl-remove-if-not
-        '(lambda (e) (= (strcase (nth 5 e)) (strcase guid)))
+        '(lambda (e) (and (nth 5 e) (= (strcase (nth 5 e)) (strcase guid))))
         mapper-data)))
   (if guid-entries
     (progn
       (setq old-name (nth 3 (car guid-entries)))
-      (if (/= (strcase old-name) (strcase dwg))
+      (if (and old-name (/= (strcase old-name) (strcase dwg)))
         (progn
           (princ (strcat "\n  DWG umbenannt: " old-name " -> " dwg))
           (setq guid-entries
@@ -439,16 +447,17 @@
               guid-entries))))
       guid-entries)
     (vl-remove-if-not
-      '(lambda (e) (= (strcase (nth 3 e)) (strcase dwg)))
+      '(lambda (e) (and (nth 3 e) (= (strcase (nth 3 e)) (strcase dwg))))
       mapper-data)))
 
 ;;; Entfernt Eintraege (GUID und Name)
-(defun LXI:mapper-remove-dwg (mapper-data guid dwg / )
+(defun LXI:mapper-remove-dwg (mapper-data guid dwg / e5 e3)
   (vl-remove-if
     '(lambda (entry)
+      (setq e5 (nth 5 entry) e3 (nth 3 entry))
       (or (and guid (/= guid "") (/= guid "NO-GUID")
-               (= (strcase (nth 5 entry)) (strcase guid)))
-          (= (strcase (nth 3 entry)) (strcase dwg))))
+               e5 (= (strcase e5) (strcase guid)))
+          (and e3 (= (strcase e3) (strcase dwg)))))
     mapper-data))
 
 ;;; Gibt eindeutige Zeichnungen aus Mapper zurueck
@@ -459,12 +468,17 @@
     (setq dwg-name (nth 3 entry)
           dwg-guid (nth 5 entry)
           dwg-path (nth 4 entry))
-    (setq found nil)
-    (foreach r result
-      (if (= (strcase (car r)) (strcase dwg-name))
-        (setq found T)))
-    (if (not found)
-      (setq result (cons (list dwg-name dwg-guid dwg-path) result))))
+    (if (null dwg-name) (setq dwg-name ""))
+    (if (null dwg-guid) (setq dwg-guid ""))
+    (if (null dwg-path) (setq dwg-path ""))
+    (if (/= dwg-name "")
+      (progn
+        (setq found nil)
+        (foreach r result
+          (if (= (strcase (car r)) (strcase dwg-name))
+            (setq found T)))
+        (if (not found)
+          (setq result (cons (list dwg-name dwg-guid dwg-path) result))))))
   (reverse result))
 
 
@@ -1763,6 +1777,10 @@
         (setq dbx-doc nil)))
     (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
     (princ))
+  (setq old-cmdecho (getvar "CMDECHO"))
+  (setvar "CMDECHO" 0)
+  (setq current-dwg (LXI:dwg-name))
+  (LXI:log-write (strcat "=== LAYSYNCALL gestartet von: " current-dwg " ==="))
   
   (princ "\n\n========================================")
   (princ "\n  LAYSYNCALL - Batch-Synchronisation")
@@ -2201,7 +2219,7 @@
 (if (not (findfile (LXI:get-config-path)))
   (progn (LXI:ensure-directory *LXI:base-path*) (LXI:write-config)))
 (LXI:log-init)
-(princ "\nLayerExportImport.lsp v2.0.5 geladen.")
+(princ "\nLayerExportImport.lsp v2.0.8 geladen.")
 (princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG")
 (princ (strcat "\nPraefix: " *LXI:prefix* "* | Speicherort: " *LXI:base-path*))
 (princ)
