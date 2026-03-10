@@ -3,7 +3,7 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System | Custom Property GUID | ObjectDBX Batch-Sync
 ;;; 
-;;; Version: 2.0.8
+;;; Version: 2.1.0
 ;;; Datum:   2026-03-10
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -21,6 +21,8 @@
 ;;;   LAYLOG     - Layer-Aenderungshistorie anzeigen
 ;;;   LAYSTATUS  - Uebersicht aller Zeichnungen und Sync-Stand
 ;;;   LAYCFG     - Konfiguration anzeigen / aendern
+;;;   LAYDIFF    - Vorschau: Unterschiede ohne Sync
+;;;   LAYCOUNT   - Schnellinfo: Sync-Stand Einzeiler
 ;;;
 ;;; Dateien im LayerSync-Ordner:
 ;;;   LayerMaster.csv  - Layer-Daten mit MasterID (14 Felder)
@@ -79,7 +81,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v2.0.8" fp)
+    (write-line ";;; LayerSync Konfiguration v2.1.0" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -126,7 +128,7 @@
   (setq fp (open filepath "w"))
   (if fp (progn
     (write-line (strcat "=== LayerSync Log - " (LXI:timestamp-sec) " ===") fp)
-    (write-line (strcat "Version: 2.0.8") fp)
+    (write-line (strcat "Version: 2.1.0") fp)
     (write-line (strcat "DWG: " (vl-filename-base (getvar "DWGNAME")) ".dwg") fp)
     (write-line "" fp)
     (close fp))))
@@ -2212,14 +2214,161 @@
 
 
 ;;; ========================================================================
-;;; Initialisierung
+;;; Hauptbefehl: LAYDIFF - Vorschau ohne Sync
+;;; Zeigt alle Unterschiede zwischen Master und aktueller Zeichnung
 ;;; ========================================================================
+(defun c:LAYDIFF ( / *error* old-cmdecho dwg guid master-data mapper-data
+                     dwg-mapper lay mid master-name col ltype lw plot-flag
+                     on-off frz lck vpdef desc trans
+                     mapped-entry mapped-handle local-name diffs
+                     cnt-diff cnt-missing cnt-extra cnt-sync
+                     master-names local-layers lay-obj lay-name)
+  (defun *error* (msg)
+    (if (not (LXI:cancel-p msg))
+      (progn
+        (princ (strcat "\nFehler: " msg))
+        (LXI:log-write (strcat "*** FEHLER: " msg))))
+    (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
+    (princ))
+  (setq old-cmdecho (getvar "CMDECHO"))
+  (setvar "CMDECHO" 0)
+  (setq dwg (LXI:dwg-name) guid (LXI:dwg-guid))
+  (LXI:log-write (strcat "=== LAYDIFF gestartet: " dwg " ==="))
+  (setq master-data (LXI:read-master))
+  (if (null master-data)
+    (princ "\n*** Kein Master vorhanden.")
+    (progn
+      (setq mapper-data (LXI:read-mapper))
+      (if (null mapper-data) (setq mapper-data nil))
+      (setq dwg-mapper (LXI:mapper-get-dwg-entries mapper-data guid dwg))
+      (setq cnt-diff 0 cnt-missing 0 cnt-extra 0 cnt-sync 0)
+      
+      (princ "\n\n====== LAYDIFF: Vorschau ======")
+      (princ (strcat "\n" dwg " vs. Master (" (itoa (length master-data)) " Layer)"))
+      (princ "\n================================")
+      
+      ;; 1) Master-Layer pruefen: Unterschiede und fehlende
+      (setq master-names nil)
+      (foreach lay master-data
+        (setq mid (nth 0 lay) master-name (nth 1 lay)
+              col (nth 2 lay) ltype (nth 3 lay) lw (nth 4 lay)
+              plot-flag (nth 5 lay) on-off (nth 6 lay)
+              frz (nth 7 lay) lck (nth 8 lay)
+              vpdef (nth 9 lay) desc (nth 10 lay) trans (nth 11 lay))
+        (setq master-names (cons (strcase master-name) master-names))
+        
+        ;; Lokal vorhanden?
+        (if (tblsearch "LAYER" master-name)
+          (progn
+            ;; Vergleich aller Properties
+            (setq diffs (LXI:compare-layer-props
+              master-name col ltype lw plot-flag on-off frz lck vpdef desc trans))
+            (if diffs
+              (progn
+                (setq cnt-diff (1+ cnt-diff))
+                (princ (strcat "\n  ~ " (LXI:pad-str master-name 30) " UNTERSCHIEDE:"))
+                (foreach d diffs
+                  (princ (strcat "\n      " d))))
+              (setq cnt-sync (1+ cnt-sync))))
+          ;; Nicht lokal vorhanden
+          (progn
+            (setq cnt-missing (1+ cnt-missing))
+            (princ (strcat "\n  - " (LXI:pad-str master-name 30) " FEHLT lokal")))))
+      
+      ;; 2) Lokale Layer die nicht im Master sind
+      (setq local-layers nil)
+      (vlax-for lay-obj (vla-get-Layers
+        (vla-get-ActiveDocument (vlax-get-acad-object)))
+        (setq lay-name (vla-get-Name lay-obj))
+        (if (and (LXI:sync-layer-p lay-name)
+                 (not (LXI:xref-layer-p lay-name))
+                 (not (member (strcase lay-name) master-names)))
+          (progn
+            (setq cnt-extra (1+ cnt-extra))
+            (princ (strcat "\n  + " (LXI:pad-str lay-name 30) " NUR LOKAL (nicht im Master)")))))
+      
+      ;; Zusammenfassung
+      (princ "\n\n--------------------------------")
+      (princ (strcat "\n  Synchron:     " (itoa cnt-sync)))
+      (princ (strcat "\n  Unterschiede: " (itoa cnt-diff)))
+      (princ (strcat "\n  Fehlt lokal:  " (itoa cnt-missing)))
+      (princ (strcat "\n  Nur lokal:    " (itoa cnt-extra)))
+      (if (and (= cnt-diff 0) (= cnt-missing 0) (= cnt-extra 0))
+        (princ "\n\n  Alles synchron!")
+        (princ "\n\n  LAYSYNC ausfuehren um zu synchronisieren."))
+      (princ "\n================================")
+      (LXI:log-write (strcat "LAYDIFF: " (itoa cnt-sync) " sync, "
+                              (itoa cnt-diff) " diff, "
+                              (itoa cnt-missing) " fehlen, "
+                              (itoa cnt-extra) " extra"))))
+  (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
+  (princ))
+
+
+;;; ========================================================================
+;;; Hauptbefehl: LAYCOUNT - Schnellinfo
+;;; ========================================================================
+(defun c:LAYCOUNT ( / *error* old-cmdecho dwg guid master-data mapper-data
+                      dwg-mapper lay mid master-name
+                      col ltype lw plot-flag on-off frz lck vpdef desc trans
+                      diffs cnt-sync cnt-diff cnt-missing cnt-extra
+                      master-names lay-obj lay-name)
+  (defun *error* (msg)
+    (if (not (LXI:cancel-p msg))
+      (progn
+        (princ (strcat "\nFehler: " msg))
+        (LXI:log-write (strcat "*** FEHLER: " msg))))
+    (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
+    (princ))
+  (setq old-cmdecho (getvar "CMDECHO"))
+  (setvar "CMDECHO" 0)
+  (setq dwg (LXI:dwg-name) guid (LXI:dwg-guid))
+  (setq master-data (LXI:read-master))
+  (if (null master-data)
+    (princ "\n*** Kein Master.")
+    (progn
+      (setq cnt-sync 0 cnt-diff 0 cnt-missing 0 cnt-extra 0)
+      (setq master-names nil)
+      (foreach lay master-data
+        (setq master-name (nth 1 lay)
+              col (nth 2 lay) ltype (nth 3 lay) lw (nth 4 lay)
+              plot-flag (nth 5 lay) on-off (nth 6 lay)
+              frz (nth 7 lay) lck (nth 8 lay)
+              vpdef (nth 9 lay) desc (nth 10 lay) trans (nth 11 lay))
+        (setq master-names (cons (strcase master-name) master-names))
+        (if (tblsearch "LAYER" master-name)
+          (progn
+            (setq diffs (LXI:compare-layer-props
+              master-name col ltype lw plot-flag on-off frz lck vpdef desc trans))
+            (if diffs
+              (setq cnt-diff (1+ cnt-diff))
+              (setq cnt-sync (1+ cnt-sync))))
+          (setq cnt-missing (1+ cnt-missing))))
+      ;; Lokale Extras
+      (vlax-for lay-obj (vla-get-Layers
+        (vla-get-ActiveDocument (vlax-get-acad-object)))
+        (setq lay-name (vla-get-Name lay-obj))
+        (if (and (LXI:sync-layer-p lay-name)
+                 (not (LXI:xref-layer-p lay-name))
+                 (not (member (strcase lay-name) master-names)))
+          (setq cnt-extra (1+ cnt-extra))))
+      ;; Einzeiler-Ausgabe
+      (princ (strcat "\n" dwg ": "
+        (itoa (length master-data)) " Master | "
+        (itoa cnt-sync) " sync"
+        (if (> cnt-diff 0) (strcat " | " (itoa cnt-diff) " Unterschiede") "")
+        (if (> cnt-missing 0) (strcat " | " (itoa cnt-missing) " fehlen") "")
+        (if (> cnt-extra 0) (strcat " | " (itoa cnt-extra) " nur lokal") "")
+        (if (and (= cnt-diff 0) (= cnt-missing 0) (= cnt-extra 0))
+          " | OK" "")))))
+  (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
+  (princ))
 (vl-load-com)
 (LXI:read-config)
 (if (not (findfile (LXI:get-config-path)))
   (progn (LXI:ensure-directory *LXI:base-path*) (LXI:write-config)))
 (LXI:log-init)
-(princ "\nLayerExportImport.lsp v2.0.8 geladen.")
-(princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG")
+(princ "\nLayerExportImport.lsp v2.1.0 geladen.")
+(princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG | LAYDIFF | LAYCOUNT")
 (princ (strcat "\nPraefix: " *LXI:prefix* "* | Speicherort: " *LXI:base-path*))
 (princ)
