@@ -3,7 +3,7 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System | Custom Property GUID | ObjectDBX Batch-Sync
 ;;; 
-;;; Version: 2.0.3
+;;; Version: 2.0.4
 ;;; Datum:   2026-03-10
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -79,7 +79,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v2.0.3" fp)
+    (write-line ";;; LayerSync Konfiguration v2.0.4" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -126,7 +126,7 @@
   (setq fp (open filepath "w"))
   (if fp (progn
     (write-line (strcat "=== LayerSync Log - " (LXI:timestamp-sec) " ===") fp)
-    (write-line (strcat "Version: 2.0.3") fp)
+    (write-line (strcat "Version: 2.0.4") fp)
     (write-line (strcat "DWG: " (vl-filename-base (getvar "DWGNAME")) ".dwg") fp)
     (write-line "" fp)
     (close fp))))
@@ -1206,16 +1206,24 @@
           (if history-entries (LXI:append-history (reverse history-entries)))
           (setq synclog-data (LXI:update-last-sync synclog-data dwg guid))
           (LXI:write-synclog synclog-data)
+          (LXI:log-write (strcat "--- Export (" dwg ") ---"))
           (princ (strcat "\n  --- Export (" dwg ") ---"))
-          (if (> cnt-new 0) (princ (strcat "\n    + " (itoa cnt-new) " neu in Master")))
-          (if (> cnt-upd 0) (princ (strcat "\n    ~ " (itoa cnt-upd) " aktualisiert")))
-          (if (> cnt-ren 0) (princ (strcat "\n    > " (itoa cnt-ren) " umbenannt")))
-          (if (> cnt-conflict 0) (princ (strcat "\n    ! " (itoa cnt-conflict) " Konflikte (behalten)")))
+          (if (> cnt-new 0) (progn (LXI:log-write (strcat "  + " (itoa cnt-new) " neu in Master"))
+            (princ (strcat "\n    + " (itoa cnt-new) " neu in Master"))))
+          (if (> cnt-upd 0) (progn (LXI:log-write (strcat "  ~ " (itoa cnt-upd) " aktualisiert"))
+            (princ (strcat "\n    ~ " (itoa cnt-upd) " aktualisiert"))))
+          (if (> cnt-ren 0) (progn (LXI:log-write (strcat "  > " (itoa cnt-ren) " umbenannt"))
+            (princ (strcat "\n    > " (itoa cnt-ren) " umbenannt"))))
+          (if (> cnt-conflict 0) (progn (LXI:log-write (strcat "  ! " (itoa cnt-conflict) " Konflikte (behalten)"))
+            (princ (strcat "\n    ! " (itoa cnt-conflict) " Konflikte (behalten)"))))
           (if (and (= cnt-new 0) (= cnt-upd 0) (= cnt-ren 0) (= cnt-conflict 0))
-            (princ "\n    = Master ist aktuell"))
+            (progn (LXI:log-write "  = Master ist aktuell")
+              (princ "\n    = Master ist aktuell")))
+          (LXI:log-write (strcat "  Master gesamt: " (itoa (length master-data)) " Layer"))
           (princ (strcat "\n    Master gesamt: " (itoa (length master-data)) " Layer"))
           T)
-        (progn (princ "\n  *** Fehler beim Schreiben.") nil)))))
+        (progn (LXI:log-write "*** Fehler beim Schreiben!")
+               (princ "\n  *** Fehler beim Schreiben.") nil)))))
 
 
 ;;; ========================================================================
@@ -1385,13 +1393,19 @@
       (setq synclog-data (LXI:update-last-sync synclog-data dwg guid))
       (LXI:write-synclog synclog-data)
       ;; Ergebnis
+      (LXI:log-write (strcat "--- Import (" dwg ") ---"))
       (princ (strcat "\n  --- Import (" dwg ") ---"))
-      (if (> cnt-new 0) (princ (strcat "\n    + " (itoa cnt-new) " neu angelegt")))
-      (if (> cnt-upd 0) (princ (strcat "\n    ~ " (itoa cnt-upd) " aktualisiert")))
-      (if (> cnt-ren 0) (princ (strcat "\n    > " (itoa cnt-ren) " umbenannt")))
-      (if (> cnt-del 0) (princ (strcat "\n    - " (itoa cnt-del) " aus Master gel.")))
+      (if (> cnt-new 0) (progn (LXI:log-write (strcat "  + " (itoa cnt-new) " neu angelegt"))
+        (princ (strcat "\n    + " (itoa cnt-new) " neu angelegt"))))
+      (if (> cnt-upd 0) (progn (LXI:log-write (strcat "  ~ " (itoa cnt-upd) " aktualisiert"))
+        (princ (strcat "\n    ~ " (itoa cnt-upd) " aktualisiert"))))
+      (if (> cnt-ren 0) (progn (LXI:log-write (strcat "  > " (itoa cnt-ren) " umbenannt"))
+        (princ (strcat "\n    > " (itoa cnt-ren) " umbenannt"))))
+      (if (> cnt-del 0) (progn (LXI:log-write (strcat "  - " (itoa cnt-del) " aus Master gel."))
+        (princ (strcat "\n    - " (itoa cnt-del) " aus Master gel."))))
       (if (and (= cnt-new 0) (= cnt-upd 0) (= cnt-ren 0) (= cnt-del 0))
-        (princ (strcat "\n    = Synchron (" (itoa cnt-skip) " Layer)")))
+        (progn (LXI:log-write (strcat "  = Synchron (" (itoa cnt-skip) " Layer)"))
+          (princ (strcat "\n    = Synchron (" (itoa cnt-skip) " Layer)"))))
       T)))
 
 
@@ -2156,7 +2170,7 @@
 (if (not (findfile (LXI:get-config-path)))
   (progn (LXI:ensure-directory *LXI:base-path*) (LXI:write-config)))
 (LXI:log-init)
-(princ "\nLayerExportImport.lsp v2.0.3 geladen.")
+(princ "\nLayerExportImport.lsp v2.0.4 geladen.")
 (princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG")
 (princ (strcat "\nPraefix: " *LXI:prefix* "* | Speicherort: " *LXI:base-path*))
 (princ)
