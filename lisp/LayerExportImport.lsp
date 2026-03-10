@@ -3,7 +3,7 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System | Custom Property GUID | ObjectDBX Batch-Sync
 ;;; 
-;;; Version: 1.5.0
+;;; Version: 1.6.0
 ;;; Datum:   2026-03-10
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -78,7 +78,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v1.5.0" fp)
+    (write-line ";;; LayerSync Konfiguration v1.6.0" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -959,20 +959,35 @@
 
 
 ;;; ========================================================================
-;;; EXPORT-KERNFUNKTION
+;;; EXPORT-KERNFUNKTION (14-Feld Master, SyncLog Konflikterkennung)
+;;; collect-layers: 0=Name 1=Color 2=Ltype 3=LW 4=OnOff 5=Frz
+;;;   6=Lock 7=Plot 8=VPDef 9=Desc 10=Trans 11=Handle
+;;; Master: 0=MID 1=Name 2=Color 3=Ltype 4=LW 5=Plot 6=OnOff
+;;;   7=Frz 8=Lock 9=VPDef 10=Desc 11=Trans 12=Source 13=LastMod
 ;;; ========================================================================
 (defun LXI:do-export ( / dwg guid dwg-path layers master-data mapper-data
+                         synclog-data last-sync
                          lay lay-name handle mid old-name
                          existing-master change-details detail
                          timestamp history-entries new-mid
-                         cnt-new cnt-upd cnt-ren)
+                         master-modified master-source exp-choice
+                         cnt-new cnt-upd cnt-ren cnt-conflict)
   (setq dwg (LXI:dwg-name))
   (setq guid (LXI:dwg-guid))
   (setq dwg-path (LXI:dwg-path))
   (setq timestamp (LXI:timestamp))
-  (setq cnt-new 0 cnt-upd 0 cnt-ren 0)
+  (setq cnt-new 0 cnt-upd 0 cnt-ren 0 cnt-conflict 0)
   (setq history-entries nil)
+  (setq exp-choice nil)
   (LXI:debug-print (strcat "Export: " dwg " GUID: " guid))
+  
+  ;; SyncLog lesen
+  (setq synclog-data (LXI:read-synclog))
+  (setq last-sync (LXI:get-last-sync synclog-data guid dwg))
+  (if last-sync
+    (LXI:debug-print (strcat "Letzter Sync: " last-sync))
+    (LXI:debug-print "Erster Export"))
+  
   (setq layers (LXI:collect-layers))
   (if (null layers)
     (progn
@@ -983,9 +998,11 @@
       (if (null master-data) (setq master-data nil))
       (setq mapper-data (LXI:read-mapper))
       (if (null mapper-data) (setq mapper-data nil))
+      
       (foreach lay layers
-        (setq lay-name (nth 0 lay) handle (nth 8 lay))
+        (setq lay-name (nth 0 lay) handle (nth 11 lay))
         (setq mid (LXI:mapper-get-mid mapper-data guid dwg handle))
+        
         (cond
           ;; FALL 1: Bekannter Layer
           (mid
@@ -993,6 +1010,7 @@
               (setq existing-master (LXI:find-by-id master-data mid))
               (if existing-master
                 (progn
+                  ;; Umbenennung
                   (setq old-name (nth 1 existing-master))
                   (if (/= (strcase old-name) (strcase lay-name))
                     (progn
@@ -1002,72 +1020,135 @@
                                     (strcat old-name "->" lay-name) dwg mid)
                               history-entries))
                       (setq cnt-ren (1+ cnt-ren))))
-                  ;; Aenderungen pruefen
-                  (setq change-details nil)
-                  (setq detail (LXI:compare-field (nth 2 existing-master) (nth 1 lay)))
-                  (if detail (setq change-details (cons (strcat "Farbe:" detail) change-details)))
-                  (if (and (/= (strcase (nth 2 lay)) "CONTINUOUS")
-                           (LXI:compare-field (nth 3 existing-master) (nth 2 lay)))
-                    (setq change-details
-                      (cons (strcat "Linientyp:" (LXI:compare-field (nth 3 existing-master) (nth 2 lay)))
-                            change-details)))
-                  (setq detail (LXI:compare-field (nth 6 existing-master) (nth 5 lay)))
-                  (if detail (setq change-details (cons (strcat "OnOff:" detail) change-details)))
-                  (setq detail (LXI:compare-field (nth 5 existing-master) (nth 4 lay)))
-                  (if detail (setq change-details (cons (strcat "Plot:" detail) change-details)))
-                  (if change-details
+                  
+                  ;; Konflikterkennung
+                  (setq master-modified (nth 13 existing-master))
+                  (setq master-source (nth 12 existing-master))
+                  
+                  (if (and (LXI:master-newer-p master-modified last-sync)
+                           (/= (strcase master-source) (strcase dwg)))
+                    ;; KONFLIKT
                     (progn
-                      (setq history-entries
-                        (cons (list timestamp "AENDERUNG" lay-name
-                                    (apply 'strcat (mapcar '(lambda (d) (strcat d " "))
-                                                           (reverse change-details)))
-                                    dwg mid) history-entries))
-                      (setq cnt-upd (1+ cnt-upd))))
-                  ;; Master aktualisieren (Linientyp-Schutz)
-                  (setq master-data (LXI:remove-by-id master-data mid))
-                  (setq master-data
-                    (cons (list mid lay-name (nth 1 lay)
-                                (if (and (= (strcase (nth 2 lay)) "CONTINUOUS")
-                                         (/= (strcase (nth 3 existing-master)) "CONTINUOUS"))
-                                  (nth 3 existing-master) (nth 2 lay))
-                                (nth 3 lay) (nth 4 lay) (nth 5 lay) (nth 6 lay) (nth 7 lay)
-                                dwg timestamp) master-data))))))
+                      (if (not (or (= exp-choice "AlleUeber") (= exp-choice "AlleBehalten")))
+                        (progn
+                          (princ (strcat "\n\n========================================"))
+                          (princ (strcat "\n  EXPORT-KONFLIKT: " lay-name " [" mid "]"))
+                          (princ (strcat "\n  Master geaendert von " master-source
+                                         " (" master-modified ")"))
+                          (princ (strcat "\n  Dein letzter Sync: "
+                                         (if last-sync last-sync "nie")))
+                          (princ "\n\n  Ueberschreiben = Deine Werte in Master")
+                          (princ "\n  Behalten       = Master-Werte behalten")
+                          (princ "\n  AlleUeber      = Alle ueberschreiben")
+                          (princ "\n  AlleBehalten   = Alle behalten")
+                          (initget "Ueberschreiben Behalten AlleUeber AlleBehalten")
+                          (setq exp-choice
+                            (getkword "\n[Ueberschreiben/Behalten/AlleUeber/AlleBehalten]: "))
+                          (if (null exp-choice) (setq exp-choice "Behalten"))))
+                      (if (or (= exp-choice "Behalten") (= exp-choice "AlleBehalten"))
+                        (progn
+                          (setq cnt-conflict (1+ cnt-conflict))
+                          (if (= exp-choice "Behalten") (setq exp-choice nil)))
+                        ;; Ueberschreiben
+                        (progn
+                          (if (= exp-choice "Ueberschreiben") (setq exp-choice nil))
+                          ;; Faellt durch zum normalen Export unten
+                        )))
+                    ;; Kein Konflikt oder selbst geaendert
+                  )
+                  
+                  ;; Normal exportieren (wenn kein Konflikt-Behalten)
+                  (if (or (null last-sync)
+                          (not (LXI:master-newer-p master-modified last-sync))
+                          (= (strcase master-source) (strcase dwg))
+                          (= exp-choice "AlleUeber"))
+                    (progn
+                      ;; Aenderungen pruefen
+                      (setq change-details nil)
+                      (setq detail (LXI:compare-field (nth 2 existing-master) (nth 1 lay)))
+                      (if detail (setq change-details (cons (strcat "Farbe:" detail) change-details)))
+                      (if (and (/= (strcase (nth 2 lay)) "CONTINUOUS")
+                               (LXI:compare-field (nth 3 existing-master) (nth 2 lay)))
+                        (setq change-details
+                          (cons (strcat "Linientyp:"
+                                  (LXI:compare-field (nth 3 existing-master) (nth 2 lay)))
+                                change-details)))
+                      (setq detail (LXI:compare-field (nth 4 existing-master) (nth 3 lay)))
+                      (if detail (setq change-details (cons (strcat "LStaerke:" detail) change-details)))
+                      (setq detail (LXI:compare-field (nth 6 existing-master) (nth 4 lay)))
+                      (if detail (setq change-details (cons (strcat "OnOff:" detail) change-details)))
+                      (setq detail (LXI:compare-field (nth 5 existing-master) (nth 7 lay)))
+                      (if detail (setq change-details (cons (strcat "Plot:" detail) change-details)))
+                      (if change-details
+                        (progn
+                          (setq history-entries
+                            (cons (list timestamp "AENDERUNG" lay-name
+                                        (apply 'strcat (mapcar '(lambda (d) (strcat d " "))
+                                                               (reverse change-details)))
+                                        dwg mid) history-entries))
+                          (setq cnt-upd (1+ cnt-upd))))
+                      ;; Master aktualisieren (14 Felder)
+                      (setq master-data (LXI:remove-by-id master-data mid))
+                      (setq master-data
+                        (cons (list mid lay-name
+                                    (nth 1 lay)
+                                    (if (and (= (strcase (nth 2 lay)) "CONTINUOUS")
+                                             (/= (strcase (nth 3 existing-master)) "CONTINUOUS"))
+                                      (nth 3 existing-master) (nth 2 lay))
+                                    (nth 3 lay) (nth 7 lay) (nth 4 lay)
+                                    (nth 5 lay) (nth 6 lay) (nth 8 lay)
+                                    (nth 9 lay) (nth 10 lay) dwg timestamp)
+                              master-data))))))))
+          
           ;; FALL 2: Name-Match
           ((setq existing-master (LXI:find-by-name master-data lay-name))
             (progn
               (setq mid (car existing-master))
               (setq master-data (LXI:remove-by-id master-data mid))
               (setq master-data
-                (cons (list mid lay-name (nth 1 lay) (nth 2 lay) (nth 3 lay)
-                            (nth 4 lay) (nth 5 lay) (nth 6 lay) (nth 7 lay)
-                            dwg timestamp) master-data))
+                (cons (list mid lay-name
+                            (nth 1 lay) (nth 2 lay) (nth 3 lay)
+                            (nth 7 lay) (nth 4 lay) (nth 5 lay) (nth 6 lay)
+                            (nth 8 lay) (nth 9 lay) (nth 10 lay)
+                            dwg timestamp)
+                      master-data))
               (setq cnt-upd (1+ cnt-upd))))
+          
           ;; FALL 3: Neuer Layer
           (T
             (progn
               (setq new-mid (LXI:next-master-id master-data))
               (setq master-data
-                (cons (list new-mid lay-name (nth 1 lay) (nth 2 lay) (nth 3 lay)
-                            (nth 4 lay) (nth 5 lay) (nth 6 lay) (nth 7 lay)
-                            dwg timestamp) master-data))
+                (cons (list new-mid lay-name
+                            (nth 1 lay) (nth 2 lay) (nth 3 lay)
+                            (nth 7 lay) (nth 4 lay) (nth 5 lay) (nth 6 lay)
+                            (nth 8 lay) (nth 9 lay) (nth 10 lay)
+                            dwg timestamp)
+                      master-data))
               (setq history-entries
                 (cons (list timestamp "NEU" lay-name "" dwg new-mid) history-entries))
               (setq cnt-new (1+ cnt-new))))))
-      ;; Mapper mit Pfad
+      
+      ;; Mapper (Handle = Index 11)
       (setq mapper-data (LXI:mapper-remove-dwg mapper-data guid dwg))
       (foreach lay layers
-        (setq lay-name (nth 0 lay) handle (nth 8 lay))
+        (setq lay-name (nth 0 lay) handle (nth 11 lay))
         (setq mid (car (LXI:find-by-name master-data lay-name)))
         (if mid (setq mapper-data
           (cons (list dwg guid dwg-path lay-name handle mid) mapper-data))))
+      
+      ;; Schreiben + SyncLog
       (if (and (LXI:write-master master-data) (LXI:write-mapper mapper-data))
         (progn
           (if history-entries (LXI:append-history (reverse history-entries)))
+          (setq synclog-data (LXI:update-last-sync synclog-data dwg guid))
+          (LXI:write-synclog synclog-data)
           (princ (strcat "\n  --- Export (" dwg ") ---"))
           (if (> cnt-new 0) (princ (strcat "\n    + " (itoa cnt-new) " neu in Master")))
           (if (> cnt-upd 0) (princ (strcat "\n    ~ " (itoa cnt-upd) " aktualisiert")))
           (if (> cnt-ren 0) (princ (strcat "\n    > " (itoa cnt-ren) " umbenannt")))
-          (if (and (= cnt-new 0) (= cnt-upd 0) (= cnt-ren 0))
+          (if (> cnt-conflict 0) (princ (strcat "\n    ! " (itoa cnt-conflict) " Konflikte (behalten)")))
+          (if (and (= cnt-new 0) (= cnt-upd 0) (= cnt-ren 0) (= cnt-conflict 0))
             (princ "\n    = Master ist aktuell"))
           (princ (strcat "\n    Master gesamt: " (itoa (length master-data)) " Layer"))
           T)
@@ -1919,7 +2000,7 @@
 (LXI:read-config)
 (if (not (findfile (LXI:get-config-path)))
   (progn (LXI:ensure-directory *LXI:base-path*) (LXI:write-config)))
-(princ "\nLayerExportImport.lsp v1.5.0 geladen.")
+(princ "\nLayerExportImport.lsp v1.6.0 geladen.")
 (princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG")
 (princ (strcat "\nPraefix: " *LXI:prefix* "* | Speicherort: " *LXI:base-path*))
 (princ)
