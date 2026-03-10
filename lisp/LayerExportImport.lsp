@@ -3,7 +3,7 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System | Custom Property GUID | ObjectDBX Batch-Sync
 ;;; 
-;;; Version: 1.6.0
+;;; Version: 1.7.0
 ;;; Datum:   2026-03-10
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -78,7 +78,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v1.6.0" fp)
+    (write-line ";;; LayerSync Konfiguration v1.7.0" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -1156,14 +1156,18 @@
 
 
 ;;; ========================================================================
-;;; IMPORT-KERNFUNKTION
+;;; IMPORT-KERNFUNKTION (14-Feld Master, VLA, SyncLog)
+;;; Master: 0=MID 1=Name 2=Color 3=Ltype 4=LW 5=Plot 6=OnOff
+;;;   7=Frz 8=Lock 9=VPDef 10=Desc 11=Trans 12=Source 13=LastMod
 ;;; ========================================================================
 (defun LXI:do-import ( / dwg guid dwg-path master-data mapper-data dwg-mapper
-                         is-first-import global-choice
+                         synclog-data is-first-import global-choice
                          lay mid master-name col ltype lw plot-flag on-off frz lck
+                         vpdef desc trans
                          mapped-entry mapped-handle mapped-name
                          local-name diffs choice
-                         lay-tbl handle new-mapper ent-data delete-list
+                         lay-obj handle new-mapper delete-list
+                         doc layers-coll
                          cnt-new cnt-upd cnt-skip cnt-ren cnt-del)
   (setq dwg (LXI:dwg-name))
   (setq guid (LXI:dwg-guid))
@@ -1183,9 +1187,12 @@
         (princ "\n  Erster Import fuer diese Zeichnung.")
         (princ (strcat "\n  " (itoa (length dwg-mapper)) " Layer bekannt.")))
       (foreach lay master-data
+        ;; Master 14 Felder auslesen
         (setq mid (nth 0 lay) master-name (nth 1 lay)
-              col (atoi (nth 2 lay)) ltype (nth 3 lay) lw (nth 4 lay)
-              plot-flag (nth 5 lay) on-off (nth 6 lay) frz (nth 7 lay) lck (nth 8 lay))
+              col (nth 2 lay) ltype (nth 3 lay) lw (nth 4 lay)
+              plot-flag (nth 5 lay) on-off (nth 6 lay)
+              frz (nth 7 lay) lck (nth 8 lay)
+              vpdef (nth 9 lay) desc (nth 10 lay) trans (nth 11 lay))
         (LXI:debug-print (strcat "Import: " master-name " [" mid "]"))
         (setq mapped-entry nil)
         (foreach e dwg-mapper
@@ -1202,9 +1209,13 @@
                   (progn
                     (LXI:debug-print (strcat "  Handle " mapped-handle " -> " local-name))
                     (cond
+                      ;; Name gleich
                       ((= (strcase local-name) (strcase master-name))
                         (progn
-                          (setq diffs (LXI:compare-layer-props local-name col ltype plot-flag on-off))
+                          ;; Vergleich mit allen 10 Properties
+                          (setq diffs (LXI:compare-layer-props
+                            local-name col ltype lw plot-flag on-off frz lck
+                            vpdef desc trans))
                           (if diffs
                             (progn
                               (if (or (= global-choice "alleMaster") (= global-choice "alleLokal"))
@@ -1214,35 +1225,44 @@
                                   (if (= choice "alleMaster") (setq global-choice "alleMaster"))
                                   (if (= choice "alleLokal") (setq global-choice "alleLokal"))))
                               (if (or (= choice "Master") (= choice "alleMaster"))
-                                (progn (LXI:update-layer-props local-name col ltype plot-flag on-off)
-                                       (setq cnt-upd (1+ cnt-upd)))
+                                (progn
+                                  (LXI:update-layer-props local-name
+                                    col ltype lw plot-flag on-off frz lck vpdef desc trans)
+                                  (setq cnt-upd (1+ cnt-upd)))
                                 (setq cnt-skip (1+ cnt-skip))))
                             (progn
                               (LXI:debug-print (strcat "  Skip: " local-name))
                               (setq cnt-skip (1+ cnt-skip))))))
-                      (T ;; Umbenennung
+                      ;; Name anders (Umbenennung)
+                      (T
                         (progn
                           (setq choice (LXI:ask-rename master-name local-name mid))
                           (if (= choice "Master")
                             (progn
                               (command "._-RENAME" "LA" local-name master-name)
                               (princ (strcat "\n  > " local-name " -> " master-name))
-                              (LXI:update-layer-props master-name col ltype plot-flag on-off)
+                              (LXI:update-layer-props master-name
+                                col ltype lw plot-flag on-off frz lck vpdef desc trans)
                               (setq cnt-ren (1+ cnt-ren)))
                             (progn
                               (princ (strcat "\n  = Beibehalten: " local-name))
                               (setq cnt-skip (1+ cnt-skip)))))))))
-                (T ;; Lokal geloescht
+                ;; Lokal geloescht
+                (T
                   (progn
                     (LXI:debug-print (strcat "  Handle " mapped-handle " nicht gefunden"))
                     (setq choice (LXI:ask-deleted master-name mid))
                     (cond
                       ((= choice "Neu")
-                        (if (LXI:create-layer master-name col ltype plot-flag on-off frz lck)
-                          (progn (princ (strcat "\n  + " master-name)) (setq cnt-new (1+ cnt-new)))
+                        (if (LXI:create-layer master-name
+                              (atoi col) ltype (atoi lw) plot-flag on-off frz lck
+                              vpdef desc (atoi trans))
+                          (progn (princ (strcat "\n  + " master-name))
+                                 (setq cnt-new (1+ cnt-new)))
                           (princ (strcat "\n  *** Fehler: " master-name))))
                       ((= choice "Loeschen")
-                        (setq delete-list (cons mid delete-list) cnt-del (1+ cnt-del)))
+                        (setq delete-list (cons mid delete-list)
+                              cnt-del (1+ cnt-del)))
                       (T (setq cnt-skip (1+ cnt-skip)))))))))
           ;; FALL B: Nicht im Mapper
           (T
@@ -1251,7 +1271,9 @@
               (if (tblsearch "LAYER" master-name)
                 (progn
                   (LXI:debug-print "  Name lokal vorhanden, verknuepfe")
-                  (setq diffs (LXI:compare-layer-props master-name col ltype plot-flag on-off))
+                  (setq diffs (LXI:compare-layer-props
+                    master-name col ltype lw plot-flag on-off frz lck
+                    vpdef desc trans))
                   (if diffs
                     (progn
                       (if (or (= global-choice "alleMaster") (= global-choice "alleLokal"))
@@ -1261,11 +1283,16 @@
                           (if (= choice "alleMaster") (setq global-choice "alleMaster"))
                           (if (= choice "alleLokal") (setq global-choice "alleLokal"))))
                       (if (or (= choice "Master") (= choice "alleMaster"))
-                        (progn (LXI:update-layer-props master-name col ltype plot-flag on-off)
-                               (setq cnt-upd (1+ cnt-upd)))
+                        (progn
+                          (LXI:update-layer-props master-name
+                            col ltype lw plot-flag on-off frz lck vpdef desc trans)
+                          (setq cnt-upd (1+ cnt-upd)))
                         (setq cnt-skip (1+ cnt-skip))))
                     (setq cnt-skip (1+ cnt-skip))))
-                (if (LXI:create-layer master-name col ltype plot-flag on-off frz lck)
+                ;; Neuer Layer anlegen
+                (if (LXI:create-layer master-name
+                      (atoi col) ltype (atoi lw) plot-flag on-off frz lck
+                      vpdef desc (atoi trans))
                   (progn (LXI:debug-print (strcat "  + " master-name))
                          (setq cnt-new (1+ cnt-new)))
                   (princ (strcat "\n  *** Fehler: " master-name))))))))
@@ -1275,20 +1302,25 @@
           (foreach del-mid delete-list
             (setq master-data (LXI:remove-by-id master-data del-mid)))
           (LXI:write-master master-data)))
-      ;; Mapper mit Pfad
+      ;; Mapper aktualisieren (VLA-basiert)
       (setq mapper-data (LXI:mapper-remove-dwg mapper-data guid dwg))
       (setq new-mapper nil)
-      (while (setq lay-tbl (tblnext "LAYER" (not lay-tbl)))
-        (setq lay-name (cdr (assoc 2 lay-tbl)))
+      (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)))
+      (setq layers-coll (vla-get-Layers doc))
+      (vlax-for lay-obj layers-coll
+        (setq lay-name (vla-get-Name lay-obj))
         (if (and (not (LXI:xref-layer-p lay-name)) (LXI:sync-layer-p lay-name))
           (progn
-            (setq ent-data (entget (tblobjname "LAYER" lay-name)))
-            (setq handle (cdr (assoc 5 ent-data)))
+            (setq handle (vla-get-Handle lay-obj))
             (setq mid (car (LXI:find-by-name master-data lay-name)))
             (if mid (setq new-mapper
               (cons (list dwg guid dwg-path lay-name handle mid) new-mapper))))))
       (setq mapper-data (append mapper-data new-mapper))
       (LXI:write-mapper mapper-data)
+      ;; SyncLog aktualisieren
+      (setq synclog-data (LXI:read-synclog))
+      (setq synclog-data (LXI:update-last-sync synclog-data dwg guid))
+      (LXI:write-synclog synclog-data)
       ;; Ergebnis
       (princ (strcat "\n  --- Import (" dwg ") ---"))
       (if (> cnt-new 0) (princ (strcat "\n    + " (itoa cnt-new) " neu angelegt")))
@@ -2000,7 +2032,7 @@
 (LXI:read-config)
 (if (not (findfile (LXI:get-config-path)))
   (progn (LXI:ensure-directory *LXI:base-path*) (LXI:write-config)))
-(princ "\nLayerExportImport.lsp v1.6.0 geladen.")
+(princ "\nLayerExportImport.lsp v1.7.0 geladen.")
 (princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG")
 (princ (strcat "\nPraefix: " *LXI:prefix* "* | Speicherort: " *LXI:base-path*))
 (princ)
