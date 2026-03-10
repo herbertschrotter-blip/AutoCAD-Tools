@@ -3,7 +3,7 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System | Custom Property GUID | ObjectDBX Batch-Sync
 ;;; 
-;;; Version: 2.2.0
+;;; Version: 2.3.1
 ;;; Datum:   2026-03-10
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -86,7 +86,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v2.2.0" fp)
+    (write-line ";;; LayerSync Konfiguration v2.3.1" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -135,7 +135,7 @@
   (setq fp (open filepath "w"))
   (if fp (progn
     (write-line (strcat "=== LayerSync Log - " (LXI:timestamp-sec) " ===") fp)
-    (write-line (strcat "Version: 2.2.0") fp)
+    (write-line (strcat "Version: 2.3.1") fp)
     (write-line (strcat "DWG: " (vl-filename-base (getvar "DWGNAME")) ".dwg") fp)
     (write-line "" fp)
     (close fp))))
@@ -190,7 +190,15 @@
 ;;; GUID (Custom Property)
 ;;; ========================================================================
 
-(defun LXI:dwg-guid ( / si guid num-props i key val found)
+;;; Sicheres Auslesen: vla-GetCustomByIndex schreibt manchmal
+;;; direkt Strings statt Variants in die Symbole
+(defun LXI:safe-variant-value (v / )
+  (cond
+    ((= (type v) 'STR) v)
+    ((= (type v) 'VARIANT) (vlax-variant-value v))
+    (T nil)))
+
+(defun LXI:dwg-guid ( / si guid num-props i key val found key-str)
   (if (and *LXI:cached-guid*
            (/= *LXI:cached-guid* "")
            (= *LXI:cached-guid-dwg* (LXI:dwg-name)))
@@ -211,9 +219,10 @@
             (vl-catch-all-apply
               '(lambda ()
                 (vla-GetCustomByIndex si i 'key 'val)
-                (if (= (strcase (vlax-variant-value key)) "LAYERSYNCGUID")
+                (setq key-str (LXI:safe-variant-value key))
+                (if (and key-str (= (strcase key-str) "LAYERSYNCGUID"))
                   (progn
-                    (setq guid (vlax-variant-value val))
+                    (setq guid (LXI:safe-variant-value val))
                     (setq found T)))))
             (setq i (1+ i)))))
       (if (or (null guid) (= guid ""))
@@ -239,6 +248,49 @@
   (setq rand-str (itoa (rem (getvar "MILLISECS") 100000)))
   (while (< (strlen rand-str) 5) (setq rand-str (strcat "0" rand-str)))
   (strcat "LXI-" date-str "-" rand-str))
+
+;;; Read-Only GUID: Liest vorhandene GUID, erstellt KEINE neue
+;;; Fuer automatische Aufrufe (check-on-open) ohne User-Dialog
+;;; Rueckgabe: GUID-String oder nil wenn nicht vorhanden
+(defun LXI:dwg-guid-read ( / si guid num-props i key val found key-str)
+  ;; Cache pruefen
+  (if (and *LXI:cached-guid*
+           (/= *LXI:cached-guid* "")
+           (= *LXI:cached-guid-dwg* (LXI:dwg-name)))
+    *LXI:cached-guid*
+    ;; Aus Custom Properties lesen
+    (progn
+      (setq si (vl-catch-all-apply
+                 '(lambda ()
+                   (vla-get-SummaryInfo
+                     (vla-get-ActiveDocument (vlax-get-acad-object))))))
+      (if (vl-catch-all-error-p si) nil
+        (progn
+          (setq found nil guid nil)
+          (setq num-props (vl-catch-all-apply
+                            '(lambda () (vla-NumCustomInfo si))))
+          (if (vl-catch-all-error-p num-props) (setq num-props 0))
+          (if (> num-props 0)
+            (progn
+              (setq i 0)
+              (while (and (< i num-props) (null found))
+                (setq key (vlax-make-variant "" vlax-vbString))
+                (setq val (vlax-make-variant "" vlax-vbString))
+                (vl-catch-all-apply
+                  '(lambda ()
+                    (vla-GetCustomByIndex si i 'key 'val)
+                    (setq key-str (LXI:safe-variant-value key))
+                    (if (and key-str (= (strcase key-str) "LAYERSYNCGUID"))
+                      (progn
+                        (setq guid (LXI:safe-variant-value val))
+                        (setq found T)))))
+                (setq i (1+ i)))))
+          (if (and guid (/= guid ""))
+            (progn
+              (setq *LXI:cached-guid* guid)
+              (setq *LXI:cached-guid-dwg* (LXI:dwg-name))
+              guid)
+            nil))))))
 
 
 ;;; ========================================================================
@@ -1788,6 +1840,7 @@
     (princ))
   (setq old-cmdecho (getvar "CMDECHO"))
   (setvar "CMDECHO" 0)
+  (LXI:ensure-init)
   (setq current-dwg (LXI:dwg-name))
   (LXI:log-write (strcat "=== LAYSYNCALL gestartet von: " current-dwg " ==="))
   
@@ -1962,6 +2015,7 @@
     (princ))
   (setq old-cmdecho (getvar "CMDECHO"))
   (setvar "CMDECHO" 0)
+  (LXI:ensure-init)
   (LXI:log-write (strcat "=== LAYSYNC gestartet: " (LXI:dwg-name) " ==="))
   (princ "\n")
   (princ "\n========================================")
@@ -2003,6 +2057,7 @@
     (princ))
   (setq old-cmdecho (getvar "CMDECHO"))
   (setvar "CMDECHO" 0)
+  (LXI:ensure-init)
   (LXI:log-write (strcat "=== LAYEXP gestartet: " (LXI:dwg-name) " ==="))
   (LXI:do-export)
   (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
@@ -2022,6 +2077,7 @@
     (princ))
   (setq old-cmdecho (getvar "CMDECHO"))
   (setvar "CMDECHO" 0)
+  (LXI:ensure-init)
   (LXI:log-write (strcat "=== LAYIMP gestartet: " (LXI:dwg-name) " ==="))
   (LXI:do-import)
   (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
@@ -2042,6 +2098,7 @@
     (princ))
   (setq old-cmdecho (getvar "CMDECHO"))
   (setvar "CMDECHO" 0)
+  (LXI:ensure-init)
   (setq history (LXI:read-history))
   (if (null history)
     (princ "\n*** Keine History vorhanden.")
@@ -2116,6 +2173,7 @@
     (princ))
   (setq old-cmdecho (getvar "CMDECHO"))
   (setvar "CMDECHO" 0)
+  (LXI:ensure-init)
   (setq master-data (LXI:read-master)
         mapper-data (LXI:read-mapper)
         synclog-data (LXI:read-synclog))
@@ -2189,6 +2247,7 @@
     (princ))
   (setq old-cmdecho (getvar "CMDECHO"))
   (setvar "CMDECHO" 0)
+  (LXI:ensure-init)
   (princ "\n\n=== LayerSync Konfiguration ===")
   (princ (strcat "\n  [P]fad:      " *LXI:base-path*))
   (princ (strcat "\n  P[r]aefix:   " *LXI:prefix*))
@@ -2250,6 +2309,7 @@
     (princ))
   (setq old-cmdecho (getvar "CMDECHO"))
   (setvar "CMDECHO" 0)
+  (LXI:ensure-init)
   (setq dwg (LXI:dwg-name) guid (LXI:dwg-guid))
   (LXI:log-write (strcat "=== LAYDIFF gestartet: " dwg " ==="))
   (setq master-data (LXI:read-master))
@@ -2340,6 +2400,7 @@
     (princ))
   (setq old-cmdecho (getvar "CMDECHO"))
   (setvar "CMDECHO" 0)
+  (LXI:ensure-init)
   (setq dwg (LXI:dwg-name) guid (LXI:dwg-guid))
   (setq master-data (LXI:read-master))
   (if (null master-data)
@@ -2425,49 +2486,63 @@
                              master-modified cnt-newer)
   (if (null *LXI:notify*) nil
     (progn
-      (setq dwg (LXI:dwg-name) guid (LXI:dwg-guid))
-      (setq synclog-data (LXI:read-synclog))
-      (setq last-sync (LXI:get-last-sync synclog-data guid dwg))
-      (if (null last-sync)
-        ;; Noch nie gesynced
+      (setq dwg (LXI:dwg-name))
+      ;; Read-only: Keine GUID erstellen, nur pruefen
+      (setq guid (LXI:dwg-guid-read))
+      (if (null guid)
+        (LXI:debug-print "check-on-open: Keine GUID, ueberspringe")
         (progn
-          (setq master-data (LXI:read-master))
-          (if master-data
-            (princ (strcat "\n  [LayerSync] Noch nie synchronisiert! "
-                           (itoa (length master-data)) " Layer im Master. "
-                           "LAYSYNC ausfuehren."))))
-        ;; Schon mal gesynced: pruefen ob Master neuer
-        (progn
-          (setq master-data (LXI:read-master))
-          (if master-data
+          (setq synclog-data (LXI:read-synclog))
+          (setq last-sync (LXI:get-last-sync synclog-data guid dwg))
+          (if (null last-sync)
+            ;; GUID vorhanden aber noch nie gesynced
             (progn
-              (setq cnt-newer 0)
-              (foreach lay master-data
-                (setq master-modified (nth 13 lay))
-                (if (and master-modified
-                         (LXI:master-newer-p master-modified last-sync))
-                  (setq cnt-newer (1+ cnt-newer))))
-              (if (> cnt-newer 0)
-                (princ (strcat "\n  [LayerSync] " (itoa cnt-newer)
-                               " Layer seit letztem Sync geaendert. "
-                               "LAYSYNC empfohlen."))))))))))
+              (setq master-data (LXI:read-master))
+              (if master-data
+                (princ (strcat "\n  [LayerSync] Noch nie synchronisiert! "
+                               (itoa (length master-data)) " Layer im Master. "
+                               "LAYSYNC ausfuehren."))))
+            ;; Schon mal gesynced: pruefen ob Master neuer
+            (progn
+              (setq master-data (LXI:read-master))
+              (if master-data
+                (progn
+                  (setq cnt-newer 0)
+                  (foreach lay master-data
+                    (setq master-modified (nth 13 lay))
+                    (if (and master-modified
+                             (LXI:master-newer-p master-modified last-sync))
+                      (setq cnt-newer (1+ cnt-newer))))
+                  (if (> cnt-newer 0)
+                    (princ (strcat "\n  [LayerSync] " (itoa cnt-newer)
+                                   " Layer seit letztem Sync geaendert. "
+                                   "LAYSYNC empfohlen."))))))))))))
 
 
 ;;; ========================================================================
-;;; Initialisierung
+;;; Lazy-Init: Wird beim ersten Befehlsaufruf ausgefuehrt
+;;; Kein VLA, kein Datei-Zugriff, kein Dialog beim Laden
 ;;; ========================================================================
-(vl-load-com)
+(setq *LXI:initialized* nil)
+
+(defun LXI:ensure-init ( / )
+  (if (null *LXI:initialized*)
+    (progn
+      (vl-load-com)
+      (LXI:read-config)
+      (if (not (findfile (LXI:get-config-path)))
+        (progn (LXI:ensure-directory *LXI:base-path*) (LXI:write-config)))
+      (LXI:log-init)
+      (if *LXI:autosync* (LXI:reactor-enable))
+      (if *LXI:notify* (LXI:check-on-open))
+      (setq *LXI:initialized* T)
+      (LXI:debug-print "Initialisierung abgeschlossen"))))
+
+
+;;; ========================================================================
+;;; Initialisierung (nur Minimum beim Laden)
+;;; ========================================================================
 (LXI:read-config)
-(if (not (findfile (LXI:get-config-path)))
-  (progn (LXI:ensure-directory *LXI:base-path*) (LXI:write-config)))
-(LXI:log-init)
-;; Reactor
-(if *LXI:autosync* (LXI:reactor-enable))
-(princ "\nLayerExportImport.lsp v2.2.0 geladen.")
+(princ "\nLayerExportImport.lsp v2.3.1 geladen.")
 (princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG | LAYDIFF | LAYCOUNT")
-(princ (strcat "\nPraefix: " *LXI:prefix* "* | Speicherort: " *LXI:base-path*))
-(if *LXI:autosync* (princ "\nAutoSync: ON (sync bei Speichern)"))
-(if *LXI:notify* (princ "\nNotification: ON"))
-;; Notification beim Laden
-(LXI:check-on-open)
 (princ)
