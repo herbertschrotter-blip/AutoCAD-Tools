@@ -3,7 +3,7 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System | Custom Property GUID | ObjectDBX Batch-Sync
 ;;; 
-;;; Version: 2.0.0
+;;; Version: 2.0.1
 ;;; Datum:   2026-03-10
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -28,6 +28,7 @@
 ;;;   LayerHistory.csv - MasterID;LayerName;Datum;Aktion;Detail;Source
 ;;;   LayerSyncLog.csv - Letzter Sync-Zeitpunkt pro DWG (3 Felder)
 ;;;   LayerSync.cfg    - Konfiguration
+;;;   LayerSync.log    - Debug-Log (pro Session neu)
 ;;; ========================================================================
 
 
@@ -78,7 +79,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v2.0.0" fp)
+    (write-line ";;; LayerSync Konfiguration v2.0.1" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -112,10 +113,32 @@
   (reverse result))
 
 (defun LXI:debug-print (msg / )
-  (if *LXI:debug* (princ (strcat "\n  [DBG] " msg))))
+  (if *LXI:debug* (princ (strcat "\n  [DBG] " msg)))
+  (LXI:log-write msg))
 
 (defun LXI:timestamp ( / ) (menucmd "M=$(edtime,0,YYYY-MO-DD HH:MM)"))
 
+(defun LXI:timestamp-sec ( / ) (menucmd "M=$(edtime,0,YYYY-MO-DD HH:MM:SS)"))
+
+;;; Log-Datei: Wird bei APPLOAD neu erstellt, danach append
+(defun LXI:log-init ( / filepath fp)
+  (setq filepath (strcat *LXI:base-path* "\\LayerSync.log"))
+  (setq fp (open filepath "w"))
+  (if fp (progn
+    (write-line (strcat "=== LayerSync Log - " (LXI:timestamp-sec) " ===") fp)
+    (write-line (strcat "Version: 2.0.1") fp)
+    (write-line (strcat "DWG: " (vl-filename-base (getvar "DWGNAME")) ".dwg") fp)
+    (write-line "" fp)
+    (close fp))))
+
+(defun LXI:log-write (msg / filepath fp)
+  (if (and *LXI:base-path* (vl-file-directory-p *LXI:base-path*))
+    (progn
+      (setq filepath (strcat *LXI:base-path* "\\LayerSync.log"))
+      (setq fp (open filepath "a"))
+      (if fp (progn
+        (write-line (strcat "[" (LXI:timestamp-sec) "] " msg) fp)
+        (close fp))))))
 (defun LXI:dwg-name ( / )
   (strcat (vl-filename-base (getvar "DWGNAME")) ".dwg"))
 
@@ -1692,6 +1715,7 @@
   (setq old-cmdecho (getvar "CMDECHO"))
   (setvar "CMDECHO" 0)
   (setq current-dwg (LXI:dwg-name))
+  (LXI:log-write (strcat "=== LAYSYNCALL gestartet von: " current-dwg " ==="))
   
   (princ "\n\n========================================")
   (princ "\n  LAYSYNCALL - Batch-Synchronisation")
@@ -1862,6 +1886,7 @@
     (princ))
   (setq old-cmdecho (getvar "CMDECHO"))
   (setvar "CMDECHO" 0)
+  (LXI:log-write (strcat "=== LAYSYNC gestartet: " (LXI:dwg-name) " ==="))
   (princ "\n")
   (princ "\n========================================")
   (princ (strcat "\n  LAYSYNC: " (LXI:dwg-name)))
@@ -1900,6 +1925,7 @@
     (princ))
   (setq old-cmdecho (getvar "CMDECHO"))
   (setvar "CMDECHO" 0)
+  (LXI:log-write (strcat "=== LAYEXP gestartet: " (LXI:dwg-name) " ==="))
   (LXI:do-export)
   (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
   (princ))
@@ -1916,6 +1942,7 @@
     (princ))
   (setq old-cmdecho (getvar "CMDECHO"))
   (setvar "CMDECHO" 0)
+  (LXI:log-write (strcat "=== LAYIMP gestartet: " (LXI:dwg-name) " ==="))
   (LXI:do-import)
   (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
   (princ))
@@ -2114,7 +2141,8 @@
 (LXI:read-config)
 (if (not (findfile (LXI:get-config-path)))
   (progn (LXI:ensure-directory *LXI:base-path*) (LXI:write-config)))
-(princ "\nLayerExportImport.lsp v2.0.0 geladen.")
+(LXI:log-init)
+(princ "\nLayerExportImport.lsp v2.0.1 geladen.")
 (princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG")
 (princ (strcat "\nPraefix: " *LXI:prefix* "* | Speicherort: " *LXI:base-path*))
 (princ)
