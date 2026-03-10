@@ -3,7 +3,7 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System | Custom Property GUID | ObjectDBX Batch-Sync
 ;;; 
-;;; Version: 2.0.1
+;;; Version: 2.0.2
 ;;; Datum:   2026-03-10
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -79,7 +79,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v2.0.1" fp)
+    (write-line ";;; LayerSync Konfiguration v2.0.2" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -126,7 +126,7 @@
   (setq fp (open filepath "w"))
   (if fp (progn
     (write-line (strcat "=== LayerSync Log - " (LXI:timestamp-sec) " ===") fp)
-    (write-line (strcat "Version: 2.0.1") fp)
+    (write-line (strcat "Version: 2.0.2") fp)
     (write-line (strcat "DWG: " (vl-filename-base (getvar "DWGNAME")) ".dwg") fp)
     (write-line "" fp)
     (close fp))))
@@ -139,6 +139,7 @@
       (if fp (progn
         (write-line (strcat "[" (LXI:timestamp-sec) "] " msg) fp)
         (close fp))))))
+
 (defun LXI:dwg-name ( / )
   (strcat (vl-filename-base (getvar "DWGNAME")) ".dwg"))
 
@@ -230,7 +231,7 @@
 
 
 ;;; ========================================================================
-;;; MASTER (.csv) - 11 Felder
+;;; MASTER (.csv) - 14 Felder
 ;;; MasterID;Name;Color;Linetype;Lineweight;Plot;OnOff;Freeze;Lock;VPDefault;Description;Transparency;Source;LastModified
 ;;; Index: 0  1    2     3        4         5    6      7     8    9         10          11           12     13
 ;;; ========================================================================
@@ -589,6 +590,9 @@
       nil  ;; Kein Master-Timestamp -> kein Konflikt
       ;; String-Vergleich funktioniert weil Format "YYYY-MO-DD HH:MM"
       (> (strcase master-modified) (strcase last-sync)))))
+
+;;; ========================================================================
+;;; LAYER SAMMELN (VLA-basiert, aktuelle Zeichnung)
 ;;; Rueckgabe: Sortierte Liste von Layer-Property-Listen (12 Werte)
 ;;; Index: 0=Name 1=Color 2=Linetype 3=Lineweight 4=OnOff 5=Freeze
 ;;;        6=Lock 7=Plot 8=VPDefault 9=Description 10=Transparency 11=Handle
@@ -1019,7 +1023,7 @@
                          lay lay-name handle mid old-name
                          existing-master change-details detail
                          timestamp history-entries new-mid
-                         master-modified master-source exp-choice
+                         master-modified master-source exp-choice skip-layer
                          cnt-new cnt-upd cnt-ren cnt-conflict)
   (setq dwg (LXI:dwg-name))
   (setq guid (LXI:dwg-guid))
@@ -1073,6 +1077,7 @@
                   ;; Konflikterkennung
                   (setq master-modified (nth 13 existing-master))
                   (setq master-source (nth 12 existing-master))
+                  (setq skip-layer nil)
                   
                   (if (and (LXI:master-newer-p master-modified last-sync)
                            (/= (strcase master-source) (strcase dwg)))
@@ -1097,22 +1102,16 @@
                       (if (or (= exp-choice "Behalten") (= exp-choice "AlleBehalten"))
                         (progn
                           (setq cnt-conflict (1+ cnt-conflict))
+                          (setq skip-layer T)
                           (if (= exp-choice "Behalten") (setq exp-choice nil)))
                         ;; Ueberschreiben
                         (progn
-                          (if (= exp-choice "Ueberschreiben") (setq exp-choice nil))
-                          ;; Faellt durch zum normalen Export unten
-                        )))
-                    ;; Kein Konflikt oder selbst geaendert
-                  )
+                          (if (= exp-choice "Ueberschreiben") (setq exp-choice nil))))))
                   
-                  ;; Normal exportieren (wenn kein Konflikt-Behalten)
-                  (if (or (null last-sync)
-                          (not (LXI:master-newer-p master-modified last-sync))
-                          (= (strcase master-source) (strcase dwg))
-                          (= exp-choice "AlleUeber"))
+                  ;; Normal exportieren (wenn nicht uebersprungen)
+                  (if (null skip-layer)
                     (progn
-                      ;; Aenderungen pruefen
+                      ;; Aenderungen pruefen (alle 10 Properties)
                       (setq change-details nil)
                       (setq detail (LXI:compare-field (nth 2 existing-master) (nth 1 lay)))
                       (if detail (setq change-details (cons (strcat "Farbe:" detail) change-details)))
@@ -1124,10 +1123,20 @@
                                 change-details)))
                       (setq detail (LXI:compare-field (nth 4 existing-master) (nth 3 lay)))
                       (if detail (setq change-details (cons (strcat "LStaerke:" detail) change-details)))
-                      (setq detail (LXI:compare-field (nth 6 existing-master) (nth 4 lay)))
-                      (if detail (setq change-details (cons (strcat "OnOff:" detail) change-details)))
                       (setq detail (LXI:compare-field (nth 5 existing-master) (nth 7 lay)))
                       (if detail (setq change-details (cons (strcat "Plot:" detail) change-details)))
+                      (setq detail (LXI:compare-field (nth 6 existing-master) (nth 4 lay)))
+                      (if detail (setq change-details (cons (strcat "OnOff:" detail) change-details)))
+                      (setq detail (LXI:compare-field (nth 7 existing-master) (nth 5 lay)))
+                      (if detail (setq change-details (cons (strcat "Freeze:" detail) change-details)))
+                      (setq detail (LXI:compare-field (nth 8 existing-master) (nth 6 lay)))
+                      (if detail (setq change-details (cons (strcat "Lock:" detail) change-details)))
+                      (setq detail (LXI:compare-field (nth 9 existing-master) (nth 8 lay)))
+                      (if detail (setq change-details (cons (strcat "VPDef:" detail) change-details)))
+                      (setq detail (LXI:compare-field (nth 10 existing-master) (nth 9 lay)))
+                      (if detail (setq change-details (cons (strcat "Desc:" detail) change-details)))
+                      (setq detail (LXI:compare-field (nth 11 existing-master) (nth 10 lay)))
+                      (if detail (setq change-details (cons (strcat "Trans:" detail) change-details)))
                       (if change-details
                         (progn
                           (setq history-entries
@@ -2142,7 +2151,7 @@
 (if (not (findfile (LXI:get-config-path)))
   (progn (LXI:ensure-directory *LXI:base-path*) (LXI:write-config)))
 (LXI:log-init)
-(princ "\nLayerExportImport.lsp v2.0.1 geladen.")
+(princ "\nLayerExportImport.lsp v2.0.2 geladen.")
 (princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG")
 (princ (strcat "\nPraefix: " *LXI:prefix* "* | Speicherort: " *LXI:base-path*))
 (princ)
