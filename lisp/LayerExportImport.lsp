@@ -3,7 +3,7 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System | Custom Property GUID | ObjectDBX Batch-Sync
 ;;; 
-;;; Version: 1.8.0
+;;; Version: 2.0.0
 ;;; Datum:   2026-03-10
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -24,8 +24,8 @@
 ;;;
 ;;; Dateien im LayerSync-Ordner:
 ;;;   LayerMaster.csv  - Layer-Daten mit MasterID (14 Felder)
-;;;   LayerMapper.csv  - Handle+GUID+Pfad-Zuordnung (6 Felder)
-;;;   LayerHistory.csv - Aenderungsprotokoll (append-only)
+;;;   LayerMapper.csv  - MasterID;LayerName;Handle;DwgName;DwgPath;DwgGUID
+;;;   LayerHistory.csv - MasterID;LayerName;Datum;Aktion;Detail;Source
 ;;;   LayerSyncLog.csv - Letzter Sync-Zeitpunkt pro DWG (3 Felder)
 ;;;   LayerSync.cfg    - Konfiguration
 ;;; ========================================================================
@@ -78,7 +78,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v1.8.0" fp)
+    (write-line ";;; LayerSync Konfiguration v2.0.0" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -285,11 +285,12 @@
 
 
 ;;; ========================================================================
-;;; MAPPER (.csv) - 6 Felder (NEU: DwgPath)
-;;; DwgName;DwgGUID;DwgPath;LayerName;Handle;MasterID
+;;; MAPPER (.csv) - 6 Felder
+;;; MasterID;LayerName;Handle;DwgName;DwgPath;DwgGUID
+;;; Index: 0=MID 1=LayerName 2=Handle 3=DwgName 4=DwgPath 5=DwgGUID
 ;;; ========================================================================
 
-(defun LXI:read-mapper ( / sync-dir filepath fp line fields result)
+(defun LXI:read-mapper ( / sync-dir filepath fp line fields result nf)
   (setq sync-dir (LXI:get-sync-folder))
   (if (null sync-dir) nil
     (progn
@@ -301,24 +302,33 @@
             (progn
               (setq result nil)
               (while (setq line (read-line fp))
-                (if (and (> (strlen line) 0) (/= (substr line 1 7) "DwgName"))
+                (if (and (> (strlen line) 0)
+                         (/= (substr line 1 8) "MasterID")
+                         (/= (substr line 1 7) "DwgName"))
                   (progn
                     (setq fields (LXI:split-string line *LXI:sep*))
+                    (setq nf (length fields))
                     (cond
-                      ;; 6 Felder = aktuelles Format
-                      ((= (length fields) 6)
+                      ;; 6 Felder, erstes = M -> neues v2.0 Format
+                      ((and (= nf 6) (= (substr (nth 0 fields) 1 1) "M"))
                         (setq result (cons fields result)))
-                      ;; 5 Felder = v0.10 Format (ohne Pfad)
-                      ((= (length fields) 5)
+                      ;; 6 Felder, altes v1.x Format: DwgName;DwgGUID;DwgPath;LayerName;Handle;MasterID
+                      ((= nf 6)
                         (setq result
-                          (cons (list (nth 0 fields) (nth 1 fields) ""
-                                      (nth 2 fields) (nth 3 fields) (nth 4 fields))
+                          (cons (list (nth 5 fields) (nth 3 fields) (nth 4 fields)
+                                      (nth 0 fields) (nth 2 fields) (nth 1 fields))
                                 result)))
-                      ;; 4 Felder = altes Format
-                      ((= (length fields) 4)
+                      ;; 5 Felder = v0.10: DwgName;DwgGUID;LayerName;Handle;MasterID
+                      ((= nf 5)
                         (setq result
-                          (cons (list (nth 0 fields) "" ""
-                                      (nth 1 fields) (nth 2 fields) (nth 3 fields))
+                          (cons (list (nth 4 fields) (nth 2 fields) (nth 3 fields)
+                                      (nth 0 fields) "" (nth 1 fields))
+                                result)))
+                      ;; 4 Felder = altes: DwgName;LayerName;Handle;MasterID
+                      ((= nf 4)
+                        (setq result
+                          (cons (list (nth 3 fields) (nth 1 fields) (nth 2 fields)
+                                      (nth 0 fields) "" "")
                                 result)))))))
               (close fp) (reverse result))))))))
 
@@ -331,7 +341,8 @@
       (if (null fp) nil
         (progn
           (write-line
-            (strcat "DwgName" s "DwgGUID" s "DwgPath" s "LayerName" s "Handle" s "MasterID") fp)
+            (strcat "MasterID" s "LayerName" s "Handle" s "DwgName" s "DwgPath" s "DwgGUID") fp)
+          ;; Sortierung: MasterID primaer, DwgName sekundaer
           (setq mapper-data (vl-sort mapper-data
             '(lambda (a b)
               (if (= (car a) (car b))
@@ -343,19 +354,22 @@
                       (nth 3 entry) s (nth 4 entry) s (nth 5 entry)) fp))
           (close fp) T)))))
 
-;;; Mapper-Lookup: GUID + Handle -> MasterID
+;;; Mapper-Lookup: DwgGUID + Handle -> MasterID
+;;; Neues Format: 0=MID 1=LayerName 2=Handle 3=DwgName 4=DwgPath 5=DwgGUID
 (defun LXI:mapper-get-mid (mapper-data guid dwg handle / result)
   (setq result nil)
+  ;; Zuerst GUID + Handle
   (if (and guid (/= guid "") (/= guid "NO-GUID"))
     (foreach entry mapper-data
-      (if (and (= (strcase (nth 1 entry)) (strcase guid))
-               (= (strcase (nth 4 entry)) (strcase handle)))
-        (setq result (nth 5 entry)))))
+      (if (and (= (strcase (nth 5 entry)) (strcase guid))
+               (= (strcase (nth 2 entry)) (strcase handle)))
+        (setq result (nth 0 entry)))))
+  ;; Fallback: DwgName + Handle
   (if (null result)
     (foreach entry mapper-data
-      (if (and (= (strcase (nth 0 entry)) (strcase dwg))
-               (= (strcase (nth 4 entry)) (strcase handle)))
-        (setq result (nth 5 entry)))))
+      (if (and (= (strcase (nth 3 entry)) (strcase dwg))
+               (= (strcase (nth 2 entry)) (strcase handle)))
+        (setq result (nth 0 entry)))))
   result)
 
 ;;; Mapper-Eintraege fuer Zeichnung (GUID oder Name), erkennt Umbenennung
@@ -364,22 +378,22 @@
   (if (and guid (/= guid "") (/= guid "NO-GUID"))
     (setq guid-entries
       (vl-remove-if-not
-        '(lambda (e) (= (strcase (nth 1 e)) (strcase guid)))
+        '(lambda (e) (= (strcase (nth 5 e)) (strcase guid)))
         mapper-data)))
   (if guid-entries
     (progn
-      (setq old-name (nth 0 (car guid-entries)))
+      (setq old-name (nth 3 (car guid-entries)))
       (if (/= (strcase old-name) (strcase dwg))
         (progn
           (princ (strcat "\n  DWG umbenannt: " old-name " -> " dwg))
           (setq guid-entries
             (mapcar
               '(lambda (e)
-                (list dwg (nth 1 e) (nth 2 e) (nth 3 e) (nth 4 e) (nth 5 e)))
+                (list (nth 0 e) (nth 1 e) (nth 2 e) dwg (nth 4 e) (nth 5 e)))
               guid-entries))))
       guid-entries)
     (vl-remove-if-not
-      '(lambda (e) (= (strcase (car e)) (strcase dwg)))
+      '(lambda (e) (= (strcase (nth 3 e)) (strcase dwg)))
       mapper-data)))
 
 ;;; Entfernt Eintraege (GUID und Name)
@@ -387,8 +401,8 @@
   (vl-remove-if
     '(lambda (entry)
       (or (and guid (/= guid "") (/= guid "NO-GUID")
-               (= (strcase (nth 1 entry)) (strcase guid)))
-          (= (strcase (car entry)) (strcase dwg))))
+               (= (strcase (nth 5 entry)) (strcase guid)))
+          (= (strcase (nth 3 entry)) (strcase dwg))))
     mapper-data))
 
 ;;; Gibt eindeutige Zeichnungen aus Mapper zurueck
@@ -396,10 +410,9 @@
 (defun LXI:mapper-get-dwg-list (mapper-data / result dwg-name dwg-guid dwg-path found)
   (setq result nil)
   (foreach entry mapper-data
-    (setq dwg-name (nth 0 entry)
-          dwg-guid (nth 1 entry)
-          dwg-path (nth 2 entry))
-    ;; Pruefen ob schon in Liste (nach Name)
+    (setq dwg-name (nth 3 entry)
+          dwg-guid (nth 5 entry)
+          dwg-path (nth 4 entry))
     (setq found nil)
     (foreach r result
       (if (= (strcase (car r)) (strcase dwg-name))
@@ -411,6 +424,8 @@
 
 ;;; ========================================================================
 ;;; HISTORY (.csv) - APPEND ONLY - 6 Felder
+;;; MasterID;LayerName;Datum;Aktion;Detail;Source
+;;; Index: 0=MID 1=LayerName 2=Datum 3=Aktion 4=Detail 5=Source
 ;;; ========================================================================
 
 (defun LXI:append-history (entries / sync-dir filepath fp entry s needs-header)
@@ -423,13 +438,13 @@
       (if (null fp) nil
         (progn
           (if needs-header
-            (write-line (strcat "Datum" s "Aktion" s "LayerName" s "Detail" s "Source" s "MasterID") fp))
+            (write-line (strcat "MasterID" s "LayerName" s "Datum" s "Aktion" s "Detail" s "Source") fp))
           (foreach entry entries
             (write-line (strcat (nth 0 entry) s (nth 1 entry) s (nth 2 entry) s
                                 (nth 3 entry) s (nth 4 entry) s (nth 5 entry)) fp))
           (close fp) T)))))
 
-(defun LXI:read-history ( / sync-dir filepath fp line fields result)
+(defun LXI:read-history ( / sync-dir filepath fp line fields result nf)
   (setq sync-dir (LXI:get-sync-folder))
   (if (null sync-dir) nil
     (progn
@@ -441,11 +456,22 @@
             (progn
               (setq result nil)
               (while (setq line (read-line fp))
-                (if (and (> (strlen line) 0) (/= (substr line 1 5) "Datum"))
+                (if (and (> (strlen line) 0)
+                         (/= (substr line 1 8) "MasterID")
+                         (/= (substr line 1 5) "Datum"))
                   (progn
                     (setq fields (LXI:split-string line *LXI:sep*))
-                    (if (= (length fields) 6)
-                      (setq result (cons fields result))))))
+                    (setq nf (length fields))
+                    (cond
+                      ;; 6 Felder, erstes = M -> neues v2.0 Format
+                      ((and (= nf 6) (= (substr (nth 0 fields) 1 1) "M"))
+                        (setq result (cons fields result)))
+                      ;; 6 Felder altes Format: Datum;Aktion;LayerName;Detail;Source;MasterID
+                      ((= nf 6)
+                        (setq result
+                          (cons (list (nth 5 fields) (nth 2 fields) (nth 0 fields)
+                                      (nth 1 fields) (nth 3 fields) (nth 4 fields))
+                                result)))))))
               (close fp) (reverse result))))))))
 
 
@@ -1016,8 +1042,8 @@
                     (progn
                       (princ (strcat "\n  > Umbenennung: " old-name " -> " lay-name))
                       (setq history-entries
-                        (cons (list timestamp "UMBENENNUNG" lay-name
-                                    (strcat old-name "->" lay-name) dwg mid)
+                        (cons (list mid lay-name timestamp "UMBENENNUNG"
+                                    (strcat old-name "->" lay-name) dwg)
                               history-entries))
                       (setq cnt-ren (1+ cnt-ren))))
                   
@@ -1082,10 +1108,10 @@
                       (if change-details
                         (progn
                           (setq history-entries
-                            (cons (list timestamp "AENDERUNG" lay-name
+                            (cons (list mid lay-name timestamp "AENDERUNG"
                                         (apply 'strcat (mapcar '(lambda (d) (strcat d " "))
                                                                (reverse change-details)))
-                                        dwg mid) history-entries))
+                                        dwg) history-entries))
                           (setq cnt-upd (1+ cnt-upd))))
                       ;; Master aktualisieren (14 Felder)
                       (setq master-data (LXI:remove-by-id master-data mid))
@@ -1126,7 +1152,7 @@
                             dwg timestamp)
                       master-data))
               (setq history-entries
-                (cons (list timestamp "NEU" lay-name "" dwg new-mid) history-entries))
+                (cons (list new-mid lay-name timestamp "NEU" "" dwg) history-entries))
               (setq cnt-new (1+ cnt-new))))))
       
       ;; Mapper (Handle = Index 11)
@@ -1135,7 +1161,7 @@
         (setq lay-name (nth 0 lay) handle (nth 11 lay))
         (setq mid (car (LXI:find-by-name master-data lay-name)))
         (if mid (setq mapper-data
-          (cons (list dwg guid dwg-path lay-name handle mid) mapper-data))))
+          (cons (list mid lay-name handle dwg dwg-path guid) mapper-data))))
       
       ;; Schreiben + SyncLog
       (if (and (LXI:write-master master-data) (LXI:write-mapper mapper-data))
@@ -1196,13 +1222,13 @@
         (LXI:debug-print (strcat "Import: " master-name " [" mid "]"))
         (setq mapped-entry nil)
         (foreach e dwg-mapper
-          (if (= (strcase (nth 5 e)) (strcase mid)) (setq mapped-entry e)))
+          (if (= (strcase (nth 0 e)) (strcase mid)) (setq mapped-entry e)))
         (cond
           ;; FALL A: Im Mapper
           (mapped-entry
             (progn
-              (setq mapped-handle (nth 4 mapped-entry)
-                    mapped-name (nth 3 mapped-entry))
+              (setq mapped-handle (nth 2 mapped-entry)
+                    mapped-name (nth 1 mapped-entry))
               (setq local-name (LXI:find-local-by-handle mapped-handle))
               (cond
                 (local-name
@@ -1314,7 +1340,7 @@
             (setq handle (vla-get-Handle lay-obj))
             (setq mid (car (LXI:find-by-name master-data lay-name)))
             (if mid (setq new-mapper
-              (cons (list dwg guid dwg-path lay-name handle mid) new-mapper))))))
+              (cons (list mid lay-name handle dwg dwg-path guid) new-mapper))))))
       (setq mapper-data (append mapper-data new-mapper))
       (LXI:write-mapper mapper-data)
       ;; SyncLog aktualisieren
@@ -1549,7 +1575,7 @@
         (setq mid (car (LXI:find-by-name master-data lay-name)))
         (if mid
           (setq new-entries
-            (cons (list dwg-name dwg-guid dwg-path lay-name handle mid)
+            (cons (list mid lay-name handle dwg-name dwg-path dwg-guid)
                   new-entries))))))
   (append mapper-data new-entries))
 
@@ -1643,7 +1669,7 @@
         (setq mid (car (LXI:find-by-name master-data lay-name)))
         (if mid
           (setq new-entries
-            (cons (list dwg-name dwg-guid dwg-path lay-name handle mid)
+            (cons (list mid lay-name handle dwg-name dwg-path dwg-guid)
                   new-entries))))))
   (append mapper-data new-entries))
 
@@ -1924,10 +1950,10 @@
             (princ "\n-----------------------------------------------------------------------------")
             (repeat count
               (setq entry (car results))
-              (princ (strcat "\n" (nth 0 entry) "  "
-                (LXI:pad-str (nth 1 entry) 13)
-                (LXI:pad-str (nth 2 entry) 25)
-                (LXI:pad-str (nth 4 entry) 16) (nth 3 entry)))
+              (princ (strcat "\n" (LXI:pad-str (nth 2 entry) 19)
+                (LXI:pad-str (nth 3 entry) 13)
+                (LXI:pad-str (nth 1 entry) 25)
+                (LXI:pad-str (nth 5 entry) 16) (nth 4 entry)))
               (setq results (cdr results)))
             (princ "\n")))
         ((= choice "Layer")
@@ -1946,7 +1972,7 @@
                   (progn
                     (setq results
                       (vl-remove-if-not
-                        '(lambda (e) (= (strcase (nth 5 e)) (strcase filter-mid)))
+                        '(lambda (e) (= (strcase (nth 0 e)) (strcase filter-mid)))
                         history))
                     (if results
                       (progn
@@ -1954,10 +1980,10 @@
                         (princ "\nDatum              Aktion        Layer                    Quelle          Detail")
                         (princ "\n-----------------------------------------------------------------------------")
                         (foreach entry results
-                          (princ (strcat "\n" (nth 0 entry) "  "
-                            (LXI:pad-str (nth 1 entry) 13)
-                            (LXI:pad-str (nth 2 entry) 25)
-                            (LXI:pad-str (nth 4 entry) 16) (nth 3 entry))))
+                          (princ (strcat "\n" (LXI:pad-str (nth 2 entry) 19)
+                            (LXI:pad-str (nth 3 entry) 13)
+                            (LXI:pad-str (nth 1 entry) 25)
+                            (LXI:pad-str (nth 5 entry) 16) (nth 4 entry))))
                         (princ "\n"))
                       (princ "\n*** Keine History.")))
                   (princ (strcat "\n*** \"" filter-name "\" nicht gefunden."))))
@@ -1969,8 +1995,8 @@
 ;;; ========================================================================
 ;;; Hauptbefehl: LAYSTATUS
 ;;; ========================================================================
-(defun c:LAYSTATUS ( / *error* old-cmdecho master-data mapper-data
-                       dwg-list dwg-entry dwg-name dwg-guid dwg-path
+(defun c:LAYSTATUS ( / *error* old-cmdecho master-data mapper-data synclog-data
+                       dwg-list dwg-entry dwg-name dwg-guid dwg-path last-sync
                        total-master master-ids dwg-mids dwg-count dwg-missing mid)
   (defun *error* (msg)
     (if (not (wcmatch (strcase msg T) "*cancel*,*quit*"))
@@ -1979,7 +2005,9 @@
     (princ))
   (setq old-cmdecho (getvar "CMDECHO"))
   (setvar "CMDECHO" 0)
-  (setq master-data (LXI:read-master) mapper-data (LXI:read-mapper))
+  (setq master-data (LXI:read-master)
+        mapper-data (LXI:read-mapper)
+        synclog-data (LXI:read-synclog))
   (if (null master-data)
     (princ "\n*** Kein Master.")
     (progn
@@ -1990,29 +2018,42 @@
         (progn
           (setq dwg-list (LXI:mapper-get-dwg-list mapper-data))
           (princ "\n\n====== LayerSync Status ======")
-          (princ (strcat "\nMaster: " (itoa total-master) " Layer | Praefix: " *LXI:prefix* "*"))
-          (princ (strcat "\n" (LXI:pad-str "Zeichnung" 30) (LXI:pad-str "Layer" 8)
-                         (LXI:pad-str "Fehlend" 10) "Pfad"))
-          (princ (strcat "\n" (LXI:pad-str "------------------------------" 30)
-                         (LXI:pad-str "--------" 8) (LXI:pad-str "----------" 10)
+          (princ (strcat "\nMaster: " (itoa total-master)
+                         " Layer | Praefix: " *LXI:prefix* "*"))
+          (princ (strcat "\nProperties: Farbe, Linientyp, Linienstaerke, Plot, OnOff,"))
+          (princ "\n            Freeze, Lock, VP-Default, Beschreibung, Transparenz")
+          (princ (strcat "\n" (LXI:pad-str "Zeichnung" 28)
+                         (LXI:pad-str "Layer" 7)
+                         (LXI:pad-str "Fehlend" 10)
+                         (LXI:pad-str "Letzter Sync" 20)))
+          (princ (strcat "\n" (LXI:pad-str "----------------------------" 28)
+                         (LXI:pad-str "-------" 7)
+                         (LXI:pad-str "----------" 10)
                          "--------------------"))
           (foreach dwg-entry dwg-list
-            (setq dwg-name (nth 0 dwg-entry) dwg-guid (nth 1 dwg-entry)
+            (setq dwg-name (nth 0 dwg-entry)
+                  dwg-guid (nth 1 dwg-entry)
                   dwg-path (nth 2 dwg-entry))
             (setq dwg-mids nil)
             (foreach entry mapper-data
-              (if (= (strcase (nth 0 entry)) (strcase dwg-name))
-                (setq dwg-mids (cons (nth 5 entry) dwg-mids))))
+              (if (= (strcase (nth 3 entry)) (strcase dwg-name))
+                (setq dwg-mids (cons (nth 0 entry) dwg-mids))))
             (setq dwg-count (length dwg-mids) dwg-missing 0)
             (foreach mid master-ids
-              (if (not (member mid dwg-mids)) (setq dwg-missing (1+ dwg-missing))))
-            (princ (strcat "\n" (LXI:pad-str dwg-name 30)
-                           (LXI:pad-str (itoa dwg-count) 8)
-                           (LXI:pad-str (if (= dwg-missing 0) "OK"
-                                          (strcat (itoa dwg-missing) " fehlen")) 10)
-                           (if (and dwg-path (/= dwg-path ""))
-                             (substr dwg-path 1 (min 40 (strlen dwg-path)))
-                             "KEIN PFAD"))))
+              (if (not (member mid dwg-mids))
+                (setq dwg-missing (1+ dwg-missing))))
+            ;; LastSync aus SyncLog
+            (setq last-sync
+              (if synclog-data
+                (LXI:get-last-sync synclog-data dwg-guid dwg-name)
+                nil))
+            (princ (strcat "\n"
+              (LXI:pad-str dwg-name 28)
+              (LXI:pad-str (itoa dwg-count) 7)
+              (LXI:pad-str
+                (if (= dwg-missing 0) "OK"
+                  (strcat (itoa dwg-missing) " fehlen")) 10)
+              (if last-sync last-sync "nie"))))
           (princ (strcat "\n\n  * Aktuell: " (LXI:dwg-name)))
           (princ "\n=============================="))
         (progn
@@ -2073,7 +2114,7 @@
 (LXI:read-config)
 (if (not (findfile (LXI:get-config-path)))
   (progn (LXI:ensure-directory *LXI:base-path*) (LXI:write-config)))
-(princ "\nLayerExportImport.lsp v1.8.0 geladen.")
+(princ "\nLayerExportImport.lsp v2.0.0 geladen.")
 (princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG")
 (princ (strcat "\nPraefix: " *LXI:prefix* "* | Speicherort: " *LXI:base-path*))
 (princ)
