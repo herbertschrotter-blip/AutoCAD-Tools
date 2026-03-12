@@ -2,7 +2,7 @@
 ;;; BgColor.lsp
 ;;; Hintergrundfarbe per Toggle umschalten
 ;;;
-;;; Version: 1.2.0
+;;; Version: 1.6.0
 ;;; Datum:   2026-03-12
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -12,48 +12,63 @@
 ;;; Befehle:
 ;;;   BGCOLOR  - Wechselt Hintergrund (Toggle) oder [E]instellungen
 ;;;
+;;; Aenderungen v1.6.0:
+;;;   - Komplett ueberarbeitet nach JTB World / Autodesk Community Pattern
+;;;   - vlax-variant-change-type zum Lesen (Variant Type 19 -> Long)
+;;;   - Plain Integer zum Schreiben (kein vlax-make-variant noetig)
+;;;   - Erkennt Model/Layout via TILEMODE
+;;;   - Vergleicht aktuelle OLE-Farbe direkt als Integer
+;;;
 ;;; Technische Details:
-;;;   Setzt Hintergrund via VLA Preferences-Objekt:
-;;;   - vla-put-GraphicsWinModelBackgrndColor   (Modellbereich)
-;;;   - vla-put-GraphicsWinLayoutBackgrndColor  (Layout/Paper Space)
-;;;   - vla-put-BlockEditorBackgrndColor        (Blockeditor)
-;;;   Toggle-Status wird intern als Flag gehalten (*BGC:state*)
+;;;   Model-Tab  : TILEMODE = 1 -> GraphicsWinModelBackgrndColor
+;;;   Layout-Tab : TILEMODE = 0 -> GraphicsWinLayoutBackgrndColor
+;;;   OLE-Color  : BGR-Integer (B*65536 + G*256 + R)
 ;;; ============================================================
 
 (vl-load-com)
 
 ;;; ============================================================
-;;; Globale Variablen
-;;; *BGC:color-a* / *BGC:color-b* = (R G B) als Liste
-;;; *BGC:state*   = :a oder :b (zuletzt gesetzt)
+;;; Globale Variablen - nur setzen wenn noch nil (Session-persistent)
 ;;; ============================================================
-(if (not *BGC:color-a*) (setq *BGC:color-a* '(43 43 43)))     ; Dunkel
-(if (not *BGC:color-b*) (setq *BGC:color-b* '(255 255 255)))  ; Hell
-(if (not *BGC:state*)   (setq *BGC:state* :b))                 ; Start: B -> erster Toggle -> A
+(if (not *BGC:color-a*) (setq *BGC:color-a* '(43 43 43)))       ; Dunkel
+(if (not *BGC:color-b*) (setq *BGC:color-b* '(255 255 255)))    ; Hell
 
 ;;; ============================================================
 ;;; Hilfsfunktionen
 ;;; ============================================================
 
-;; RGB-Liste -> TrueColor-Integer fuer VLA
-;; VLA erwartet: B*65536 + G*256 + R  (BGR-Reihenfolge)
-(defun BGC:rgb-to-int (rgb)
+;; Display-Objekt holen (einmal pro Aufruf)
+(defun BGC:get-display ( / )
+  (vla-get-display
+    (vla-get-preferences
+      (vlax-get-acad-object)))
+)
+
+;; RGB-Liste -> OLE-Color Integer (BGR: B*65536 + G*256 + R)
+(defun BGC:rgb->ole (rgb)
   (+ (* (caddr rgb) 65536)
-     (* (cadr rgb) 256)
+     (* (cadr  rgb) 256)
      (car rgb))
 )
 
+;; OLE-Color Integer -> RGB-Liste
+(defun BGC:ole->rgb (c / )
+  (list (rem c 256)
+        (rem (/ c 256) 256)
+        (/ c 65536))
+)
+
 ;; RGB-Liste -> "R,G,B" String
-(defun BGC:rgb-to-str (rgb)
+(defun BGC:rgb->str (rgb)
   (strcat (itoa (car rgb)) ","
           (itoa (cadr rgb)) ","
           (itoa (caddr rgb)))
 )
 
-;; "R,G,B" String -> RGB-Liste (nil bei Fehler)
-(defun BGC:str-to-rgb (s / parts r g b)
+;; "R,G,B" String -> RGB-Liste, nil bei ungueltigem Format
+(defun BGC:str->rgb (s / parts r g b)
   (setq parts (BGC:split-csv s))
-  (if (and parts (= (length parts) 3))
+  (if (= (length parts) 3)
     (progn
       (setq r (atoi (car parts))
             g (atoi (cadr parts))
@@ -69,36 +84,50 @@
   )
 )
 
-;; Einfacher CSV-Splitter fuer "R,G,B"
+;; String an Kommas splitten
 (defun BGC:split-csv (s / result cur i ch)
   (setq result '() cur "" i 0)
   (while (< i (strlen s))
     (setq i (1+ i) ch (substr s i 1))
     (if (= ch ",")
-      (progn (setq result (append result (list cur)) cur ""))
+      (progn (setq result (append result (list cur))) (setq cur ""))
       (setq cur (strcat cur ch))
     )
   )
   (append result (list cur))
 )
 
-;; Alle 3 Bereiche via VLA Preferences setzen
-(defun BGC:set-all (rgb / acad prefs disp color-int)
-  (setq color-int (BGC:rgb-to-int rgb))
-  (setq acad  (vlax-get-acad-object))
-  (setq prefs (vla-get-preferences acad))
-  (setq disp  (vla-get-display prefs))
-  (vl-catch-all-apply 'vla-put-GraphicsWinModelBackgrndColor
-    (list disp color-int))
-  (vl-catch-all-apply 'vla-put-GraphicsWinLayoutBackgrndColor
-    (list disp color-int))
-  (vl-catch-all-apply 'vla-put-BlockEditorBackgrndColor
-    (list disp color-int))
+;; Aktuelle Hintergrundfarbe als OLE-Integer lesen
+;; Community-Pattern: vlax-variant-change-type -> vlax-vbLong
+(defun BGC:get-current-ole ( / disp raw)
+  (setq disp (BGC:get-display))
+  (if (= (getvar "TILEMODE") 1)
+    (setq raw (vla-get-GraphicsWinModelBackgrndColor disp))
+    (setq raw (vla-get-GraphicsWinLayoutBackgrndColor disp))
+  )
+  (vlax-variant-value
+    (vlax-variant-change-type raw vlax-vbLong))
+)
+
+;; Hintergrundfarbe setzen (nur aktiver Bereich)
+;; Community-Pattern: vla-put akzeptiert plain Integer
+(defun BGC:set-current-ole (ole-int / disp)
+  (setq disp (BGC:get-display))
+  (if (= (getvar "TILEMODE") 1)
+    (vla-put-GraphicsWinModelBackgrndColor  disp ole-int)
+    (vla-put-GraphicsWinLayoutBackgrndColor disp ole-int)
+  )
+)
+
+;; Bereich-Name fuer Ausgabe
+(defun BGC:space-name ( / )
+  (if (= (getvar "TILEMODE") 1) "Model" "Layout")
 )
 
 ;;; ============================================================
 ;;; DCL Einstellungen-Dialog
 ;;; ============================================================
+
 (defun BGC:write-dcl (filepath / f)
   (setq f (open filepath "w"))
   (write-line "bgcolor_settings : dialog {" f)
@@ -109,13 +138,13 @@
   (write-line "    : text { label = \"Farbe A:\"; width = 9; fixed_width = true; }" f)
   (write-line "    : edit_box { key = \"edit_a\"; width = 16; fixed_width = true; }" f)
   (write-line "  }" f)
-  (write-line "  : text { key = \"preview_a\"; label = \"Farbe A (Dunkel): -\"; }" f)
+  (write-line "  : text { key = \"preview_a\"; label = \"Farbe A: -\"; }" f)
   (write-line "  spacer;" f)
   (write-line "  : row {" f)
   (write-line "    : text { label = \"Farbe B:\"; width = 9; fixed_width = true; }" f)
   (write-line "    : edit_box { key = \"edit_b\"; width = 16; fixed_width = true; }" f)
   (write-line "  }" f)
-  (write-line "  : text { key = \"preview_b\"; label = \"Farbe B (Hell):   -\"; }" f)
+  (write-line "  : text { key = \"preview_b\"; label = \"Farbe B: -\"; }" f)
   (write-line "  spacer;" f)
   (write-line "  : row {" f)
   (write-line "    : button { key = \"btn_save\";   label = \"Speichern\";  is_default = true;  width = 12; fixed_width = true; }" f)
@@ -139,16 +168,19 @@
       (exit)
     )
   )
-  (setq str-a (BGC:rgb-to-str *BGC:color-a*)
-        str-b (BGC:rgb-to-str *BGC:color-b*))
+  ;; Aktuelle Werte setzen
+  (setq str-a (BGC:rgb->str *BGC:color-a*)
+        str-b (BGC:rgb->str *BGC:color-b*))
   (set_tile "edit_a" str-a)
   (set_tile "edit_b" str-b)
-  (set_tile "preview_a" (strcat "Farbe A (Dunkel): " str-a))
-  (set_tile "preview_b" (strcat "Farbe B (Hell):   " str-b))
+  (set_tile "preview_a" (strcat "Farbe A: " str-a))
+  (set_tile "preview_b" (strcat "Farbe B: " str-b))
+  ;; Live-Vorschau
   (action_tile "edit_a"
-    "(set_tile \"preview_a\" (strcat \"Farbe A (Dunkel): \" $value))")
+    "(set_tile \"preview_a\" (strcat \"Farbe A: \" $value))")
   (action_tile "edit_b"
-    "(set_tile \"preview_b\" (strcat \"Farbe B (Hell):   \" $value))")
+    "(set_tile \"preview_b\" (strcat \"Farbe B: \" $value))")
+  ;; Werte VOR done_dialog sichern
   (action_tile "btn_save"
     "(setq str-a (get_tile \"edit_a\") str-b (get_tile \"edit_b\")) (done_dialog 1)")
   (action_tile "btn_cancel"
@@ -156,21 +188,22 @@
   (setq result (start_dialog))
   (unload_dialog dcl-id)
   (vl-catch-all-apply 'vl-file-delete (list dcl-file))
+  ;; Auswertung
   (if (= result 1)
     (progn
-      (setq new-a (BGC:str-to-rgb str-a)
-            new-b (BGC:str-to-rgb str-b))
+      (setq new-a (BGC:str->rgb str-a)
+            new-b (BGC:str->rgb str-b))
       (cond
         ((not new-a)
-         (princ (strcat "\n[BgColor] Ungueltige Farbe A: '" str-a "'")))
+         (princ (strcat "\n[BgColor] Ungueltige Farbe A: '" str-a "' - Format: R,G,B")))
         ((not new-b)
-         (princ (strcat "\n[BgColor] Ungueltige Farbe B: '" str-b "'")))
+         (princ (strcat "\n[BgColor] Ungueltige Farbe B: '" str-b "' - Format: R,G,B")))
         (T
          (setq *BGC:color-a* new-a
                *BGC:color-b* new-b)
-         (princ (strcat "\n[BgColor] Gespeichert -> A: ("
-                        (BGC:rgb-to-str *BGC:color-a*) ")  B: ("
-                        (BGC:rgb-to-str *BGC:color-b*) ")"))
+         (princ (strcat "\n[BgColor] A: (" (BGC:rgb->str *BGC:color-a*)
+                        ")  B: (" (BGC:rgb->str *BGC:color-b*) ")"))
+         (princ "\n[BgColor] Einstellungen gespeichert.")
         )
       )
     )
@@ -181,7 +214,7 @@
 ;;; ============================================================
 ;;; c:BGCOLOR - Toggle oder [E]instellungen
 ;;; ============================================================
-(defun c:BGCOLOR ( / *error* old-cmdecho choice next-rgb next-state)
+(defun c:BGCOLOR ( / *error* old-cmdecho choice cur-ole ole-a ole-b next-ole next-label space)
 
   (defun *error* (msg)
     (if (not (wcmatch (strcase msg) "*ABBRUCH*,*CANCEL*,*QUIT*"))
@@ -199,20 +232,28 @@
     "\nBgColor [Enter=Toggle / Einstellungen] <Toggle>: "))
 
   (cond
+    ;; Einstellungen-Dialog
     ((= choice "Einstellungen")
      (BGC:show-settings)
     )
+    ;; Toggle
     (T
-     ;; Toggle via State-Flag - kein Vergleich mit getvar noetig
-     (if (eq *BGC:state* :a)
-       (setq next-rgb *BGC:color-b*  next-state :b)
-       (setq next-rgb *BGC:color-a*  next-state :a)
+     (setq space (BGC:space-name))
+     ;; Aktuelle Farbe als OLE-Integer lesen
+     (setq cur-ole (BGC:get-current-ole))
+     ;; Vorberechnete OLE-Werte fuer Vergleich
+     (setq ole-a (BGC:rgb->ole *BGC:color-a*)
+           ole-b (BGC:rgb->ole *BGC:color-b*))
+     ;; Wenn aktuell A -> wechsle zu B, sonst immer zu A
+     (if (= cur-ole ole-a)
+       (setq next-ole ole-b  next-label "B")
+       (setq next-ole ole-a  next-label "A")
      )
-     (BGC:set-all next-rgb)
-     (setq *BGC:state* next-state)
-     (princ (strcat "\n[BgColor] -> ("
-                    (BGC:rgb-to-str next-rgb) ")  ["
-                    (if (eq next-state :a) "A" "B") "]"))
+     ;; Setzen
+     (BGC:set-current-ole next-ole)
+     (princ (strcat "\n[BgColor] " space " -> ("
+                    (BGC:rgb->str (BGC:ole->rgb next-ole)) ")"
+                    "  [" next-label "]"))
     )
   )
 
@@ -223,8 +264,8 @@
 ;;; ============================================================
 ;;; Ladebestaetigung
 ;;; ============================================================
-(princ "\nBgColor.lsp v1.2.0 geladen.")
-(princ (strcat "\n  Farbe A: (" (BGC:rgb-to-str *BGC:color-a*) ")"))
-(princ (strcat "\n  Farbe B: (" (BGC:rgb-to-str *BGC:color-b*) ")"))
+(princ "\nBgColor.lsp v1.6.0 geladen.")
+(princ (strcat "\n  A: (" (BGC:rgb->str *BGC:color-a*)
+               ")  B: (" (BGC:rgb->str *BGC:color-b*) ")"))
 (princ "\nBefehl: BGCOLOR  [Enter=Toggle | E=Einstellungen]")
 (princ)
