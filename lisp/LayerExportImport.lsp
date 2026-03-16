@@ -3,7 +3,7 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System | Custom Property GUID | ObjectDBX Batch-Sync
 ;;; 
-;;; Version: 2.7.0
+;;; Version: 2.7.1
 ;;; Datum:   2026-03-10
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -87,7 +87,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v2.7.0" fp)
+    (write-line ";;; LayerSync Konfiguration v2.7.1" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -136,7 +136,7 @@
   (setq fp (open filepath "w"))
   (if fp (progn
     (write-line (strcat "=== LayerSync Log - " (LXI:timestamp-sec) " ===") fp)
-    (write-line (strcat "Version: 2.7.0") fp)
+    (write-line (strcat "Version: 2.7.1") fp)
     (write-line (strcat "DWG: " (vl-filename-base (getvar "DWGNAME")) ".dwg") fp)
     (write-line "" fp)
     (close fp))))
@@ -185,6 +185,17 @@
     (progn
       (setq val (atoi str))
       (if (and (= val 0) (/= str "0")) default val))))
+
+;;; Ersetzt Element an Index in einer Liste
+;;; Rueckgabe: Neue Liste mit ersetztem Element
+(defun LXI:list-set-nth (lst idx val / i result)
+  (setq i 0 result nil)
+  (foreach elem lst
+    (if (= i idx)
+      (setq result (cons val result))
+      (setq result (cons elem result)))
+    (setq i (1+ i)))
+  (reverse result))
 
 
 ;;; ========================================================================
@@ -1728,6 +1739,14 @@
                               (setq cnt-ren (1+ cnt-ren)))
                             (progn
                               (princ (strcat "\n  = Beibehalten: " local-name))
+                              ;; Master-Name auf lokalen Namen aktualisieren
+                              ;; damit kein Duplikat angelegt wird
+                              (setq master-data (LXI:remove-by-id master-data mid))
+                              (setq master-data
+                                (cons (LXI:list-set-nth lay 1 local-name) master-data))
+                              (LXI:write-master master-data)
+                              (LXI:debug-print (strcat "  Master umbenannt: "
+                                master-name " -> " local-name))
                               (setq cnt-skip (1+ cnt-skip)))))))))
                 ;; Lokal geloescht
                 (T
@@ -2910,6 +2929,6 @@
 ;;; Initialisierung (nur Minimum beim Laden)
 ;;; ========================================================================
 (LXI:read-config)
-(princ "\nLayerExportImport.lsp v2.7.0 geladen.")
+(princ "\nLayerExportImport.lsp v2.7.1 geladen.")
 (princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG | LAYDIFF | LAYCOUNT | LAYUNDO")
 (princ)

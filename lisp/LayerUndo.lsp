@@ -3,7 +3,7 @@
 ;;; Sync-Vorgaenge rueckgaengig machen via DCL Dialog
 ;;; Wird von LayerExportImport.lsp (LAYUNDO Befehl) nachgeladen
 ;;;
-;;; Version: 1.0.0
+;;; Version: 1.0.2
 ;;; Datum:   2026-03-16
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -51,25 +51,31 @@
   ;; Umkehren: neuester zuerst
   (reverse groups))
 
-;;; Erzeugt Anzeige-Strings fuer die Sync-Liste
-;;; Rueckgabe: Liste von Strings "2026-03-16 20:10 | DWG-A.dwg | 3 Aenderungen"
+;;; Erzeugt Anzeige-Strings fuer die Sync-Liste (Monospace)
 (defun LXI:format-sync-list (groups / )
   (mapcar
     '(lambda (grp)
-      (strcat (nth 1 grp) "  (" (itoa (nth 2 grp)) ")"))
+      (strcat (LXI:pad-str (nth 1 grp) 55)
+              (itoa (nth 2 grp)) " Aenderung(en)"))
     groups))
 
-;;; Erzeugt Detail-Strings fuer die Aenderungs-Liste
-;;; Parameter: entries - Liste von History-Eintraegen (8 Felder)
-;;; Rueckgabe: Liste von Strings "S_00_Wand | Color | 7 | 1"
+;;; Erzeugt Detail-Strings fuer die Aenderungs-Liste (Monospace)
+;;; Spalten: Layer(32)  Property(16)  Alt(22)  Neu
 (defun LXI:format-detail-list (entries / )
   (mapcar
     '(lambda (e)
-      (strcat (LXI:pad-str (nth 1 e) 25)
-              (LXI:pad-str (nth 4 e) 14)
-              (LXI:pad-str (nth 5 e) 14)
-              (nth 6 e)))
+      (strcat (LXI:pad-str (nth 1 e) 32)
+              (LXI:pad-str (nth 4 e) 16)
+              (LXI:pad-str (nth 5 e) 22)
+              (if (nth 6 e) (nth 6 e) "")))
     entries))
+
+;;; Header-Zeile passend zu format-detail-list
+(defun LXI:format-detail-header ( / )
+  (strcat (LXI:pad-str "Layer" 32)
+          (LXI:pad-str "Property" 16)
+          (LXI:pad-str "Alt" 22)
+          "Neu"))
 
 
 ;;; ========================================================================
@@ -80,20 +86,22 @@
   (strcat
     "layundo : dialog {\n"
     "  label = \"LayerSync Undo\";\n"
+    "  initial_focus = \"sync_list\";\n"
     "  : column {\n"
     "    : text { label = \"Sync-Vorgaenge (neueste zuerst):\"; }\n"
     "    : list_box {\n"
     "      key = \"sync_list\";\n"
-    "      width = 70;\n"
-    "      height = 8;\n"
+    "      width = 95;\n"
+    "      height = 6;\n"
+    "      fixed_width_font = true;\n"
     "    }\n"
     "    spacer;\n"
     "    : text { label = \"Aenderungen im gewaehlten Sync:\"; }\n"
-    "    : text { key = \"detail_header\"; label = \"Layer                    Property      Alt           Neu\"; }\n"
     "    : list_box {\n"
     "      key = \"detail_list\";\n"
-    "      width = 70;\n"
-    "      height = 12;\n"
+    "      width = 95;\n"
+    "      height = 14;\n"
+    "      fixed_width_font = true;\n"
     "      multiple_select = false;\n"
     "    }\n"
     "    spacer;\n"
@@ -103,13 +111,14 @@
     "    : button {\n"
     "      key = \"undo_btn\";\n"
     "      label = \"Rueckgaengig\";\n"
-    "      width = 18;\n"
+    "      width = 20;\n"
     "      is_enabled = false;\n"
     "    }\n"
+    "    : spacer { width = 4; }\n"
     "    : button {\n"
     "      key = \"cancel\";\n"
     "      label = \"Schliessen\";\n"
-    "      width = 18;\n"
+    "      width = 20;\n"
     "      is_cancel = true;\n"
     "    }\n"
     "  }\n"
@@ -249,8 +258,10 @@
                       (start_list "sync_list")
                       (foreach s sync-strings (add_list s))
                       (end_list)
-                      ;; Detail-Liste leer
+                      ;; Detail-Liste mit Header als erste Zeile
                       (start_list "detail_list")
+                      (add_list (LXI:format-detail-header))
+                      (add_list (LXI:pad-str "---" 90))
                       (end_list)
                       ;; Callbacks
                       (action_tile "sync_list"
@@ -295,9 +306,11 @@
       (setq grp (nth idx *LXI:undo-groups*))
       (setq entries (nth 3 grp))
       (setq *LXI:undo-selected* entries)
-      ;; Detail-Liste fuellen
+      ;; Detail-Liste fuellen mit Header
       (setq detail-strings (LXI:format-detail-list entries))
       (start_list "detail_list")
+      (add_list (LXI:format-detail-header))
+      (add_list (LXI:pad-str "---" 90))
       (foreach s detail-strings (add_list s))
       (end_list)
       ;; Info-Text
@@ -318,5 +331,5 @@
 ;;; ========================================================================
 ;;; Initialisierung
 ;;; ========================================================================
-(princ "\nLayerUndo.lsp v1.0.0 geladen.")
+(princ "\nLayerUndo.lsp v1.0.2 geladen.")
 (princ)
