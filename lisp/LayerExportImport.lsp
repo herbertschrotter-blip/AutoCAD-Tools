@@ -3,7 +3,7 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System | Custom Property GUID | ObjectDBX Batch-Sync
 ;;; 
-;;; Version: 2.3.1
+;;; Version: 2.4.0
 ;;; Datum:   2026-03-10
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -86,7 +86,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v2.3.1" fp)
+    (write-line ";;; LayerSync Konfiguration v2.4.0" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -135,7 +135,7 @@
   (setq fp (open filepath "w"))
   (if fp (progn
     (write-line (strcat "=== LayerSync Log - " (LXI:timestamp-sec) " ===") fp)
-    (write-line (strcat "Version: 2.3.1") fp)
+    (write-line (strcat "Version: 2.4.0") fp)
     (write-line (strcat "DWG: " (vl-filename-base (getvar "DWGNAME")) ".dwg") fp)
     (write-line "" fp)
     (close fp))))
@@ -810,6 +810,69 @@
 
 
 ;;; ========================================================================
+;;; FARBE (Index + TrueColor)
+;;; Format im CSV: "7" (Indexfarbe) oder "RGB:255,128,0" (TrueColor)
+;;; ========================================================================
+
+;;; Liest Farbe eines VLA Layer-Objekts
+;;; Erkennt automatisch ob Index oder TrueColor
+;;; Rueckgabe: String "7" oder "RGB:255,128,0"
+(defun LXI:read-color (lay-obj / tc-obj method r g b col)
+  (setq tc-obj (vl-catch-all-apply 'vla-get-TrueColor (list lay-obj)))
+  (if (vl-catch-all-error-p tc-obj)
+    ;; Fallback: nur Indexfarbe
+    (progn
+      (setq col (vla-get-Color lay-obj))
+      (if (< col 0) (setq col (abs col)))
+      (itoa col))
+    ;; TrueColor-Objekt vorhanden
+    (progn
+      (setq method (vl-catch-all-apply 'vla-get-ColorMethod (list tc-obj)))
+      (if (vl-catch-all-error-p method) (setq method 195))
+      (if (= method 194)
+        ;; acColorMethodByRGB = 194 -> TrueColor
+        (progn
+          (setq r (vla-get-Red tc-obj)
+                g (vla-get-Green tc-obj)
+                b (vla-get-Blue tc-obj))
+          (strcat "RGB:" (itoa r) "," (itoa g) "," (itoa b)))
+        ;; acColorMethodByACI = 195 -> Indexfarbe
+        (progn
+          (setq col (vla-get-Color lay-obj))
+          (if (< col 0) (setq col (abs col)))
+          (itoa col))))))
+
+;;; Setzt Farbe auf einem VLA Layer-Objekt
+;;; Parameter: lay-obj - VLA Layer, col-str - "7" oder "RGB:255,128,0"
+;;; Rueckgabe: T bei Erfolg
+(defun LXI:apply-color (lay-obj col-str / tc-obj parts r g b col)
+  (if (and col-str (> (strlen col-str) 4)
+           (= (strcase (substr col-str 1 4)) "RGB:"))
+    ;; TrueColor setzen
+    (progn
+      (setq parts (LXI:split-string (substr col-str 5) ","))
+      (if (= (length parts) 3)
+        (progn
+          (setq r (atoi (nth 0 parts))
+                g (atoi (nth 1 parts))
+                b (atoi (nth 2 parts)))
+          (setq tc-obj (vl-catch-all-apply 'vla-get-TrueColor (list lay-obj)))
+          (if (not (vl-catch-all-error-p tc-obj))
+            (progn
+              (vla-put-ColorMethod tc-obj 194)
+              (vla-SetRGB tc-obj r g b)
+              (vl-catch-all-apply 'vla-put-TrueColor (list lay-obj tc-obj))
+              T)
+            nil))
+        nil))
+    ;; Indexfarbe setzen
+    (progn
+      (setq col (LXI:safe-atoi col-str 7))
+      (vl-catch-all-apply 'vla-put-Color (list lay-obj col))
+      T)))
+
+
+;;; ========================================================================
 ;;; VLA LAYER-ZUGRIFF (einheitlich fuer lokal, Documents, ObjectDBX)
 ;;; ========================================================================
 
@@ -829,9 +892,8 @@
   (setq lay-name (vla-get-Name lay-obj))
   (setq handle (vla-get-Handle lay-obj))
   
-  ;; Farbe (Integer, absoluter Wert)
-  (setq col (vla-get-Color lay-obj))
-  (if (< col 0) (setq col (abs col)))
+  ;; Farbe (Index oder TrueColor, automatische Erkennung)
+  (setq col (LXI:read-color lay-obj))
   
   ;; Linientyp
   (setq ltype (vla-get-Linetype lay-obj))
@@ -877,7 +939,7 @@
   
   ;; Rueckgabe als Liste (alle als Strings fuer CSV-Kompatibilitaet)
   (list lay-name
-        (itoa col)
+        col
         ltype
         (itoa lw)
         on-off
@@ -919,7 +981,9 @@
   (if (null vpdef) (setq vpdef "0"))
   (if (null desc) (setq desc ""))
   (if (null trans) (setq trans 0))
-  (if (numberp col) nil (setq col (LXI:safe-atoi col 7)))
+  ;; col bleibt String ("7" oder "RGB:255,128,0")
+  (if (numberp col) (setq col (itoa col)))
+  (if (null col) (setq col "7"))
   (if (numberp lw) nil (setq lw (LXI:safe-atoi lw -3)))
   (if (numberp trans) nil (setq trans (LXI:safe-atoi trans 0)))
   
@@ -929,7 +993,7 @@
     (vl-catch-all-apply 'vla-Add (list layers-coll lay-name)))
   (if (vl-catch-all-error-p lay-obj) nil
     (progn
-      (vl-catch-all-apply 'vla-put-Color (list lay-obj col))
+      (LXI:apply-color lay-obj col)
       (vl-catch-all-apply 'vla-put-Linetype (list lay-obj ltype))
       (vl-catch-all-apply 'vla-put-Lineweight (list lay-obj lw))
       (vla-put-LayerOn lay-obj (if (= on-off "ON") :vlax-true :vlax-false))
@@ -965,7 +1029,9 @@
   (if (null vpdef) (setq vpdef "0"))
   (if (null desc) (setq desc ""))
   (if (null trans) (setq trans 0))
-  (if (numberp col) nil (setq col (LXI:safe-atoi col 7)))
+  ;; col bleibt String ("7" oder "RGB:255,128,0")
+  (if (numberp col) (setq col (itoa col)))
+  (if (null col) (setq col "7"))
   (if (numberp lw) nil (setq lw (LXI:safe-atoi lw -3)))
   (if (numberp trans) nil (setq trans (LXI:safe-atoi trans 0)))
   
@@ -975,7 +1041,7 @@
     (vl-catch-all-apply 'vla-Item (list layers-coll lay-name)))
   (if (vl-catch-all-error-p lay-obj) nil
     (progn
-      (vl-catch-all-apply 'vla-put-Color (list lay-obj col))
+      (LXI:apply-color lay-obj col)
       (vl-catch-all-apply 'vla-put-Linetype (list lay-obj ltype))
       (vl-catch-all-apply 'vla-put-Lineweight (list lay-obj lw))
       (vla-put-LayerOn lay-obj (if (= on-off "ON") :vlax-true :vlax-false))
@@ -1603,7 +1669,7 @@
     (setq conflicts (cons (list (nth 0 local-data) "Lock" lck (nth 6 local-data)) conflicts)))
   
   ;; Master anwenden
-  (vl-catch-all-apply 'vla-put-Color (list lay-obj (LXI:safe-atoi col 7)))
+  (LXI:apply-color lay-obj col)
   (vl-catch-all-apply 'vla-put-Linetype (list lay-obj ltype))
   (vl-catch-all-apply 'vla-put-Lineweight (list lay-obj (LXI:safe-atoi lw -3)))
   (vla-put-LayerOn lay-obj (if (= on-off "ON") :vlax-true :vlax-false))
@@ -1655,7 +1721,7 @@
           (vl-catch-all-apply 'vla-Add (list layers-coll master-name)))
         (if (not (vl-catch-all-error-p lay-obj))
           (progn
-            (vl-catch-all-apply 'vla-put-Color (list lay-obj (LXI:safe-atoi col 7)))
+            (LXI:apply-color lay-obj col)
             (vl-catch-all-apply 'vla-put-Linetype (list lay-obj ltype))
             (vl-catch-all-apply 'vla-put-Lineweight (list lay-obj (LXI:safe-atoi lw -3)))
             (vla-put-LayerOn lay-obj (if (= on-off "ON") :vlax-true :vlax-false))
@@ -1756,7 +1822,7 @@
           (vl-catch-all-apply 'vla-Add (list layers-coll master-name)))
         (if (not (vl-catch-all-error-p lay-obj))
           (progn
-            (vl-catch-all-apply 'vla-put-Color (list lay-obj (LXI:safe-atoi col 7)))
+            (LXI:apply-color lay-obj col)
             (vl-catch-all-apply 'vla-put-Linetype (list lay-obj ltype))
             (vl-catch-all-apply 'vla-put-Lineweight (list lay-obj (LXI:safe-atoi lw -3)))
             (vla-put-LayerOn lay-obj (if (= on-off "ON") :vlax-true :vlax-false))
@@ -2543,6 +2609,6 @@
 ;;; Initialisierung (nur Minimum beim Laden)
 ;;; ========================================================================
 (LXI:read-config)
-(princ "\nLayerExportImport.lsp v2.3.1 geladen.")
+(princ "\nLayerExportImport.lsp v2.4.0 geladen.")
 (princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG | LAYDIFF | LAYCOUNT")
 (princ)
