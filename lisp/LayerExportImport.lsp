@@ -3,7 +3,7 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System | Custom Property GUID | ObjectDBX Batch-Sync
 ;;; 
-;;; Version: 2.4.0
+;;; Version: 2.5.1
 ;;; Datum:   2026-03-10
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -86,7 +86,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v2.4.0" fp)
+    (write-line ";;; LayerSync Konfiguration v2.5.1" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -135,7 +135,7 @@
   (setq fp (open filepath "w"))
   (if fp (progn
     (write-line (strcat "=== LayerSync Log - " (LXI:timestamp-sec) " ===") fp)
-    (write-line (strcat "Version: 2.4.0") fp)
+    (write-line (strcat "Version: 2.5.1") fp)
     (write-line (strcat "DWG: " (vl-filename-base (getvar "DWGNAME")) ".dwg") fp)
     (write-line "" fp)
     (close fp))))
@@ -314,12 +314,25 @@
 
 
 ;;; ========================================================================
-;;; MASTER (.csv) - 14 Felder
-;;; MasterID;Name;Color;Linetype;Lineweight;Plot;OnOff;Freeze;Lock;VPDefault;Description;Transparency;Source;LastModified
-;;; Index: 0  1    2     3        4         5    6      7     8    9         10          11           12     13
+;;; MASTER (.csv) - 24 Felder (v2.5)
+;;; MasterID;Name;Color;Linetype;Lineweight;Plot;OnOff;Freeze;Lock;
+;;; VPDefault;Description;Transparency;
+;;; ColorMod;LtypeMod;LwMod;PlotMod;OnOffMod;FreezeMod;LockMod;
+;;; VPDefMod;DescMod;TransMod;
+;;; Source;LastModified
+;;;
+;;; Index: 0=MID 1=Name
+;;;   2=Color 3=Linetype 4=Lineweight 5=Plot 6=OnOff
+;;;   7=Freeze 8=Lock 9=VPDefault 10=Description 11=Transparency
+;;;   12=ColorMod 13=LtypeMod 14=LwMod 15=PlotMod 16=OnOffMod
+;;;   17=FreezeMod 18=LockMod 19=VPDefMod 20=DescMod 21=TransMod
+;;;   22=Source 23=LastModified
+;;;
+;;; *Mod Format: "YYYY-MO-DD HH:MM|DwgName.dwg"
 ;;; ========================================================================
 
-(defun LXI:read-master ( / sync-dir filepath fp line fields result nf)
+(defun LXI:read-master ( / sync-dir filepath fp line fields result nf
+                           old-src old-mod mod-stamp)
   (setq sync-dir (LXI:get-sync-folder))
   (if (null sync-dir) nil
     (progn
@@ -338,19 +351,54 @@
                     (setq fields (LXI:split-string line *LXI:sep*))
                     (setq nf (length fields))
                     (cond
-                      ;; 14 Felder = aktuelles Format v2.0
-                      ((= nf 14)
+                      ;; 24 Felder = aktuelles Format v2.5
+                      ((= nf 24)
                         (setq result (cons fields result)))
+                      ;; 14 Felder = v2.0 -> migrieren
+                      ((= nf 14)
+                        (progn
+                          (setq old-src (nth 12 fields)
+                                old-mod (nth 13 fields))
+                          ;; Mod-Stamp aus altem Source+LastModified
+                          (setq mod-stamp
+                            (if (and old-mod (/= old-mod ""))
+                              (strcat old-mod "|" (if old-src old-src ""))
+                              ""))
+                          (setq result
+                            (cons
+                              (list (nth 0 fields) (nth 1 fields)
+                                    (nth 2 fields) (nth 3 fields)
+                                    (nth 4 fields) (nth 5 fields)
+                                    (nth 6 fields) (nth 7 fields)
+                                    (nth 8 fields) (nth 9 fields)
+                                    (nth 10 fields) (nth 11 fields)
+                                    mod-stamp mod-stamp mod-stamp mod-stamp
+                                    mod-stamp mod-stamp mod-stamp mod-stamp
+                                    mod-stamp mod-stamp
+                                    old-src old-mod)
+                              result))))
                       ;; 11 Felder = altes Format v1.x -> migrieren
                       ((= nf 11)
-                        (setq result
-                          (cons
-                            (list (nth 0 fields) (nth 1 fields) (nth 2 fields)
-                                  (nth 3 fields) (nth 4 fields) (nth 5 fields)
-                                  (nth 6 fields) (nth 7 fields) (nth 8 fields)
-                                  "0" "" "0"  ;; VPDefault, Description, Transparency
-                                  (nth 9 fields) (nth 10 fields))
-                            result)))))))
+                        (progn
+                          (setq old-src (nth 9 fields)
+                                old-mod (nth 10 fields))
+                          (setq mod-stamp
+                            (if (and old-mod (/= old-mod ""))
+                              (strcat old-mod "|" (if old-src old-src ""))
+                              ""))
+                          (setq result
+                            (cons
+                              (list (nth 0 fields) (nth 1 fields)
+                                    (nth 2 fields) (nth 3 fields)
+                                    (nth 4 fields) (nth 5 fields)
+                                    (nth 6 fields) (nth 7 fields)
+                                    (nth 8 fields)
+                                    "0" "" "0"
+                                    mod-stamp mod-stamp mod-stamp mod-stamp
+                                    mod-stamp mod-stamp mod-stamp mod-stamp
+                                    mod-stamp mod-stamp
+                                    old-src old-mod)
+                              result))))))))
               (close fp) (reverse result))))))))
 
 (defun LXI:write-master (master-data / sync-dir filepath fp lay s)
@@ -365,15 +413,64 @@
             (strcat "MasterID" s "Name" s "Color" s "Linetype" s "Lineweight"
                     s "Plot" s "OnOff" s "Freeze" s "Lock"
                     s "VPDefault" s "Description" s "Transparency"
+                    s "ColorMod" s "LtypeMod" s "LwMod" s "PlotMod"
+                    s "OnOffMod" s "FreezeMod" s "LockMod"
+                    s "VPDefMod" s "DescMod" s "TransMod"
                     s "Source" s "LastModified") fp)
           (setq master-data (vl-sort master-data '(lambda (a b) (< (car a) (car b)))))
           (foreach lay master-data
             (write-line
-              (strcat (nth 0 lay) s (nth 1 lay) s (nth 2 lay) s (nth 3 lay) s
-                      (nth 4 lay) s (nth 5 lay) s (nth 6 lay) s (nth 7 lay) s
-                      (nth 8 lay) s (nth 9 lay) s (nth 10 lay) s (nth 11 lay) s
-                      (nth 12 lay) s (nth 13 lay)) fp))
+              (strcat (if (nth 0 lay) (nth 0 lay) "") s
+                      (if (nth 1 lay) (nth 1 lay) "") s
+                      (if (nth 2 lay) (nth 2 lay) "") s
+                      (if (nth 3 lay) (nth 3 lay) "") s
+                      (if (nth 4 lay) (nth 4 lay) "") s
+                      (if (nth 5 lay) (nth 5 lay) "") s
+                      (if (nth 6 lay) (nth 6 lay) "") s
+                      (if (nth 7 lay) (nth 7 lay) "") s
+                      (if (nth 8 lay) (nth 8 lay) "") s
+                      (if (nth 9 lay) (nth 9 lay) "") s
+                      (if (nth 10 lay) (nth 10 lay) "") s
+                      (if (nth 11 lay) (nth 11 lay) "") s
+                      (if (nth 12 lay) (nth 12 lay) "") s
+                      (if (nth 13 lay) (nth 13 lay) "") s
+                      (if (nth 14 lay) (nth 14 lay) "") s
+                      (if (nth 15 lay) (nth 15 lay) "") s
+                      (if (nth 16 lay) (nth 16 lay) "") s
+                      (if (nth 17 lay) (nth 17 lay) "") s
+                      (if (nth 18 lay) (nth 18 lay) "") s
+                      (if (nth 19 lay) (nth 19 lay) "") s
+                      (if (nth 20 lay) (nth 20 lay) "") s
+                      (if (nth 21 lay) (nth 21 lay) "") s
+                      (if (nth 22 lay) (nth 22 lay) "") s
+                      (if (nth 23 lay) (nth 23 lay) "")) fp))
           (close fp) T)))))
+
+;;; Hilfsfunktion: Mod-Stamp erzeugen ("YYYY-MO-DD HH:MM|DwgName.dwg")
+(defun LXI:make-mod-stamp (timestamp dwg / )
+  (strcat timestamp "|" dwg))
+
+;;; Hilfsfunktion: Timestamp aus Mod-Stamp extrahieren
+(defun LXI:mod-stamp-time (mod-stamp / pos)
+  (if (or (null mod-stamp) (= mod-stamp "")) ""
+    (progn
+      (setq pos (vl-string-search "|" mod-stamp))
+      (if pos (substr mod-stamp 1 pos) mod-stamp))))
+
+;;; Hilfsfunktion: DWG-Name aus Mod-Stamp extrahieren
+(defun LXI:mod-stamp-source (mod-stamp / pos)
+  (if (or (null mod-stamp) (= mod-stamp "")) ""
+    (progn
+      (setq pos (vl-string-search "|" mod-stamp))
+      (if pos (substr mod-stamp (+ pos 2)) ""))))
+
+;;; Prueft ob mod-stamp-a neuer ist als mod-stamp-b
+;;; Rueckgabe: T wenn a neuer
+(defun LXI:mod-newer-p (mod-a mod-b / time-a time-b)
+  (setq time-a (LXI:mod-stamp-time mod-a)
+        time-b (LXI:mod-stamp-time mod-b))
+  (if (or (= time-a "") (= time-b "")) nil
+    (> (strcase time-a) (strcase time-b))))
 
 (defun LXI:find-by-id (master-data mid / result)
   (setq result nil)
@@ -1238,8 +1335,8 @@
                       (setq cnt-ren (1+ cnt-ren))))
                   
                   ;; Konflikterkennung
-                  (setq master-modified (nth 13 existing-master))
-                  (setq master-source (nth 12 existing-master))
+                  (setq master-modified (nth 23 existing-master))
+                  (setq master-source (nth 22 existing-master))
                   (setq skip-layer nil)
                   
                   (if (and (LXI:master-newer-p master-modified last-sync)
@@ -1308,7 +1405,7 @@
                                                                (reverse change-details)))
                                         dwg) history-entries))
                           (setq cnt-upd (1+ cnt-upd))))
-                      ;; Master aktualisieren (14 Felder)
+                      ;; Master aktualisieren (24 Felder, Field-Level Timestamps)
                       (setq master-data (LXI:remove-by-id master-data mid))
                       (setq master-data
                         (cons (list mid lay-name
@@ -1318,7 +1415,29 @@
                                       (nth 3 existing-master) (nth 2 lay))
                                     (nth 3 lay) (nth 7 lay) (nth 4 lay)
                                     (nth 5 lay) (nth 6 lay) (nth 8 lay)
-                                    (nth 9 lay) (nth 10 lay) dwg timestamp)
+                                    (nth 9 lay) (nth 10 lay)
+                                    ;; Mod-Stamps: nur geaenderte Properties aktualisieren
+                                    (if (/= (nth 2 existing-master) (nth 1 lay))
+                                      (LXI:make-mod-stamp timestamp dwg) (nth 12 existing-master))
+                                    (if (/= (strcase (nth 3 existing-master)) (strcase (nth 2 lay)))
+                                      (LXI:make-mod-stamp timestamp dwg) (nth 13 existing-master))
+                                    (if (/= (nth 4 existing-master) (nth 3 lay))
+                                      (LXI:make-mod-stamp timestamp dwg) (nth 14 existing-master))
+                                    (if (/= (strcase (nth 5 existing-master)) (strcase (nth 7 lay)))
+                                      (LXI:make-mod-stamp timestamp dwg) (nth 15 existing-master))
+                                    (if (/= (strcase (nth 6 existing-master)) (strcase (nth 4 lay)))
+                                      (LXI:make-mod-stamp timestamp dwg) (nth 16 existing-master))
+                                    (if (/= (strcase (nth 7 existing-master)) (strcase (nth 5 lay)))
+                                      (LXI:make-mod-stamp timestamp dwg) (nth 17 existing-master))
+                                    (if (/= (strcase (nth 8 existing-master)) (strcase (nth 6 lay)))
+                                      (LXI:make-mod-stamp timestamp dwg) (nth 18 existing-master))
+                                    (if (/= (nth 9 existing-master) (nth 8 lay))
+                                      (LXI:make-mod-stamp timestamp dwg) (nth 19 existing-master))
+                                    (if (/= (nth 10 existing-master) (nth 9 lay))
+                                      (LXI:make-mod-stamp timestamp dwg) (nth 20 existing-master))
+                                    (if (/= (nth 11 existing-master) (nth 10 lay))
+                                      (LXI:make-mod-stamp timestamp dwg) (nth 21 existing-master))
+                                    dwg timestamp)
                               master-data))))))))
           
           ;; FALL 2: Name-Match
@@ -1331,6 +1450,17 @@
                             (nth 1 lay) (nth 2 lay) (nth 3 lay)
                             (nth 7 lay) (nth 4 lay) (nth 5 lay) (nth 6 lay)
                             (nth 8 lay) (nth 9 lay) (nth 10 lay)
+                            ;; Alle Mod-Stamps neu (erster Match)
+                            (LXI:make-mod-stamp timestamp dwg)
+                            (LXI:make-mod-stamp timestamp dwg)
+                            (LXI:make-mod-stamp timestamp dwg)
+                            (LXI:make-mod-stamp timestamp dwg)
+                            (LXI:make-mod-stamp timestamp dwg)
+                            (LXI:make-mod-stamp timestamp dwg)
+                            (LXI:make-mod-stamp timestamp dwg)
+                            (LXI:make-mod-stamp timestamp dwg)
+                            (LXI:make-mod-stamp timestamp dwg)
+                            (LXI:make-mod-stamp timestamp dwg)
                             dwg timestamp)
                       master-data))
               (setq cnt-upd (1+ cnt-upd))))
@@ -1344,6 +1474,17 @@
                             (nth 1 lay) (nth 2 lay) (nth 3 lay)
                             (nth 7 lay) (nth 4 lay) (nth 5 lay) (nth 6 lay)
                             (nth 8 lay) (nth 9 lay) (nth 10 lay)
+                            ;; Alle Mod-Stamps neu
+                            (LXI:make-mod-stamp timestamp dwg)
+                            (LXI:make-mod-stamp timestamp dwg)
+                            (LXI:make-mod-stamp timestamp dwg)
+                            (LXI:make-mod-stamp timestamp dwg)
+                            (LXI:make-mod-stamp timestamp dwg)
+                            (LXI:make-mod-stamp timestamp dwg)
+                            (LXI:make-mod-stamp timestamp dwg)
+                            (LXI:make-mod-stamp timestamp dwg)
+                            (LXI:make-mod-stamp timestamp dwg)
+                            (LXI:make-mod-stamp timestamp dwg)
                             dwg timestamp)
                       master-data))
               (setq history-entries
@@ -1385,24 +1526,91 @@
 
 
 ;;; ========================================================================
-;;; IMPORT-KERNFUNKTION (14-Feld Master, VLA, SyncLog)
+;;; IMPORT-KERNFUNKTION (24-Feld Master, Field-Level Merge)
 ;;; Master: 0=MID 1=Name 2=Color 3=Ltype 4=LW 5=Plot 6=OnOff
-;;;   7=Frz 8=Lock 9=VPDef 10=Desc 11=Trans 12=Source 13=LastMod
+;;;   7=Frz 8=Lock 9=VPDef 10=Desc 11=Trans
+;;;   12=ColorMod 13=LtypeMod 14=LwMod 15=PlotMod 16=OnOffMod
+;;;   17=FreezeMod 18=LockMod 19=VPDefMod 20=DescMod 21=TransMod
+;;;   22=Source 23=LastMod
+;;; collect-layers: 0=Name 1=Color 2=Ltype 3=LW 4=OnOff 5=Frz
+;;;   6=Lock 7=Plot 8=VPDef 9=Desc 10=Trans 11=Handle
 ;;; ========================================================================
+
+;;; Field-Level Merge: Vergleicht Master vs. Lokal pro Property
+;;; Neuester Mod-Stamp gewinnt. Gibt merged values zurueck.
+;;; Parameter: master-lay (24 Felder), local-data (12 Felder aus read-layer-vla)
+;;;            dwg - aktueller DWG-Name, timestamp - aktueller Zeitstempel
+;;; Rueckgabe: Liste (merged-values cnt-from-master cnt-from-local)
+;;;   merged-values = (col ltype lw plot on-off frz lck vpdef desc trans)
+(defun LXI:field-merge (master-lay local-data dwg timestamp
+                         / master-vals local-vals mod-stamps
+                           merged cnt-master cnt-local
+                           i m-val l-val mod-stamp mod-src local-mod
+                           result-vals)
+  (setq master-vals (list (nth 2 master-lay) (nth 3 master-lay)
+                          (nth 4 master-lay) (nth 5 master-lay)
+                          (nth 6 master-lay) (nth 7 master-lay)
+                          (nth 8 master-lay) (nth 9 master-lay)
+                          (nth 10 master-lay) (nth 11 master-lay)))
+  ;; local-data: 0=Name 1=Color 2=Ltype 3=LW 4=OnOff 5=Frz 6=Lock 7=Plot 8=VPDef 9=Desc 10=Trans
+  ;; Master-Reihenfolge: Color Ltype LW Plot OnOff Frz Lock VPDef Desc Trans
+  ;; Lokal-Reihenfolge:  Color Ltype LW OnOff Frz Lock Plot VPDef Desc Trans
+  ;; Mapping: Master-idx -> Local-idx
+  ;;   0=Color->1  1=Ltype->2  2=LW->3  3=Plot->7  4=OnOff->4
+  ;;   5=Frz->5  6=Lock->6  7=VPDef->8  8=Desc->9  9=Trans->10
+  (setq local-vals (list (nth 1 local-data) (nth 2 local-data)
+                         (nth 3 local-data) (nth 7 local-data)
+                         (nth 4 local-data) (nth 5 local-data)
+                         (nth 6 local-data) (nth 8 local-data)
+                         (nth 9 local-data) (nth 10 local-data)))
+  (setq mod-stamps (list (nth 12 master-lay) (nth 13 master-lay)
+                         (nth 14 master-lay) (nth 15 master-lay)
+                         (nth 16 master-lay) (nth 17 master-lay)
+                         (nth 18 master-lay) (nth 19 master-lay)
+                         (nth 20 master-lay) (nth 21 master-lay)))
+  (setq result-vals nil cnt-master 0 cnt-local 0 i 0)
+  (repeat 10
+    (setq m-val (nth i master-vals)
+          l-val (nth i local-vals)
+          mod-stamp (nth i mod-stamps))
+    (if (= (strcase m-val) (strcase l-val))
+      ;; Gleich -> Master-Wert behalten
+      (setq result-vals (cons m-val result-vals))
+      ;; Unterschied -> wer ist neuer?
+      (progn
+        (setq mod-src (LXI:mod-stamp-source mod-stamp))
+        (if (= (strcase mod-src) (strcase dwg))
+          ;; Aenderung kam von dieser DWG -> lokal ist neuer
+          (progn
+            (setq result-vals (cons l-val result-vals))
+            (setq cnt-local (1+ cnt-local))
+            (LXI:debug-print (strcat "  Merge: " (nth 1 master-lay)
+                                     " Feld " (itoa i) " -> Lokal: " l-val)))
+          ;; Aenderung kam von anderer DWG -> Master ist neuer
+          (progn
+            (setq result-vals (cons m-val result-vals))
+            (setq cnt-master (1+ cnt-master))
+            (LXI:debug-print (strcat "  Merge: " (nth 1 master-lay)
+                                     " Feld " (itoa i) " -> Master: " m-val))))))
+    (setq i (1+ i)))
+  (setq result-vals (reverse result-vals))
+  (list result-vals cnt-master cnt-local))
+
 (defun LXI:do-import ( / dwg guid dwg-path master-data mapper-data dwg-mapper
-                         synclog-data is-first-import global-choice
+                         is-first-import
                          lay mid master-name col ltype lw plot-flag on-off frz lck
                          vpdef desc trans
                          mapped-entry mapped-handle mapped-name
-                         local-name diffs choice
+                         local-name local-data merge-result merged-vals
+                         choice
                          lay-obj handle new-mapper delete-list
                          doc layers-coll
-                         cnt-new cnt-upd cnt-skip cnt-ren cnt-del)
+                         cnt-new cnt-upd cnt-skip cnt-ren cnt-del cnt-merge)
   (setq dwg (LXI:dwg-name))
   (setq guid (LXI:dwg-guid))
   (setq dwg-path (LXI:dwg-path))
-  (setq cnt-new 0 cnt-upd 0 cnt-skip 0 cnt-ren 0 cnt-del 0)
-  (setq global-choice nil delete-list nil)
+  (setq cnt-new 0 cnt-upd 0 cnt-skip 0 cnt-ren 0 cnt-del 0 cnt-merge 0)
+  (setq delete-list nil)
   (setq master-data (LXI:read-master))
   (if (null master-data)
     (progn (princ "\n  Import: Kein Master gefunden.") nil)
@@ -1415,8 +1623,10 @@
       (if is-first-import
         (princ "\n  Erster Import fuer diese Zeichnung.")
         (princ (strcat "\n  " (itoa (length dwg-mapper)) " Layer bekannt.")))
+      (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)))
+      (setq layers-coll (vla-get-Layers doc))
       (foreach lay master-data
-        ;; Master 14 Felder auslesen
+        ;; Master 24 Felder auslesen (Properties: Index 2-11)
         (setq mid (nth 0 lay) master-name (nth 1 lay)
               col (nth 2 lay) ltype (nth 3 lay) lw (nth 4 lay)
               plot-flag (nth 5 lay) on-off (nth 6 lay)
@@ -1427,7 +1637,7 @@
         (foreach e dwg-mapper
           (if (= (strcase (nth 0 e)) (strcase mid)) (setq mapped-entry e)))
         (cond
-          ;; FALL A: Im Mapper
+          ;; FALL A: Im Mapper (bekannter Layer)
           (mapped-entry
             (progn
               (setq mapped-handle (nth 2 mapped-entry)
@@ -1438,30 +1648,38 @@
                   (progn
                     (LXI:debug-print (strcat "  Handle " mapped-handle " -> " local-name))
                     (cond
-                      ;; Name gleich
+                      ;; Name gleich -> Field-Level Merge
                       ((= (strcase local-name) (strcase master-name))
                         (progn
-                          ;; Vergleich mit allen 10 Properties
-                          (setq diffs (LXI:compare-layer-props
-                            local-name col ltype lw plot-flag on-off frz lck
-                            vpdef desc trans))
-                          (if diffs
+                          ;; Lokale Werte lesen
+                          (setq lay-obj
+                            (vl-catch-all-apply 'vla-Item (list layers-coll local-name)))
+                          (if (not (vl-catch-all-error-p lay-obj))
                             (progn
-                              (if (or (= global-choice "alleMaster") (= global-choice "alleLokal"))
-                                (setq choice global-choice)
+                              (setq local-data (LXI:read-layer-vla lay-obj))
+                              (setq merge-result
+                                (LXI:field-merge lay local-data dwg (LXI:timestamp)))
+                              (setq merged-vals (nth 0 merge-result))
+                              ;; merged-vals: (col ltype lw plot on-off frz lck vpdef desc trans)
+                              (if (or (> (nth 1 merge-result) 0) (> (nth 2 merge-result) 0))
+                                ;; Unterschiede -> anwenden
                                 (progn
-                                  (setq choice (LXI:ask-conflict local-name diffs))
-                                  (if (= choice "alleMaster") (setq global-choice "alleMaster"))
-                                  (if (= choice "alleLokal") (setq global-choice "alleLokal"))))
-                              (if (or (= choice "Master") (= choice "alleMaster"))
+                                  (if (> (nth 1 merge-result) 0)
+                                    (progn
+                                      (LXI:update-layer-props local-name
+                                        (nth 0 merged-vals) (nth 1 merged-vals)
+                                        (nth 2 merged-vals) (nth 3 merged-vals)
+                                        (nth 4 merged-vals) (nth 5 merged-vals)
+                                        (nth 6 merged-vals) (nth 7 merged-vals)
+                                        (nth 8 merged-vals) (nth 9 merged-vals))
+                                      (setq cnt-upd (1+ cnt-upd))
+                                      (setq cnt-merge (+ cnt-merge (nth 1 merge-result))))
+                                    (setq cnt-skip (1+ cnt-skip))))
+                                ;; Identisch
                                 (progn
-                                  (LXI:update-layer-props local-name
-                                    col ltype lw plot-flag on-off frz lck vpdef desc trans)
-                                  (setq cnt-upd (1+ cnt-upd)))
-                                (setq cnt-skip (1+ cnt-skip))))
-                            (progn
-                              (LXI:debug-print (strcat "  Skip: " local-name))
-                              (setq cnt-skip (1+ cnt-skip))))))
+                                  (LXI:debug-print (strcat "  Skip: " local-name))
+                                  (setq cnt-skip (1+ cnt-skip)))))
+                            (setq cnt-skip (1+ cnt-skip)))))
                       ;; Name anders (Umbenennung)
                       (T
                         (progn
@@ -1484,8 +1702,8 @@
                     (cond
                       ((= choice "Neu")
                         (if (LXI:create-layer master-name
-                              (LXI:safe-atoi col 7) ltype (LXI:safe-atoi lw -3) plot-flag on-off frz lck
-                              vpdef desc (LXI:safe-atoi trans 0))
+                              col ltype lw plot-flag on-off frz lck
+                              vpdef desc trans)
                           (progn (princ (strcat "\n  + " master-name))
                                  (setq cnt-new (1+ cnt-new)))
                           (princ (strcat "\n  *** Fehler: " master-name))))
@@ -1493,35 +1711,38 @@
                         (setq delete-list (cons mid delete-list)
                               cnt-del (1+ cnt-del)))
                       (T (setq cnt-skip (1+ cnt-skip)))))))))
-          ;; FALL B: Nicht im Mapper
+          ;; FALL B: Nicht im Mapper (neuer Layer)
           (T
             (progn
               (LXI:debug-print (strcat "  Neuer Layer: " master-name))
               (if (tblsearch "LAYER" master-name)
+                ;; Name lokal vorhanden -> Field-Level Merge
                 (progn
                   (LXI:debug-print "  Name lokal vorhanden, verknuepfe")
-                  (setq diffs (LXI:compare-layer-props
-                    master-name col ltype lw plot-flag on-off frz lck
-                    vpdef desc trans))
-                  (if diffs
+                  (setq lay-obj
+                    (vl-catch-all-apply 'vla-Item (list layers-coll master-name)))
+                  (if (not (vl-catch-all-error-p lay-obj))
                     (progn
-                      (if (or (= global-choice "alleMaster") (= global-choice "alleLokal"))
-                        (setq choice global-choice)
-                        (progn
-                          (setq choice (LXI:ask-conflict master-name diffs))
-                          (if (= choice "alleMaster") (setq global-choice "alleMaster"))
-                          (if (= choice "alleLokal") (setq global-choice "alleLokal"))))
-                      (if (or (= choice "Master") (= choice "alleMaster"))
+                      (setq local-data (LXI:read-layer-vla lay-obj))
+                      (setq merge-result
+                        (LXI:field-merge lay local-data dwg (LXI:timestamp)))
+                      (setq merged-vals (nth 0 merge-result))
+                      (if (> (nth 1 merge-result) 0)
                         (progn
                           (LXI:update-layer-props master-name
-                            col ltype lw plot-flag on-off frz lck vpdef desc trans)
-                          (setq cnt-upd (1+ cnt-upd)))
+                            (nth 0 merged-vals) (nth 1 merged-vals)
+                            (nth 2 merged-vals) (nth 3 merged-vals)
+                            (nth 4 merged-vals) (nth 5 merged-vals)
+                            (nth 6 merged-vals) (nth 7 merged-vals)
+                            (nth 8 merged-vals) (nth 9 merged-vals))
+                          (setq cnt-upd (1+ cnt-upd))
+                          (setq cnt-merge (+ cnt-merge (nth 1 merge-result))))
                         (setq cnt-skip (1+ cnt-skip))))
                     (setq cnt-skip (1+ cnt-skip))))
                 ;; Neuer Layer anlegen
                 (if (LXI:create-layer master-name
-                      (LXI:safe-atoi col 7) ltype (LXI:safe-atoi lw -3) plot-flag on-off frz lck
-                      vpdef desc (LXI:safe-atoi trans 0))
+                      col ltype lw plot-flag on-off frz lck
+                      vpdef desc trans)
                   (progn (LXI:debug-print (strcat "  + " master-name))
                          (setq cnt-new (1+ cnt-new)))
                   (princ (strcat "\n  *** Fehler: " master-name))))))))
@@ -1534,8 +1755,6 @@
       ;; Mapper aktualisieren (VLA-basiert)
       (setq mapper-data (LXI:mapper-remove-dwg mapper-data guid dwg))
       (setq new-mapper nil)
-      (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)))
-      (setq layers-coll (vla-get-Layers doc))
       (vlax-for lay-obj layers-coll
         (setq lay-name (vla-get-Name lay-obj))
         (if (and (not (LXI:xref-layer-p lay-name)) (LXI:sync-layer-p lay-name))
@@ -1557,6 +1776,8 @@
         (princ (strcat "\n    + " (itoa cnt-new) " neu angelegt"))))
       (if (> cnt-upd 0) (progn (LXI:log-write (strcat "  ~ " (itoa cnt-upd) " aktualisiert"))
         (princ (strcat "\n    ~ " (itoa cnt-upd) " aktualisiert"))))
+      (if (> cnt-merge 0) (progn (LXI:log-write (strcat "  m " (itoa cnt-merge) " Felder gemerged"))
+        (princ (strcat "\n    m " (itoa cnt-merge) " Felder gemerged (neuester gewinnt)"))))
       (if (> cnt-ren 0) (progn (LXI:log-write (strcat "  > " (itoa cnt-ren) " umbenannt"))
         (princ (strcat "\n    > " (itoa cnt-ren) " umbenannt"))))
       (if (> cnt-del 0) (progn (LXI:log-write (strcat "  - " (itoa cnt-del) " aus Master gel."))
@@ -2575,7 +2796,7 @@
                 (progn
                   (setq cnt-newer 0)
                   (foreach lay master-data
-                    (setq master-modified (nth 13 lay))
+                    (setq master-modified (nth 23 lay))
                     (if (and master-modified
                              (LXI:master-newer-p master-modified last-sync))
                       (setq cnt-newer (1+ cnt-newer))))
@@ -2609,6 +2830,6 @@
 ;;; Initialisierung (nur Minimum beim Laden)
 ;;; ========================================================================
 (LXI:read-config)
-(princ "\nLayerExportImport.lsp v2.4.0 geladen.")
+(princ "\nLayerExportImport.lsp v2.5.1 geladen.")
 (princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG | LAYDIFF | LAYCOUNT")
 (princ)
