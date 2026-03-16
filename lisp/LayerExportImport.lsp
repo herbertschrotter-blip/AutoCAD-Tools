@@ -3,7 +3,7 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System | Custom Property GUID | ObjectDBX Batch-Sync
 ;;; 
-;;; Version: 2.5.1
+;;; Version: 2.7.0
 ;;; Datum:   2026-03-10
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -23,6 +23,7 @@
 ;;;   LAYCFG     - Konfiguration anzeigen / aendern
 ;;;   LAYDIFF    - Vorschau: Unterschiede ohne Sync
 ;;;   LAYCOUNT   - Schnellinfo: Sync-Stand Einzeiler
+;;;   LAYUNDO    - Sync-Vorgang rueckgaengig machen (DCL Dialog)
 ;;;
 ;;; Dateien im LayerSync-Ordner:
 ;;;   LayerMaster.csv  - Layer-Daten mit MasterID (14 Felder)
@@ -86,7 +87,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v2.5.1" fp)
+    (write-line ";;; LayerSync Konfiguration v2.7.0" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -135,7 +136,7 @@
   (setq fp (open filepath "w"))
   (if fp (progn
     (write-line (strcat "=== LayerSync Log - " (LXI:timestamp-sec) " ===") fp)
-    (write-line (strcat "Version: 2.5.1") fp)
+    (write-line (strcat "Version: 2.7.0") fp)
     (write-line (strcat "DWG: " (vl-filename-base (getvar "DWGNAME")) ".dwg") fp)
     (write-line "" fp)
     (close fp))))
@@ -641,9 +642,12 @@
 
 
 ;;; ========================================================================
-;;; HISTORY (.csv) - APPEND ONLY - 6 Felder
-;;; MasterID;LayerName;Datum;Aktion;Detail;Source
-;;; Index: 0=MID 1=LayerName 2=Datum 3=Aktion 4=Detail 5=Source
+;;; HISTORY (.csv) - APPEND ONLY - 8 Felder (v2.6)
+;;; MasterID;LayerName;Datum;Aktion;Property;OldValue;NewValue;Source
+;;; Index: 0=MID 1=LayerName 2=Datum 3=Aktion 4=Property 5=OldValue 6=NewValue 7=Source
+;;; Aktion: NEU, AENDERUNG, UMBENENNUNG, LOESCHUNG
+;;; Property: Color, Linetype, Lineweight, Plot, OnOff, Freeze, Lock,
+;;;           VPDefault, Description, Transparency, Name
 ;;; ========================================================================
 
 (defun LXI:append-history (entries / sync-dir filepath fp entry s needs-header)
@@ -656,10 +660,17 @@
       (if (null fp) nil
         (progn
           (if needs-header
-            (write-line (strcat "MasterID" s "LayerName" s "Datum" s "Aktion" s "Detail" s "Source") fp))
+            (write-line (strcat "MasterID" s "LayerName" s "Datum" s "Aktion"
+                                s "Property" s "OldValue" s "NewValue" s "Source") fp))
           (foreach entry entries
-            (write-line (strcat (nth 0 entry) s (nth 1 entry) s (nth 2 entry) s
-                                (nth 3 entry) s (nth 4 entry) s (nth 5 entry)) fp))
+            (write-line (strcat (if (nth 0 entry) (nth 0 entry) "") s
+                                (if (nth 1 entry) (nth 1 entry) "") s
+                                (if (nth 2 entry) (nth 2 entry) "") s
+                                (if (nth 3 entry) (nth 3 entry) "") s
+                                (if (nth 4 entry) (nth 4 entry) "") s
+                                (if (nth 5 entry) (nth 5 entry) "") s
+                                (if (nth 6 entry) (nth 6 entry) "") s
+                                (if (nth 7 entry) (nth 7 entry) "")) fp))
           (close fp) T)))))
 
 (defun LXI:read-history ( / sync-dir filepath fp line fields result nf)
@@ -681,16 +692,28 @@
                     (setq fields (LXI:split-string line *LXI:sep*))
                     (setq nf (length fields))
                     (cond
-                      ;; 6 Felder, erstes = M -> neues v2.0 Format
-                      ((and (= nf 6) (= (substr (nth 0 fields) 1 1) "M"))
+                      ;; 8 Felder = v2.6 Format
+                      ((and (= nf 8) (= (substr (nth 0 fields) 1 1) "M"))
                         (setq result (cons fields result)))
-                      ;; 6 Felder altes Format: Datum;Aktion;LayerName;Detail;Source;MasterID
+                      ;; 6 Felder, erstes = M -> v2.0 Format migrieren
+                      ((and (= nf 6) (= (substr (nth 0 fields) 1 1) "M"))
+                        (setq result
+                          (cons (list (nth 0 fields) (nth 1 fields) (nth 2 fields)
+                                      (nth 3 fields) "" "" (nth 4 fields) (nth 5 fields))
+                                result)))
+                      ;; 6 Felder altes Format
                       ((= nf 6)
                         (setq result
                           (cons (list (nth 5 fields) (nth 2 fields) (nth 0 fields)
-                                      (nth 1 fields) (nth 3 fields) (nth 4 fields))
+                                      (nth 1 fields) "" "" (nth 3 fields) (nth 4 fields))
                                 result)))))))
               (close fp) (reverse result))))))))
+
+;;; Property-Namen fuer History/Undo
+(defun LXI:prop-names ( / )
+  '("Color" "Linetype" "Lineweight" "Plot" "OnOff"
+    "Freeze" "Lock" "VPDefault" "Description" "Transparency"))
+
 
 
 ;;; ========================================================================
@@ -1330,7 +1353,7 @@
                       (princ (strcat "\n  > Umbenennung: " old-name " -> " lay-name))
                       (setq history-entries
                         (cons (list mid lay-name timestamp "UMBENENNUNG"
-                                    (strcat old-name "->" lay-name) dwg)
+                                    "Name" old-name lay-name dwg)
                               history-entries))
                       (setq cnt-ren (1+ cnt-ren))))
                   
@@ -1371,40 +1394,52 @@
                   ;; Normal exportieren (wenn nicht uebersprungen)
                   (if (null skip-layer)
                     (progn
-                      ;; Aenderungen pruefen (alle 10 Properties)
+                      ;; Aenderungen pruefen und einzeln in History loggen
+                      ;; Master-Indizes: 2=Color 3=Ltype 4=LW 5=Plot 6=OnOff 7=Frz 8=Lock 9=VPDef 10=Desc 11=Trans
+                      ;; Lay-Indizes:    1=Color 2=Ltype 3=LW 7=Plot 4=OnOff 5=Frz 6=Lock 8=VPDef 9=Desc 10=Trans
                       (setq change-details nil)
-                      (setq detail (LXI:compare-field (nth 2 existing-master) (nth 1 lay)))
-                      (if detail (setq change-details (cons (strcat "Farbe:" detail) change-details)))
-                      (if (and (/= (strcase (nth 2 lay)) "CONTINUOUS")
-                               (LXI:compare-field (nth 3 existing-master) (nth 2 lay)))
-                        (setq change-details
-                          (cons (strcat "Linientyp:"
-                                  (LXI:compare-field (nth 3 existing-master) (nth 2 lay)))
-                                change-details)))
-                      (setq detail (LXI:compare-field (nth 4 existing-master) (nth 3 lay)))
-                      (if detail (setq change-details (cons (strcat "LStaerke:" detail) change-details)))
-                      (setq detail (LXI:compare-field (nth 5 existing-master) (nth 7 lay)))
-                      (if detail (setq change-details (cons (strcat "Plot:" detail) change-details)))
-                      (setq detail (LXI:compare-field (nth 6 existing-master) (nth 4 lay)))
-                      (if detail (setq change-details (cons (strcat "OnOff:" detail) change-details)))
-                      (setq detail (LXI:compare-field (nth 7 existing-master) (nth 5 lay)))
-                      (if detail (setq change-details (cons (strcat "Freeze:" detail) change-details)))
-                      (setq detail (LXI:compare-field (nth 8 existing-master) (nth 6 lay)))
-                      (if detail (setq change-details (cons (strcat "Lock:" detail) change-details)))
-                      (setq detail (LXI:compare-field (nth 9 existing-master) (nth 8 lay)))
-                      (if detail (setq change-details (cons (strcat "VPDef:" detail) change-details)))
-                      (setq detail (LXI:compare-field (nth 10 existing-master) (nth 9 lay)))
-                      (if detail (setq change-details (cons (strcat "Desc:" detail) change-details)))
-                      (setq detail (LXI:compare-field (nth 11 existing-master) (nth 10 lay)))
-                      (if detail (setq change-details (cons (strcat "Trans:" detail) change-details)))
-                      (if change-details
-                        (progn
-                          (setq history-entries
-                            (cons (list mid lay-name timestamp "AENDERUNG"
-                                        (apply 'strcat (mapcar '(lambda (d) (strcat d " "))
-                                                               (reverse change-details)))
-                                        dwg) history-entries))
-                          (setq cnt-upd (1+ cnt-upd))))
+                      (if (/= (nth 2 existing-master) (nth 1 lay))
+                        (setq history-entries (cons (list mid lay-name timestamp "AENDERUNG"
+                          "Color" (nth 2 existing-master) (nth 1 lay) dwg) history-entries)
+                          change-details (cons "Color" change-details)))
+                      (if (/= (strcase (nth 3 existing-master)) (strcase (nth 2 lay)))
+                        (if (/= (strcase (nth 2 lay)) "CONTINUOUS")
+                          (setq history-entries (cons (list mid lay-name timestamp "AENDERUNG"
+                            "Linetype" (nth 3 existing-master) (nth 2 lay) dwg) history-entries)
+                            change-details (cons "Linetype" change-details))))
+                      (if (/= (nth 4 existing-master) (nth 3 lay))
+                        (setq history-entries (cons (list mid lay-name timestamp "AENDERUNG"
+                          "Lineweight" (nth 4 existing-master) (nth 3 lay) dwg) history-entries)
+                          change-details (cons "Lineweight" change-details)))
+                      (if (/= (strcase (nth 5 existing-master)) (strcase (nth 7 lay)))
+                        (setq history-entries (cons (list mid lay-name timestamp "AENDERUNG"
+                          "Plot" (nth 5 existing-master) (nth 7 lay) dwg) history-entries)
+                          change-details (cons "Plot" change-details)))
+                      (if (/= (strcase (nth 6 existing-master)) (strcase (nth 4 lay)))
+                        (setq history-entries (cons (list mid lay-name timestamp "AENDERUNG"
+                          "OnOff" (nth 6 existing-master) (nth 4 lay) dwg) history-entries)
+                          change-details (cons "OnOff" change-details)))
+                      (if (/= (strcase (nth 7 existing-master)) (strcase (nth 5 lay)))
+                        (setq history-entries (cons (list mid lay-name timestamp "AENDERUNG"
+                          "Freeze" (nth 7 existing-master) (nth 5 lay) dwg) history-entries)
+                          change-details (cons "Freeze" change-details)))
+                      (if (/= (strcase (nth 8 existing-master)) (strcase (nth 6 lay)))
+                        (setq history-entries (cons (list mid lay-name timestamp "AENDERUNG"
+                          "Lock" (nth 8 existing-master) (nth 6 lay) dwg) history-entries)
+                          change-details (cons "Lock" change-details)))
+                      (if (/= (nth 9 existing-master) (nth 8 lay))
+                        (setq history-entries (cons (list mid lay-name timestamp "AENDERUNG"
+                          "VPDefault" (nth 9 existing-master) (nth 8 lay) dwg) history-entries)
+                          change-details (cons "VPDefault" change-details)))
+                      (if (/= (nth 10 existing-master) (nth 9 lay))
+                        (setq history-entries (cons (list mid lay-name timestamp "AENDERUNG"
+                          "Description" (nth 10 existing-master) (nth 9 lay) dwg) history-entries)
+                          change-details (cons "Description" change-details)))
+                      (if (/= (nth 11 existing-master) (nth 10 lay))
+                        (setq history-entries (cons (list mid lay-name timestamp "AENDERUNG"
+                          "Transparency" (nth 11 existing-master) (nth 10 lay) dwg) history-entries)
+                          change-details (cons "Transparency" change-details)))
+                      (if change-details (setq cnt-upd (1+ cnt-upd)))
                       ;; Master aktualisieren (24 Felder, Field-Level Timestamps)
                       (setq master-data (LXI:remove-by-id master-data mid))
                       (setq master-data
@@ -1488,7 +1523,7 @@
                             dwg timestamp)
                       master-data))
               (setq history-entries
-                (cons (list new-mid lay-name timestamp "NEU" "" dwg) history-entries))
+                (cons (list new-mid lay-name timestamp "NEU" "" "" "" dwg) history-entries))
               (setq cnt-new (1+ cnt-new))))))
       
       ;; Mapper (Handle = Index 11)
@@ -2399,14 +2434,17 @@
           (progn
             (setq results (reverse history) count (min 30 (length results)))
             (princ (strcat "\n\n=== Letzte " (itoa count) " ==="))
-            (princ "\nDatum              Aktion        Layer                    Quelle          Detail")
-            (princ "\n-----------------------------------------------------------------------------")
+            (princ "\nDatum              Aktion        Layer                    Property     Alt          Neu          Quelle")
+            (princ "\n------------------------------------------------------------------------------------------------------")
             (repeat count
               (setq entry (car results))
               (princ (strcat "\n" (LXI:pad-str (nth 2 entry) 19)
                 (LXI:pad-str (nth 3 entry) 13)
                 (LXI:pad-str (nth 1 entry) 25)
-                (LXI:pad-str (nth 5 entry) 16) (nth 4 entry)))
+                (LXI:pad-str (if (nth 4 entry) (nth 4 entry) "") 13)
+                (LXI:pad-str (if (nth 5 entry) (nth 5 entry) "") 13)
+                (LXI:pad-str (if (nth 6 entry) (nth 6 entry) "") 13)
+                (if (nth 7 entry) (nth 7 entry) "")))
               (setq results (cdr results)))
             (princ "\n")))
         ((= choice "Layer")
@@ -2430,13 +2468,16 @@
                     (if results
                       (progn
                         (princ (strcat "\n\n=== " filter-name " [" filter-mid "] ==="))
-                        (princ "\nDatum              Aktion        Layer                    Quelle          Detail")
-                        (princ "\n-----------------------------------------------------------------------------")
+                        (princ "\nDatum              Aktion        Layer                    Property     Alt          Neu          Quelle")
+                        (princ "\n------------------------------------------------------------------------------------------------------")
                         (foreach entry results
                           (princ (strcat "\n" (LXI:pad-str (nth 2 entry) 19)
                             (LXI:pad-str (nth 3 entry) 13)
                             (LXI:pad-str (nth 1 entry) 25)
-                            (LXI:pad-str (nth 5 entry) 16) (nth 4 entry))))
+                            (LXI:pad-str (if (nth 4 entry) (nth 4 entry) "") 13)
+                            (LXI:pad-str (if (nth 5 entry) (nth 5 entry) "") 13)
+                            (LXI:pad-str (if (nth 6 entry) (nth 6 entry) "") 13)
+                            (if (nth 7 entry) (nth 7 entry) ""))))
                         (princ "\n"))
                       (princ "\n*** Keine History.")))
                   (princ (strcat "\n*** \"" filter-name "\" nicht gefunden."))))
@@ -2732,6 +2773,45 @@
 
 
 ;;; ========================================================================
+;;; Hauptbefehl: LAYUNDO - Sync rueckgaengig machen (DCL Dialog)
+;;; Laedt LayerUndo.lsp nach und ruft LXI:run-undo-dialog auf
+;;; ========================================================================
+(defun c:LAYUNDO ( / *error* old-cmdecho undo-path)
+  (defun *error* (msg)
+    (if (not (LXI:cancel-p msg))
+      (progn
+        (princ (strcat "\nFehler: " msg))
+        (LXI:log-write (strcat "*** FEHLER: " msg))))
+    (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
+    (princ))
+  (setq old-cmdecho (getvar "CMDECHO"))
+  (setvar "CMDECHO" 0)
+  (LXI:ensure-init)
+  ;; LayerUndo.lsp laden (nur wenn noch nicht geladen)
+  (if (not (eval 'LXI:run-undo-dialog))
+    (progn
+      (setq undo-path
+        (cond
+          ((findfile "LayerUndo.lsp"))
+          ((findfile (strcat (vl-filename-directory
+                      (findfile "LayerExportImport.lsp"))
+                    "\\LayerUndo.lsp")))))
+      (if undo-path
+        (load undo-path)
+        (progn
+          (princ "\n*** LayerUndo.lsp nicht gefunden!")
+          (princ "\n    Muss neben LayerExportImport.lsp liegen.")
+          (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
+          (princ)))))
+  ;; Dialog ausfuehren
+  (if (eval 'LXI:run-undo-dialog)
+    (LXI:run-undo-dialog)
+    (princ "\n*** LAYUNDO nicht verfuegbar."))
+  (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
+  (princ))
+
+
+;;; ========================================================================
 ;;; AUTO-SYNC REACTOR (bei Speichern)
 ;;; ========================================================================
 
@@ -2830,6 +2910,6 @@
 ;;; Initialisierung (nur Minimum beim Laden)
 ;;; ========================================================================
 (LXI:read-config)
-(princ "\nLayerExportImport.lsp v2.5.1 geladen.")
-(princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG | LAYDIFF | LAYCOUNT")
+(princ "\nLayerExportImport.lsp v2.7.0 geladen.")
+(princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG | LAYDIFF | LAYCOUNT | LAYUNDO")
 (princ)
