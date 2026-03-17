@@ -2,7 +2,7 @@
 ;;; BgColor.lsp
 ;;; Hintergrundfarbe per Toggle umschalten
 ;;;
-;;; Version: 1.7.1
+;;; Version: 1.7.2
 ;;; Datum:   2026-03-17
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -204,7 +204,7 @@
 
   (initget "Einstellungen")
   (setq choice (getkword
-    "\nBgColor [Enter=Toggle / Einstellungen] <Toggle>: "))
+    "\nBgColor [Einstellungen] <Toggle>: "))
 
   (cond
     ((= choice "Einstellungen")
@@ -231,7 +231,7 @@
 ;;; ============================================================
 ;;; Ladebestaetigung
 ;;; ============================================================
-(princ "\nBgColor.lsp v1.7.1 geladen.")
+(princ "\nBgColor.lsp v1.7.2 geladen.")
 (princ (strcat "\n  A: (" (BGC:rgb->str *BGC:color-a*)
                ")  B: (" (BGC:rgb->str *BGC:color-b*) ")"))
 (princ "\nBefehl: BGCOLOR  [Enter=Toggle | E=Einstellungen]")
