@@ -13,7 +13,7 @@
 ;;; - Beliebig viele Zwischenpunkte setzen mit automatisch interpolierter Höhe
 ;;; - ESC zum Beenden
 ;;;
-;;; Version: 1.6.0-debug
+;;; Version: 1.6.1-debug
 ;;; Datum: 2026-03-17
 ;;; Autor: Herbert Schrotter
 
@@ -885,7 +885,7 @@
 ;;; ============================================================================
 
 ;;; Hauptbefehl: Höheninterpolation entlang Linie
-(defun c:HoeheAufLinie ( / *error* old-cmdecho old-attdia pf1 height1 pf2 height2 pg interpolated-height scale current-xline)
+(defun c:HoeheAufLinie ( / *error* old-cmdecho old-attdia pf1 height1 pf2 height2 pg interpolated-height scale current-xline line-ab)
   
   ;; Lokaler Error-Handler
   (defun *error* (msg)
@@ -896,8 +896,9 @@
       )
       (hal-debug (strcat "Benutzer-Abbruch: " msg))
     )
-    ;; Konstruktionslinie aufräumen
+    ;; Konstruktionslinien aufräumen
     (if current-xline (delete-xline current-xline))
+    (if line-ab (entdel line-ab))
     ;; Systemvariablen wiederherstellen
     (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
     (if old-attdia (setvar "ATTDIA" old-attdia))
@@ -996,6 +997,23 @@
                   ;; NEU: T = skip-if-exists für Fixpunkte
                   (insert-hoehenkote-block pf2 height2 scale T)
                   
+                  ;; Temporäre Linie A→B zeichnen (gelb, wird am Ende gelöscht)
+                  (setq line-ab (entmakex
+                    (list
+                      '(0 . "LINE")
+                      '(100 . "AcDbEntity")
+                      '(8 . "0")
+                      '(62 . 2)       ; Farbe Gelb
+                      '(100 . "AcDbLine")
+                      (cons 10 (trans pf1 1 0))   ; Startpunkt BKS→WKS
+                      (cons 11 (trans pf2 1 0))   ; Endpunkt BKS→WKS
+                    )
+                  ))
+                  (if line-ab
+                    (hal-debug "Linie A-B erstellt (gelb)")
+                    (hal-debug "*** Linie A-B Erstellung fehlgeschlagen ***")
+                  )
+                  
                   ;; Schleife: Gesuchte Punkte mit Skalierungs- und Konstruktionslinien-Option
                   (princ "\n")
                   (princ "\n--- Zwischenpunkte setzen (K=Konstruktionslinie, S=Skalierung, ESC=Ende) ---")
@@ -1049,8 +1067,9 @@
                     (hal-debug (strcat "pg raw (nächster)=" (vl-princ-to-string pg)))
                   )
                   
-                  ;; Konstruktionslinie aufräumen
+                  ;; Konstruktionslinien aufräumen
                   (if current-xline (delete-xline current-xline))
+                  (if line-ab (entdel line-ab))
                   
                   (princ "\n\n✓ Höheninterpolation abgeschlossen.")
                 )
@@ -1064,6 +1083,7 @@
   
   ;; Cleanup
   (if current-xline (delete-xline current-xline))
+  (if line-ab (entdel line-ab))
   (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
   (if old-attdia (setvar "ATTDIA" old-attdia))
   
@@ -1115,7 +1135,7 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nHoeheAufLinie.lsp v1.6.0-debug geladen.")
+(princ "\nHoeheAufLinie.lsp v1.6.1-debug geladen.")
 (princ "\nBefehle:")
 (princ "\n  HoeheAufLinie (HAL)      - Höheninterpolation (S=Skalierung, K=Konstruktionslinie)")
 (princ "\n  HALDEBUG                 - Debug ein/aus + Log-Datei")
