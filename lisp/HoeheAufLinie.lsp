@@ -13,7 +13,7 @@
 ;;; - Beliebig viele Zwischenpunkte setzen mit automatisch interpolierter Höhe
 ;;; - ESC zum Beenden
 ;;;
-;;; Version: 1.5.3-debug
+;;; Version: 1.6.0-debug
 ;;; Datum: 2026-03-17
 ;;; Autor: Herbert Schrotter
 
@@ -459,8 +459,187 @@
 )
 
 ;;; ============================================================================
-;;; HILFSFUNKTIONEN - INPUT-VALIDIERUNG
+;;; HILFSFUNKTIONEN - KONSTRUKTIONSLINIE
 ;;; ============================================================================
+
+;;; Berechnet den XY-Punkt auf der Linie PF1-PF2 für eine gegebene Zielhöhe
+;;; (Umgekehrte Interpolation: Höhe → Punkt statt Punkt → Höhe)
+;;;
+;;; Parameter:
+;;;   pf1 - Fixpunkt 1 (Liste x y z)
+;;;   height1 - Höhe bei Fixpunkt 1 (Zahl)
+;;;   pf2 - Fixpunkt 2 (Liste x y z)
+;;;   height2 - Höhe bei Fixpunkt 2 (Zahl)
+;;;   target-height - Gesuchte Höhe (Zahl)
+;;;
+;;; Rückgabe:
+;;;   XY-Punkt auf der Linie (Liste x y 0.0) oder nil bei Fehler
+(defun calculate-point-for-height (pf1 height1 pf2 height2 target-height / height-diff scalar px py)
+  (hal-debug "=== calculate-point-for-height ===")
+  (hal-debug (strcat "  target-height=" (rtos target-height 2 4)))
+  
+  (setq height-diff (- height2 height1))
+  
+  (if (< (abs height-diff) 0.0001)
+    (progn
+      (hal-debug "  *** WARNUNG: Fixpunkte haben gleiche Höhe! Keine Berechnung möglich ***")
+      (princ "\n*** Fixpunkte haben gleiche Höhe - Konstruktionslinie nicht möglich ***")
+      nil
+    )
+    (progn
+      ;; Scalar = (target - h1) / (h2 - h1)
+      (setq scalar (/ (- target-height height1) height-diff))
+      
+      ;; XY-Punkt auf der Linie berechnen
+      (setq px (+ (car pf1) (* scalar (- (car pf2) (car pf1)))))
+      (setq py (+ (cadr pf1) (* scalar (- (cadr pf2) (cadr pf1)))))
+      
+      (hal-debug (strcat "  scalar=" (rtos scalar 2 6)))
+      (hal-debug (strcat "  Punkt=(" (rtos px 2 4) " " (rtos py 2 4) ")"))
+      
+      (if (or (< scalar -0.5) (> scalar 1.5))
+        (princ (strcat "\n  Hinweis: Höhe " (format-height target-height) " liegt außerhalb der Strecke (Extrapolation)"))
+      )
+      
+      (list px py 0.0)
+    )
+  )
+)
+
+;;; Erzeugt eine XLINE (Konstruktionslinie) im rechten Winkel zur Linie PF1-PF2
+;;; durch einen gegebenen Punkt
+;;;
+;;; Parameter:
+;;;   base-pt - Durchgangspunkt (Liste x y z)
+;;;   pf1 - Fixpunkt 1 (für Richtungsberechnung)
+;;;   pf2 - Fixpunkt 2 (für Richtungsberechnung)
+;;;
+;;; Rückgabe:
+;;;   Entity-Name der XLINE oder nil bei Fehler
+(defun create-perpendicular-xline (base-pt pf1 pf2 / dx dy perp-dx perp-dy len ent base-pt-wcs dir-bks dir-wcs)
+  (hal-debug "=== create-perpendicular-xline ===")
+  (hal-debug (strcat "  base-pt(BKS)=(" (rtos (car base-pt) 2 4) " " (rtos (cadr base-pt) 2 4) ")"))
+  
+  ;; Richtungsvektor PF1→PF2 (XY, in BKS)
+  (setq dx (- (car pf2) (car pf1)))
+  (setq dy (- (cadr pf2) (cadr pf1)))
+  
+  ;; Normalvektor (90° gedreht): (-dy, dx)
+  (setq perp-dx (- dy))
+  (setq perp-dy dx)
+  
+  ;; Normieren auf Einheitsvektor
+  (setq len (sqrt (+ (expt perp-dx 2) (expt perp-dy 2))))
+  
+  (if (< len 0.0001)
+    (progn
+      (hal-debug "  *** Fehler: Richtungsvektor hat Länge 0 ***")
+      nil
+    )
+    (progn
+      (setq perp-dx (/ perp-dx len))
+      (setq perp-dy (/ perp-dy len))
+      
+      ;; KRITISCH: BKS → WKS transformieren!
+      ;; entmakex DXF 10/11 erwarten WKS-Koordinaten!
+      (setq base-pt-wcs (trans (list (car base-pt) (cadr base-pt) 0.0) 1 0))
+      
+      ;; Richtungsvektor transformieren (als Vektor, nicht als Punkt!)
+      ;; trans mit 0→0 und T-Flag für Vektoren (displacement)
+      (setq dir-bks (list perp-dx perp-dy 0.0))
+      (setq dir-wcs (trans dir-bks 1 0 T))  ; T = displacement/Vektor
+      
+      (hal-debug (strcat "  Normalvektor(BKS)=(" (rtos perp-dx 2 6) " " (rtos perp-dy 2 6) ")"))
+      (hal-debug (strcat "  base-pt(WKS)=(" (rtos (car base-pt-wcs) 2 4) " " (rtos (cadr base-pt-wcs) 2 4) ")"))
+      (hal-debug (strcat "  dir(WKS)=(" (rtos (car dir-wcs) 2 6) " " (rtos (cadr dir-wcs) 2 6) ")"))
+      
+      ;; XLINE erzeugen mit entmakex
+      ;; DXF 10 = Basispunkt (WKS), DXF 11 = Richtungsvektor (WKS)
+      (setq ent (entmakex
+        (list
+          '(0 . "XLINE")
+          '(100 . "AcDbEntity")
+          '(67 . 0)
+          '(8 . "0")           ; Layer 0
+          '(62 . 1)            ; Farbe Rot (gut sichtbar)
+          '(100 . "AcDbXline")
+          (cons 10 base-pt-wcs)    ; Basispunkt in WKS
+          (cons 11 dir-wcs)        ; Richtungsvektor in WKS
+        )
+      ))
+      
+      (if ent
+        (progn
+          (hal-debug (strcat "  XLINE erstellt: " (vl-princ-to-string ent)))
+          ent
+        )
+        (progn
+          (hal-debug "  *** XLINE Erstellung fehlgeschlagen ***")
+          (princ "\n*** Fehler beim Erstellen der Konstruktionslinie ***")
+          nil
+        )
+      )
+    )
+  )
+)
+
+;;; Löscht eine XLINE Entity (falls vorhanden)
+(defun delete-xline (ent / )
+  (if (and ent (entget ent))
+    (progn
+      (entdel ent)
+      (hal-debug "  XLINE gelöscht")
+      T
+    )
+    nil
+  )
+)
+
+;;; Fragt Zielhöhe und erstellt/aktualisiert Konstruktionslinie
+;;; Löscht vorherige XLINE falls vorhanden
+;;;
+;;; Parameter:
+;;;   pf1, height1, pf2, height2 - Fixpunkte
+;;;   current-xline - Entity-Name der aktuellen XLINE (oder nil)
+;;;
+;;; Rückgabe:
+;;;   Entity-Name der neuen XLINE (oder nil wenn abgebrochen)
+(defun hal-update-construction-line (pf1 height1 pf2 height2 current-xline / target-height base-pt new-xline prompt)
+  ;; Vorherige XLINE löschen
+  (if current-xline
+    (delete-xline current-xline)
+  )
+  
+  ;; Zielhöhe abfragen
+  (setq prompt "\nZielhöhe für Konstruktionslinie eingeben: ")
+  (setq target-height (getreal prompt))
+  
+  (if (null target-height)
+    (progn
+      (princ "\n  Keine Höhe eingegeben - keine Konstruktionslinie")
+      nil
+    )
+    (progn
+      ;; Punkt auf der Linie für diese Höhe berechnen
+      (setq base-pt (calculate-point-for-height pf1 height1 pf2 height2 target-height))
+      
+      (if base-pt
+        (progn
+          ;; XLINE im rechten Winkel erstellen
+          (setq new-xline (create-perpendicular-xline base-pt pf1 pf2))
+          
+          (if new-xline
+            (princ (strcat "\n  ✓ Konstruktionslinie bei Höhe " (format-height target-height)
+                           " | Punkt=(" (rtos (car base-pt) 2 2) ", " (rtos (cadr base-pt) 2 2) ")"))
+          )
+          
+          new-xline
+        )
+        nil  ; Berechnung fehlgeschlagen
+      )
+    )
+  )
+)
 
 ;;; Validiert ob Punkt gültig ist
 (defun valid-point-p (pt)
@@ -706,7 +885,7 @@
 ;;; ============================================================================
 
 ;;; Hauptbefehl: Höheninterpolation entlang Linie
-(defun c:HoeheAufLinie ( / *error* old-cmdecho old-attdia pf1 height1 pf2 height2 pg interpolated-height scale)
+(defun c:HoeheAufLinie ( / *error* old-cmdecho old-attdia pf1 height1 pf2 height2 pg interpolated-height scale current-xline)
   
   ;; Lokaler Error-Handler
   (defun *error* (msg)
@@ -717,6 +896,8 @@
       )
       (hal-debug (strcat "Benutzer-Abbruch: " msg))
     )
+    ;; Konstruktionslinie aufräumen
+    (if current-xline (delete-xline current-xline))
     ;; Systemvariablen wiederherstellen
     (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
     (if old-attdia (setvar "ATTDIA" old-attdia))
@@ -815,51 +996,61 @@
                   ;; NEU: T = skip-if-exists für Fixpunkte
                   (insert-hoehenkote-block pf2 height2 scale T)
                   
-                  ;; Schleife: Gesuchte Punkte mit Skalierungs-Option
+                  ;; Schleife: Gesuchte Punkte mit Skalierungs- und Konstruktionslinien-Option
                   (princ "\n")
-                  (princ "\n--- Zwischenpunkte setzen (ESC = Ende) ---")
+                  (princ "\n--- Zwischenpunkte setzen (K=Konstruktionslinie, S=Skalierung, ESC=Ende) ---")
                   
-                  (initget "Skalierung")
-                  (setq pg (getpoint (strcat "\nGesuchten Punkt wählen (oder Skalierung/ESC <" (rtos scale 2 2) ">): ")))
+                  (setq current-xline nil)
+                  
+                  (initget "Skalierung Konstruktion")
+                  (setq pg (getpoint (strcat "\nPunkt wählen [Skalierung/Konstruktion] <" (rtos scale 2 2) ">: ")))
                   
                   (hal-debug (strcat "pg raw=" (vl-princ-to-string pg)))
                   
                   (while pg
-                    ;; Prüfe ob Keyword "Skalierung" gewählt wurde
-                    (if (= pg "Skalierung")
-                      (progn
-                        (setq scale (getScale))
-                        (initget "Skalierung")
-                        (setq pg (getpoint (strcat "\nGesuchten Punkt wählen (oder Skalierung/ESC <" (rtos scale 2 2) ">): ")))
-                        (hal-debug (strcat "pg raw (nach Skalierung)=" (vl-princ-to-string pg)))
+                    (cond
+                      ;; Keyword "Skalierung" gewählt
+                      ((= pg "Skalierung")
+                       (setq scale (getScale))
                       )
+                      
+                      ;; Keyword "Konstruktion" gewählt
+                      ((= pg "Konstruktion")
+                       (setq current-xline 
+                         (hal-update-construction-line pf1 height1 pf2 height2 current-xline))
+                      )
+                      
                       ;; Normal: Punkt gewählt
-                      (progn
-                        (hal-debug (strcat "--- Zwischenpunkt-Berechnung ---"))
-                        
-                        (if (valid-point-p pg)
-                          (progn
-                            (hal-debug (strcat "pg gültig: (" (rtos (car pg) 2 4) " " (rtos (cadr pg) 2 4) " " (rtos (caddr pg) 2 4) ")"))
-                            
-                            (setq interpolated-height (calculate-interpolated-height pf1 height1 pf2 height2 pg))
-                            (hal-debug (strcat "interpolated-height=" (if interpolated-height (rtos interpolated-height 2 4) "nil")))
-                            
-                            (princ (strcat "\n  Berechnete Höhe: " (format-height interpolated-height)))
-                            ;; nil = immer einfügen für Zwischenpunkte
-                            (insert-hoehenkote-block pg interpolated-height scale nil)
-                          )
-                          (progn
-                            (hal-debug "pg UNGÜLTIG - übersprungen!")
-                            (princ "\n*** Ungültiger Punkt - übersprungen ***")
-                          )
-                        )
-                        ;; Nächsten Punkt abfragen
-                        (initget "Skalierung")
-                        (setq pg (getpoint (strcat "\nGesuchten Punkt wählen (oder Skalierung/ESC <" (rtos scale 2 2) ">): ")))
-                        (hal-debug (strcat "pg raw (nächster)=" (vl-princ-to-string pg)))
+                      (T
+                       (hal-debug (strcat "--- Zwischenpunkt-Berechnung ---"))
+                       
+                       (if (valid-point-p pg)
+                         (progn
+                           (hal-debug (strcat "pg gültig: (" (rtos (car pg) 2 4) " " (rtos (cadr pg) 2 4) " " (rtos (caddr pg) 2 4) ")"))
+                           
+                           (setq interpolated-height (calculate-interpolated-height pf1 height1 pf2 height2 pg))
+                           (hal-debug (strcat "interpolated-height=" (if interpolated-height (rtos interpolated-height 2 4) "nil")))
+                           
+                           (princ (strcat "\n  Berechnete Höhe: " (format-height interpolated-height)))
+                           ;; nil = immer einfügen für Zwischenpunkte
+                           (insert-hoehenkote-block pg interpolated-height scale nil)
+                         )
+                         (progn
+                           (hal-debug "pg UNGÜLTIG - übersprungen!")
+                           (princ "\n*** Ungültiger Punkt - übersprungen ***")
+                         )
+                       )
                       )
                     )
+                    
+                    ;; Nächsten Punkt abfragen
+                    (initget "Skalierung Konstruktion")
+                    (setq pg (getpoint (strcat "\nPunkt wählen [Skalierung/Konstruktion] <" (rtos scale 2 2) ">: ")))
+                    (hal-debug (strcat "pg raw (nächster)=" (vl-princ-to-string pg)))
                   )
+                  
+                  ;; Konstruktionslinie aufräumen
+                  (if current-xline (delete-xline current-xline))
                   
                   (princ "\n\n✓ Höheninterpolation abgeschlossen.")
                 )
@@ -872,6 +1063,7 @@
   )
   
   ;; Cleanup
+  (if current-xline (delete-xline current-xline))
   (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
   (if old-attdia (setvar "ATTDIA" old-attdia))
   
@@ -923,9 +1115,9 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nHoeheAufLinie.lsp v1.5.3-debug geladen.")
+(princ "\nHoeheAufLinie.lsp v1.6.0-debug geladen.")
 (princ "\nBefehle:")
-(princ "\n  HoeheAufLinie (HAL)      - Höheninterpolation entlang Linie (S für Skalierung)")
+(princ "\n  HoeheAufLinie (HAL)      - Höheninterpolation (S=Skalierung, K=Konstruktionslinie)")
 (princ "\n  HALDEBUG                 - Debug ein/aus + Log-Datei")
 (princ "\n  ManageBlockImportHAL     - Block-Verwaltung für HoeheAufLinie")
 (princ "\n  ShowBlockPath            - Zeigt konfigurierten Block-Pfad")
