@@ -18,7 +18,7 @@
 ;;; Autor: Herbert Schrotter
 
 ;;; ============================================================================
-;;; DEBUG-SYSTEM MIT LOG-DATEI
+;;; DEBUG-SYSTEM MIT CRASH-SAFE LOG-DATEI
 ;;; ============================================================================
 
 ;; Debug-Modus: T = ein, nil = aus
@@ -26,22 +26,9 @@
   (setq *hal-debug* nil)
 )
 
-;; Log-Datei Handle (globl, bleibt offen während Debug-Sitzung)
-(if (not (boundp '*hal-log-file*))
-  (setq *hal-log-file* nil)
-)
-
-;; Log-Datei Pfad: lisp/log/ Ordner (abgeleitet von BlockImport.lsp Pfad)
-;; *blockimport-lib-path* zeigt auf .../lisp/lib/BlockImport.lsp
-;; → 1x vl-filename-directory = .../lisp/lib
-;; → 2x vl-filename-directory = .../lisp
-;; → + /log/ = .../lisp/log/
+;; Log-Datei Pfad: %APPDATA%/AutoCAD/log/ (neben den Config-Dateien)
 (setq *hal-log-dir*
-  (if (and *blockimport-lib-path* (vl-filename-directory *blockimport-lib-path*))
-    (strcat (vl-filename-directory (vl-filename-directory *blockimport-lib-path*)) "/log")
-    ;; Fallback: Zeichnungs-Ordner
-    (strcat (vl-string-right-trim "\\" (getvar "DWGPREFIX")) "/log")
-  )
+  (strcat (getenv "APPDATA") "/AutoCAD/log")
 )
 
 ;; Ordner erstellen falls nicht vorhanden
@@ -51,46 +38,33 @@
 
 (setq *hal-log-path* (strcat *hal-log-dir* "/HoeheAufLinie_debug.log"))
 
-;;; Öffnet Log-Datei (überschreibt vorherige Sitzung)
-(defun hal-log-open ( / )
-  ;; Falls noch offen: schließen
-  (if *hal-log-file*
+;;; Schreibt eine Zeile in die Log-Datei (open-append-write-close pro Zeile)
+;;; Crash-safe: Jede Zeile wird sofort auf die Platte geschrieben
+(defun hal-log-write (text / file)
+  (if (setq file (open *hal-log-path* "a"))
     (progn
-      (close *hal-log-file*)
-      (setq *hal-log-file* nil)
-    )
-  )
-  ;; Neu öffnen im Write-Modus (überschreibt!)
-  (if (vl-catch-all-error-p
-        (setq *hal-log-file* (vl-catch-all-apply 'open (list *hal-log-path* "w"))))
-    (progn
-      (princ (strcat "\n*** Fehler: Log-Datei kann nicht geöffnet werden: " *hal-log-path* " ***"))
-      (setq *hal-log-file* nil)
-    )
-    (progn
-      ;; Header schreiben
-      (write-line (strcat "=== HoeheAufLinie Debug Log ===" ) *hal-log-file*)
-      (write-line (strcat "Datum: " (menucmd "M=$(edtime,0,DD.MO.YYYY HH:MM:SS)")) *hal-log-file*)
-      (write-line (strcat "Zeichnung: " (getvar "DWGNAME")) *hal-log-file*)
-      (write-line "===============================" *hal-log-file*)
-      (write-line "" *hal-log-file*)
+      (write-line text file)
+      (close file)
     )
   )
 )
 
-;;; Schließt Log-Datei sauber
-(defun hal-log-close ( / )
-  (if *hal-log-file*
+;;; Erstellt neue Log-Datei mit Header (überschreibt vorherige Sitzung)
+(defun hal-log-start ( / file)
+  (if (setq file (open *hal-log-path* "w"))
     (progn
-      (write-line "" *hal-log-file*)
-      (write-line "=== Log Ende ===" *hal-log-file*)
-      (close *hal-log-file*)
-      (setq *hal-log-file* nil)
+      (write-line "=== HoeheAufLinie Debug Log ===" file)
+      (write-line (strcat "Datum: " (menucmd "M=$(edtime,0,DD.MO.YYYY HH:MM:SS)")) file)
+      (write-line (strcat "Zeichnung: " (getvar "DWGNAME")) file)
+      (write-line "===============================" file)
+      (write-line "" file)
+      (close file)
     )
+    (princ (strcat "\n*** Fehler: Log-Datei kann nicht erstellt werden: " *hal-log-path* " ***"))
   )
 )
 
-;;; Debug-Ausgabe: Command-Line + Log-Datei
+;;; Debug-Ausgabe: Command-Line + Log-Datei (crash-safe)
 ;;; Gibt nur aus wenn *hal-debug* = T
 (defun hal-debug (msg / line)
   (if *hal-debug*
@@ -98,10 +72,8 @@
       (setq line (strcat "[DEBUG] " msg))
       ;; Command-Line Ausgabe
       (princ (strcat "\n  " line))
-      ;; Log-Datei Ausgabe
-      (if *hal-log-file*
-        (write-line line *hal-log-file*)
-      )
+      ;; Log-Datei Ausgabe (open-write-close pro Zeile)
+      (hal-log-write line)
     )
   )
 )
@@ -911,19 +883,19 @@
   (c:HoeheAufLinie)
 )
 
-;;; Debug ein/ausschalten + Log-Datei öffnen/schließen
+;;; Debug ein/ausschalten
 (defun c:HALDEBUG ()
   (setq *hal-debug* (not *hal-debug*))
   (if *hal-debug*
     (progn
-      ;; Debug EIN: Log-Datei öffnen (überschreibt vorherige Sitzung)
-      (hal-log-open)
-      (princ (strcat "\nDebug-Modus: EIN"))
+      ;; Debug EIN: Neue Log-Datei erstellen (überschreibt vorherige Sitzung)
+      (hal-log-start)
+      (princ "\nDebug-Modus: EIN")
       (princ (strcat "\nLog-Datei: " *hal-log-path*))
     )
     (progn
-      ;; Debug AUS: Log-Datei schließen
-      (hal-log-close)
+      ;; Debug AUS
+      (hal-log-write "=== Log Ende ===")
       (princ "\nDebug-Modus: AUS")
       (princ (strcat "\nLog gespeichert: " *hal-log-path*))
     )
