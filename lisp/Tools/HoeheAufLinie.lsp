@@ -13,7 +13,7 @@
 ;;; - Beliebig viele Zwischenpunkte setzen mit automatisch interpolierter Höhe
 ;;; - ESC zum Beenden
 ;;;
-;;; Version: 1.6.1-debug
+;;; Version: 1.6.2-debug
 ;;; Datum: 2026-03-17
 ;;; Autor: Herbert Schrotter
 
@@ -597,14 +597,16 @@
 
 ;;; Fragt Zielhöhe und erstellt/aktualisiert Konstruktionslinie
 ;;; Löscht vorherige XLINE falls vorhanden
+;;; Verlängert die gelbe Linie A-B falls Zielhöhe außerhalb liegt
 ;;;
 ;;; Parameter:
 ;;;   pf1, height1, pf2, height2 - Fixpunkte
 ;;;   current-xline - Entity-Name der aktuellen XLINE (oder nil)
+;;;   line-ab - Entity-Name der gelben Linie A-B (oder nil)
 ;;;
 ;;; Rückgabe:
-;;;   Entity-Name der neuen XLINE (oder nil wenn abgebrochen)
-(defun hal-update-construction-line (pf1 height1 pf2 height2 current-xline / target-height base-pt new-xline prompt)
+;;;   Liste (new-xline updated-line-ab) 
+(defun hal-update-construction-line (pf1 height1 pf2 height2 current-xline line-ab / target-height base-pt new-xline prompt scalar ent-data)
   ;; Vorherige XLINE löschen
   (if current-xline
     (delete-xline current-xline)
@@ -617,7 +619,7 @@
   (if (null target-height)
     (progn
       (princ "\n  Keine Höhe eingegeben - keine Konstruktionslinie")
-      nil
+      (list nil line-ab)
     )
     (progn
       ;; Punkt auf der Linie für diese Höhe berechnen
@@ -633,9 +635,61 @@
                            " | Punkt=(" (rtos (car base-pt) 2 2) ", " (rtos (cadr base-pt) 2 2) ")"))
           )
           
-          new-xline
+          ;; Gelbe Linie A-B verlängern wenn Zielhöhe außerhalb liegt
+          ;; Scalar: 0=bei A, 1=bei B, <0=vor A, >1=nach B
+          (setq scalar (/ (- target-height height1) (- height2 height1)))
+          (hal-debug (strcat "  Konstruktions-Scalar=" (rtos scalar 2 6)))
+          
+          (if (and line-ab (or (< scalar 0.0) (> scalar 1.0)))
+            (progn
+              (hal-debug "  Linie A-B wird verlängert bis Konstruktionspunkt")
+              ;; Alte Linie löschen
+              (entdel line-ab)
+              ;; Neue Linie erstellen: 
+              ;; Wenn scalar < 0 → Punkt liegt vor A → Linie von base-pt bis B
+              ;; Wenn scalar > 1 → Punkt liegt nach B → Linie von A bis base-pt
+              (setq line-ab (entmakex
+                (list
+                  '(0 . "LINE")
+                  '(100 . "AcDbEntity")
+                  '(8 . "0")
+                  '(62 . 2)       ; Farbe Gelb
+                  '(100 . "AcDbLine")
+                  (cons 10 (if (< scalar 0.0)
+                             (trans base-pt 1 0)     ; Start = Konstruktionspunkt
+                             (trans pf1 1 0)))        ; Start = A
+                  (cons 11 (if (> scalar 1.0)
+                             (trans base-pt 1 0)     ; Ende = Konstruktionspunkt
+                             (trans pf2 1 0)))        ; Ende = B
+                )
+              ))
+              (if line-ab
+                (hal-debug "  Linie A-B verlängert")
+                (hal-debug "  *** Linie A-B Verlängerung fehlgeschlagen ***")
+              )
+            )
+            ;; Innerhalb A-B: Linie auf Original zurücksetzen
+            (if line-ab
+              (progn
+                (entdel line-ab)
+                (setq line-ab (entmakex
+                  (list
+                    '(0 . "LINE")
+                    '(100 . "AcDbEntity")
+                    '(8 . "0")
+                    '(62 . 2)
+                    '(100 . "AcDbLine")
+                    (cons 10 (trans pf1 1 0))
+                    (cons 11 (trans pf2 1 0))
+                  )
+                ))
+              )
+            )
+          )
+          
+          (list new-xline line-ab)
         )
-        nil  ; Berechnung fehlgeschlagen
+        (list nil line-ab)  ; Berechnung fehlgeschlagen
       )
     )
   )
@@ -885,7 +939,7 @@
 ;;; ============================================================================
 
 ;;; Hauptbefehl: Höheninterpolation entlang Linie
-(defun c:HoeheAufLinie ( / *error* old-cmdecho old-attdia pf1 height1 pf2 height2 pg interpolated-height scale current-xline line-ab)
+(defun c:HoeheAufLinie ( / *error* old-cmdecho old-attdia pf1 height1 pf2 height2 pg interpolated-height scale current-xline line-ab result-list)
   
   ;; Lokaler Error-Handler
   (defun *error* (msg)
@@ -1034,8 +1088,10 @@
                       
                       ;; Keyword "Konstruktion" gewählt
                       ((= pg "Konstruktion")
-                       (setq current-xline 
-                         (hal-update-construction-line pf1 height1 pf2 height2 current-xline))
+                       (setq result-list 
+                         (hal-update-construction-line pf1 height1 pf2 height2 current-xline line-ab))
+                       (setq current-xline (car result-list))
+                       (setq line-ab (cadr result-list))
                       )
                       
                       ;; Normal: Punkt gewählt
@@ -1135,7 +1191,7 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nHoeheAufLinie.lsp v1.6.1-debug geladen.")
+(princ "\nHoeheAufLinie.lsp v1.6.2-debug geladen.")
 (princ "\nBefehle:")
 (princ "\n  HoeheAufLinie (HAL)      - Höheninterpolation (S=Skalierung, K=Konstruktionslinie)")
 (princ "\n  HALDEBUG                 - Debug ein/aus + Log-Datei")
