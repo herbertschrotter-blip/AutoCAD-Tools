@@ -13,9 +13,98 @@
 ;;; - Beliebig viele Zwischenpunkte setzen mit automatisch interpolierter Höhe
 ;;; - ESC zum Beenden
 ;;;
-;;; Version: 1.5.1
-;;; Datum: 2026-02-24
+;;; Version: 1.5.3-debug
+;;; Datum: 2026-03-17
 ;;; Autor: Herbert Schrotter
+
+;;; ============================================================================
+;;; DEBUG-SYSTEM MIT LOG-DATEI
+;;; ============================================================================
+
+;; Debug-Modus: T = ein, nil = aus
+(if (not (boundp '*hal-debug*))
+  (setq *hal-debug* nil)
+)
+
+;; Log-Datei Handle (globl, bleibt offen während Debug-Sitzung)
+(if (not (boundp '*hal-log-file*))
+  (setq *hal-log-file* nil)
+)
+
+;; Log-Datei Pfad: lisp/log/ Ordner (abgeleitet von BlockImport.lsp Pfad)
+;; *blockimport-lib-path* zeigt auf .../lisp/lib/BlockImport.lsp
+;; → 1x vl-filename-directory = .../lisp/lib
+;; → 2x vl-filename-directory = .../lisp
+;; → + /log/ = .../lisp/log/
+(setq *hal-log-dir*
+  (if (and *blockimport-lib-path* (vl-filename-directory *blockimport-lib-path*))
+    (strcat (vl-filename-directory (vl-filename-directory *blockimport-lib-path*)) "/log")
+    ;; Fallback: Zeichnungs-Ordner
+    (strcat (vl-string-right-trim "\\" (getvar "DWGPREFIX")) "/log")
+  )
+)
+
+;; Ordner erstellen falls nicht vorhanden
+(if (not (vl-file-directory-p *hal-log-dir*))
+  (vl-mkdir *hal-log-dir*)
+)
+
+(setq *hal-log-path* (strcat *hal-log-dir* "/HoeheAufLinie_debug.log"))
+
+;;; Öffnet Log-Datei (überschreibt vorherige Sitzung)
+(defun hal-log-open ( / )
+  ;; Falls noch offen: schließen
+  (if *hal-log-file*
+    (progn
+      (close *hal-log-file*)
+      (setq *hal-log-file* nil)
+    )
+  )
+  ;; Neu öffnen im Write-Modus (überschreibt!)
+  (if (vl-catch-all-error-p
+        (setq *hal-log-file* (vl-catch-all-apply 'open (list *hal-log-path* "w"))))
+    (progn
+      (princ (strcat "\n*** Fehler: Log-Datei kann nicht geöffnet werden: " *hal-log-path* " ***"))
+      (setq *hal-log-file* nil)
+    )
+    (progn
+      ;; Header schreiben
+      (write-line (strcat "=== HoeheAufLinie Debug Log ===" ) *hal-log-file*)
+      (write-line (strcat "Datum: " (menucmd "M=$(edtime,0,DD.MO.YYYY HH:MM:SS)")) *hal-log-file*)
+      (write-line (strcat "Zeichnung: " (getvar "DWGNAME")) *hal-log-file*)
+      (write-line "===============================" *hal-log-file*)
+      (write-line "" *hal-log-file*)
+    )
+  )
+)
+
+;;; Schließt Log-Datei sauber
+(defun hal-log-close ( / )
+  (if *hal-log-file*
+    (progn
+      (write-line "" *hal-log-file*)
+      (write-line "=== Log Ende ===" *hal-log-file*)
+      (close *hal-log-file*)
+      (setq *hal-log-file* nil)
+    )
+  )
+)
+
+;;; Debug-Ausgabe: Command-Line + Log-Datei
+;;; Gibt nur aus wenn *hal-debug* = T
+(defun hal-debug (msg / line)
+  (if *hal-debug*
+    (progn
+      (setq line (strcat "[DEBUG] " msg))
+      ;; Command-Line Ausgabe
+      (princ (strcat "\n  " line))
+      ;; Log-Datei Ausgabe
+      (if *hal-log-file*
+        (write-line line *hal-log-file*)
+      )
+    )
+  )
+)
 
 ;;; ============================================================================
 ;;; BIBLIOTHEKEN LADEN
@@ -269,11 +358,17 @@
   ;; getpoint gibt BKS-Koordinaten zurück!
   (setq pt-wcs (trans pt 1 0))  ; 1=UCS(BKS), 0=WCS
   
+  (hal-debug (strcat "block-exists-at-position: blockname=" blockname))
+  (hal-debug (strcat "  pt(BKS)=(" (rtos (car pt) 2 4) " " (rtos (cadr pt) 2 4) " " (rtos (caddr pt) 2 4) ")"))
+  (hal-debug (strcat "  pt(WKS)=(" (rtos (car pt-wcs) 2 4) " " (rtos (cadr pt-wcs) 2 4) " " (rtos (caddr pt-wcs) 2 4) ")"))
+  (hal-debug (strcat "  height=" (rtos height 2 4)))
+  
   ;; Suche alle Blöcke mit diesem Namen
   (setq ss (ssget "_X" (list (cons 0 "INSERT") (cons 2 blockname))))
   
   (if ss
     (progn
+      (hal-debug (strcat "  Gefundene Blöcke: " (itoa (sslength ss))))
       (setq i 0)
       (while (and (< i (sslength ss)) (not found))
         (setq ent (ssname ss i))
@@ -286,18 +381,32 @@
         ;; Berechne Z-Abstand
         (setq dist-z (abs (- height (caddr inspt))))
         
+        (hal-debug (strcat "  Block[" (itoa i) "] inspt=(" 
+                           (rtos (car inspt) 2 4) " " (rtos (cadr inspt) 2 4) " " (rtos (caddr inspt) 2 4) 
+                           ") dist-xy=" (rtos dist-xy 2 4) " dist-z=" (rtos dist-z 2 4)))
+        
         ;; Prüfe beide Abstände
         (if (and (< dist-xy tolerance-xy)
                  (< dist-z tolerance-z))
-          (setq found T)  ; Block in Nähe gefunden!
+          (progn
+            (hal-debug "  >>> MATCH GEFUNDEN - Block existiert bereits!")
+            (setq found T)
+          )
         )
         
         (setq i (1+ i))
       )
       
+      (if (not found)
+        (hal-debug "  Kein Match gefunden")
+      )
+      
       found
     )
-    nil  ; Keine Blöcke gefunden
+    (progn
+      (hal-debug "  Keine Blöcke mit diesem Namen in Zeichnung")
+      nil
+    )
   )
 )
 
@@ -323,6 +432,11 @@
 ;;;   - Punkte links von PF1 (scalar < 0) → Extrapolation
 ;;;   - Punkte rechts von PF2 (scalar > 1) → Extrapolation
 (defun calculate-interpolated-height (pf1 height1 pf2 height2 pg / vpf vpg scalar dist-pf1-pf2 height-diff interpolated-height)
+  (hal-debug "=== calculate-interpolated-height ===")
+  (hal-debug (strcat "  pf1=(" (rtos (car pf1) 2 4) " " (rtos (cadr pf1) 2 4) " " (rtos (caddr pf1) 2 4) ") h1=" (rtos height1 2 4)))
+  (hal-debug (strcat "  pf2=(" (rtos (car pf2) 2 4) " " (rtos (cadr pf2) 2 4) " " (rtos (caddr pf2) 2 4) ") h2=" (rtos height2 2 4)))
+  (hal-debug (strcat "  pg=(" (rtos (car pg) 2 4) " " (rtos (cadr pg) 2 4) " " (rtos (caddr pg) 2 4) ")"))
+  
   ;; Vektor von pf1 zu pf2 (nur XY-Ebene)
   (setq vpf (list (- (car pf2) (car pf1)) 
                   (- (cadr pf2) (cadr pf1))))
@@ -331,20 +445,45 @@
   (setq vpg (list (- (car pg) (car pf1)) 
                   (- (cadr pg) (cadr pf1))))
   
-  ;; Skalarprojektion: Wie weit liegt pg auf der Linie pf1-pf2?
-  ;; Scalar = 0.0 bei pf1, 1.0 bei pf2, <0 links von pf1, >1 rechts von pf2
-  (setq scalar (/ (+ (* (car vpg) (car vpf)) 
-                     (* (cadr vpg) (cadr vpf))) 
-                  (expt (distance pf1 pf2) 2)))
+  (hal-debug (strcat "  vpf=(" (rtos (car vpf) 2 4) " " (rtos (cadr vpf) 2 4) ")"))
+  (hal-debug (strcat "  vpg=(" (rtos (car vpg) 2 4) " " (rtos (cadr vpg) 2 4) ")"))
   
-  ;; Höhendifferenz zwischen Fixpunkten
-  (setq height-diff (- height2 height1))
+  ;; 2D-Distanz PF1-PF2 (nur XY!) für Division-by-Zero Check
+  ;; WICHTIG: distance() rechnet 3D wenn Punkte Z-Werte haben!
+  ;; Wir brauchen NUR die XY-Distanz, daher aus vpf-Vektor berechnen
+  (setq dist-pf1-pf2 (sqrt (+ (expt (car vpf) 2) (expt (cadr vpf) 2))))
+  (hal-debug (strcat "  dist-2D(pf1,pf2)=" (rtos dist-pf1-pf2 2 6)))
   
-  ;; Interpolierte Höhe berechnen
-  ;; WICHTIG: Verwende Skalar direkt - funktioniert auch für Punkte außerhalb!
-  (setq interpolated-height (+ height1 (* scalar height-diff)))
-  
-  interpolated-height
+  (if (< dist-pf1-pf2 0.0001)
+    (progn
+      (hal-debug "  *** WARNUNG: PF1 und PF2 zu nahe beieinander! Division by zero vermieden ***")
+      (princ "\n*** WARNUNG: Fixpunkte haben gleiche XY-Position! ***")
+      height1  ; Fallback: Höhe von PF1
+    )
+    (progn
+      ;; Skalarprojektion: Wie weit liegt pg auf der Linie pf1-pf2?
+      ;; Scalar = 0.0 bei pf1, 1.0 bei pf2, <0 links von pf1, >1 rechts von pf2
+      (setq scalar (/ (+ (* (car vpg) (car vpf)) 
+                         (* (cadr vpg) (cadr vpf))) 
+                      (expt dist-pf1-pf2 2)))
+      
+      ;; Höhendifferenz zwischen Fixpunkten
+      (setq height-diff (- height2 height1))
+      
+      ;; Interpolierte Höhe berechnen
+      (setq interpolated-height (+ height1 (* scalar height-diff)))
+      
+      (hal-debug (strcat "  scalar=" (rtos scalar 2 6)))
+      (hal-debug (strcat "  height-diff=" (rtos height-diff 2 4)))
+      (hal-debug (strcat "  interpolated-height=" (rtos interpolated-height 2 4)))
+      
+      (if (or (< scalar -0.1) (> scalar 1.1))
+        (hal-debug (strcat "  *** HINWEIS: Punkt liegt ausserhalb der Strecke (Extrapolation)! ***"))
+      )
+      
+      interpolated-height
+    )
+  )
 )
 
 ;;; ============================================================================
@@ -353,6 +492,26 @@
 
 ;;; Validiert ob Punkt gültig ist
 (defun valid-point-p (pt)
+  (hal-debug (strcat "valid-point-p: pt=" (vl-princ-to-string pt)))
+  (hal-debug (strcat "  pt ist nil? " (if (null pt) "JA" "NEIN")))
+  (if pt
+    (progn
+      (hal-debug (strcat "  listp? " (if (listp pt) "JA" "NEIN")))
+      (if (listp pt)
+        (progn
+          (hal-debug (strcat "  length=" (itoa (length pt))))
+          (if (= (length pt) 3)
+            (progn
+              (hal-debug (strcat "  numberp(car)=" (if (numberp (car pt)) "JA" "NEIN")))
+              (hal-debug (strcat "  numberp(cadr)=" (if (numberp (cadr pt)) "JA" "NEIN")))
+              (hal-debug (strcat "  numberp(caddr)=" (if (numberp (caddr pt)) "JA" "NEIN")))
+            )
+          )
+        )
+      )
+    )
+  )
+  
   (and pt
        (listp pt)
        (= (length pt) 3)
@@ -376,10 +535,15 @@
   
   (setq height (getreal prompt))
   
+  (hal-debug (strcat "get-validated-height: height=" (if height (rtos height 2 4) "nil") " default=" (if default (rtos default 2 4) "nil")))
+  
   ;; Falls ENTER gedrückt: Default verwenden
   (if (null height)
     (if default
-      (setq height default)
+      (progn
+        (setq height default)
+        (hal-debug (strcat "  Verwende Default: " (rtos height 2 4)))
+      )
       ;; Kein Default: Nochmal fragen
       (progn
         (while (null height)
@@ -447,65 +611,106 @@
 (defun insert-hoehenkote-block (einfuegepunkt hoehe scale skip-if-exists / blockName heightStr old-attdia block-available importEnt ent attribs insertionPoint)
   (setq blockName *hoehenkote-blockname*)
   
+  (hal-debug "=== insert-hoehenkote-block ===")
+  (hal-debug (strcat "  einfuegepunkt=(" (rtos (car einfuegepunkt) 2 4) " " (rtos (cadr einfuegepunkt) 2 4) " " (rtos (caddr einfuegepunkt) 2 4) ")"))
+  (hal-debug (strcat "  hoehe=" (rtos hoehe 2 4)))
+  (hal-debug (strcat "  scale=" (rtos scale 2 4)))
+  (hal-debug (strcat "  skip-if-exists=" (if skip-if-exists "T" "nil")))
+  (hal-debug (strcat "  blockName=" blockName))
+  
   ;; Parameter-Prüfung
   (if (and (valid-point-p einfuegepunkt) (valid-height-p hoehe) scale)
     (progn
+      (hal-debug "  Parameter-Prüfung: OK")
       
       ;; NEU: Prüfe ob Block bereits existiert (nur wenn skip-if-exists = T)
       (if (and skip-if-exists (block-exists-at-position einfuegepunkt hoehe blockName))
         (progn
+          (hal-debug "  >>> Block existiert bereits - ÜBERSPRUNGEN")
           (princ (strcat "\n  ✓ Block existiert bereits: " (format-height-value hoehe) " | Z=" (rtos hoehe 2 3)))
           nil  ; Kein Block eingefügt
         )
         (progn
+          (hal-debug "  Block wird eingefügt...")
+          
           ;; BESTEHENDER CODE: Block verfügbar machen
           (setq block-available (ensure-block-available blockName))
+          (hal-debug (strcat "  ensure-block-available Ergebnis: car=" (if (car block-available) "T" "nil")))
           
           (if (car block-available)
             (progn
               (setq importEnt (cadr block-available))
+              (hal-debug (strcat "  importEnt=" (if importEnt (vl-princ-to-string importEnt) "nil")))
               
               ;; Höhe formatieren
               (setq heightStr (format-height-value hoehe))
+              (hal-debug (strcat "  heightStr=" heightStr))
               
               ;; ATTDIA sichern
               (setq old-attdia (getvar "ATTDIA"))
               (setvar "ATTDIA" 0)
               
               ;; Block einfügen MIT XY-SKALIERUNG
+              (hal-debug (strcat "  _-insert: blockName=" blockName " scale=" (rtos scale 2 4)))
               (command "_-insert" blockName einfuegepunkt scale scale "" "")
+              
+              ;; Prüfe ob command erfolgreich war
+              (setq ent (entlast))
+              (hal-debug (strcat "  entlast nach insert: " (if ent (vl-princ-to-string ent) "nil")))
+              
+              (if ent
+                (hal-debug (strcat "  entlast Typ: " (cdr (assoc 0 (entget ent)))))
+              )
               
               ;; ATTDIA wiederherstellen
               (setvar "ATTDIA" old-attdia)
               
               ;; Attribute setzen
-              (setq ent (entlast))
               (if (and ent (eq (cdr (assoc 0 (entget ent))) "INSERT"))
                 (progn
+                  (hal-debug "  Block INSERT gefunden - setze Attribute...")
                   (setq attribs (entnext ent))
                   (while (and attribs (eq (cdr (assoc 0 (entget attribs))) "ATTRIB"))
+                    (hal-debug (strcat "    Attribut: " (cdr (assoc 2 (entget attribs))) " = " (cdr (assoc 1 (entget attribs)))))
                     (if (eq (cdr (assoc 2 (entget attribs))) "HOEHE")
-                      (entmod (subst (cons 1 heightStr) (assoc 1 (entget attribs)) (entget attribs)))
+                      (progn
+                        (hal-debug (strcat "    >>> Setze HOEHE auf: " heightStr))
+                        (entmod (subst (cons 1 heightStr) (assoc 1 (entget attribs)) (entget attribs)))
+                      )
                     )
                     (setq attribs (entnext attribs))
                   )
+                )
+                (progn
+                  (hal-debug "  *** entlast ist KEIN INSERT! Block-Einfügung möglicherweise fehlgeschlagen!")
                 )
               )
               
               ;; Block auf Höhe verschieben
               (setq insertionPoint (cdr (assoc 10 (entget ent))))
+              (hal-debug (strcat "  insertionPoint=(" (rtos (car insertionPoint) 2 4) " " (rtos (cadr insertionPoint) 2 4) " " (rtos (caddr insertionPoint) 2 4) ")"))
+              (hal-debug (strcat "  move to Z=" (rtos hoehe 2 4)))
+              
               (command "_move" ent "" "_non" insertionPoint "_non" 
                        (list (car insertionPoint) (cadr insertionPoint) hoehe))
               
+              ;; Prüfe Position nach Move
+              (setq insertionPoint (cdr (assoc 10 (entget ent))))
+              (hal-debug (strcat "  Position nach Move=(" (rtos (car insertionPoint) 2 4) " " (rtos (cadr insertionPoint) 2 4) " " (rtos (caddr insertionPoint) 2 4) ")"))
+              
               ;; Import-Block entfernen
               (if importEnt
-                (entdel importEnt)
+                (progn
+                  (hal-debug "  Entferne importEnt...")
+                  (entdel importEnt)
+                )
               )
               
               (princ (strcat "\n  ✓ Höhenkote gesetzt: " heightStr " | Z=" (rtos hoehe 2 3) " | XY-Scale=" (rtos scale 2 2)))
               T
             )
             (progn
+              (hal-debug "  *** ensure-block-available FEHLGESCHLAGEN!")
               (princ "\n*** FEHLER: Block konnte nicht geladen werden ***")
               nil
             )
@@ -514,6 +719,10 @@
       )
     )
     (progn
+      (hal-debug (strcat "  *** Parameter-Prüfung FEHLGESCHLAGEN!"
+                         " valid-point=" (if (valid-point-p einfuegepunkt) "T" "nil")
+                         " valid-height=" (if (valid-height-p hoehe) "T" "nil")
+                         " scale=" (if scale "OK" "nil")))
       (princ "\n*** Fehler: Ungültige Parameter ***")
       nil
     )
@@ -530,7 +739,11 @@
   ;; Lokaler Error-Handler
   (defun *error* (msg)
     (if (not (member msg '("Function cancelled" "quit / exit abort")))
-      (princ (strcat "\nFehler: " msg))
+      (progn
+        (princ (strcat "\nFehler: " msg))
+        (hal-debug (strcat "*** ERROR: " msg " ***"))
+      )
+      (hal-debug (strcat "Benutzer-Abbruch: " msg))
     )
     ;; Systemvariablen wiederherstellen
     (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
@@ -549,11 +762,14 @@
   
   ;; Hauptprogramm
   (princ "\n=== Höheninterpolation entlang Linie ===")
+  (if *hal-debug* (princ "\n*** DEBUG-MODUS AKTIV ***"))
   (princ "\nSetzen Sie zwei Fixpunkte mit bekannten Höhen.")
   (princ "\nDann können Sie beliebig viele Zwischenpunkte setzen.")
   
   ;; Skalierung laden oder initialisieren
   (setq scale (read-scale-config))
+  (hal-debug (strcat "Scale aus Config: " (if scale (rtos scale 2 4) "nil")))
+  
   (if (null scale)
     (progn
       (princ "\n*** Keine Skalierung konfiguriert ***")
@@ -566,21 +782,30 @@
   (initget "Skalierung")
   (setq pf1 (getpoint (strcat "\nFixpunkt 1 wählen (oder Skalierung <" (rtos scale 2 2) ">): ")))
   
+  (hal-debug (strcat "pf1 raw=" (vl-princ-to-string pf1)))
+  
   ;; Prüfe ob Keyword "Skalierung" gewählt wurde
   (while (= pf1 "Skalierung")
     (setq scale (getScale))
     (initget "Skalierung")
     (setq pf1 (getpoint (strcat "\nFixpunkt 1 wählen (oder Skalierung <" (rtos scale 2 2) ">): ")))
+    (hal-debug (strcat "pf1 raw (nach Skalierung)=" (vl-princ-to-string pf1)))
   )
   
   (if (not (valid-point-p pf1))
-    (princ "\n*** Abbruch: Kein gültiger Punkt gewählt ***")
     (progn
+      (hal-debug "pf1 ungültig - Abbruch")
+      (princ "\n*** Abbruch: Kein gültiger Punkt gewählt ***")
+    )
+    (progn
+      (hal-debug (strcat "pf1 gültig: (" (rtos (car pf1) 2 4) " " (rtos (cadr pf1) 2 4) " " (rtos (caddr pf1) 2 4) ")"))
+      
       (setq height1 (get-validated-height "\nHöhe Fixpunkt 1 eingeben" g_lastHeight))
       
       (if (not height1)
         (princ "\n*** Abbruch: Keine gültige Höhe eingegeben ***")
         (progn
+          (hal-debug (strcat "height1=" (rtos height1 2 4)))
           (setq g_lastHeight height1)
           ;; NEU: T = skip-if-exists für Fixpunkte
           (insert-hoehenkote-block pf1 height1 scale T)
@@ -590,21 +815,30 @@
           (initget "Skalierung")
           (setq pf2 (getpoint (strcat "\nFixpunkt 2 wählen (oder Skalierung <" (rtos scale 2 2) ">): ")))
           
+          (hal-debug (strcat "pf2 raw=" (vl-princ-to-string pf2)))
+          
           ;; Prüfe ob Keyword "Skalierung" gewählt wurde
           (while (= pf2 "Skalierung")
             (setq scale (getScale))
             (initget "Skalierung")
             (setq pf2 (getpoint (strcat "\nFixpunkt 2 wählen (oder Skalierung <" (rtos scale 2 2) ">): ")))
+            (hal-debug (strcat "pf2 raw (nach Skalierung)=" (vl-princ-to-string pf2)))
           )
           
           (if (not (valid-point-p pf2))
-            (princ "\n*** Abbruch: Kein gültiger Punkt gewählt ***")
             (progn
+              (hal-debug "pf2 ungültig - Abbruch")
+              (princ "\n*** Abbruch: Kein gültiger Punkt gewählt ***")
+            )
+            (progn
+              (hal-debug (strcat "pf2 gültig: (" (rtos (car pf2) 2 4) " " (rtos (cadr pf2) 2 4) " " (rtos (caddr pf2) 2 4) ")"))
+              
               (setq height2 (get-validated-height "\nHöhe Fixpunkt 2 eingeben" g_lastHeight))
               
               (if (not height2)
                 (princ "\n*** Abbruch: Keine gültige Höhe eingegeben ***")
                 (progn
+                  (hal-debug (strcat "height2=" (rtos height2 2 4)))
                   (setq g_lastHeight height2)
                   ;; NEU: T = skip-if-exists für Fixpunkte
                   (insert-hoehenkote-block pf2 height2 scale T)
@@ -616,6 +850,8 @@
                   (initget "Skalierung")
                   (setq pg (getpoint (strcat "\nGesuchten Punkt wählen (oder Skalierung/ESC <" (rtos scale 2 2) ">): ")))
                   
+                  (hal-debug (strcat "pg raw=" (vl-princ-to-string pg)))
+                  
                   (while pg
                     ;; Prüfe ob Keyword "Skalierung" gewählt wurde
                     (if (= pg "Skalierung")
@@ -623,21 +859,32 @@
                         (setq scale (getScale))
                         (initget "Skalierung")
                         (setq pg (getpoint (strcat "\nGesuchten Punkt wählen (oder Skalierung/ESC <" (rtos scale 2 2) ">): ")))
+                        (hal-debug (strcat "pg raw (nach Skalierung)=" (vl-princ-to-string pg)))
                       )
                       ;; Normal: Punkt gewählt
                       (progn
+                        (hal-debug (strcat "--- Zwischenpunkt-Berechnung ---"))
+                        
                         (if (valid-point-p pg)
                           (progn
+                            (hal-debug (strcat "pg gültig: (" (rtos (car pg) 2 4) " " (rtos (cadr pg) 2 4) " " (rtos (caddr pg) 2 4) ")"))
+                            
                             (setq interpolated-height (calculate-interpolated-height pf1 height1 pf2 height2 pg))
+                            (hal-debug (strcat "interpolated-height=" (if interpolated-height (rtos interpolated-height 2 4) "nil")))
+                            
                             (princ (strcat "\n  Berechnete Höhe: " (format-height interpolated-height)))
                             ;; NEU: nil = immer einfügen für Zwischenpunkte
                             (insert-hoehenkote-block pg interpolated-height scale nil)
                           )
-                          (princ "\n*** Ungültiger Punkt - übersprungen ***")
+                          (progn
+                            (hal-debug "pg UNGÜLTIG - übersprungen!")
+                            (princ "\n*** Ungültiger Punkt - übersprungen ***")
+                          )
                         )
                         ;; Nächsten Punkt abfragen
                         (initget "Skalierung")
                         (setq pg (getpoint (strcat "\nGesuchten Punkt wählen (oder Skalierung/ESC <" (rtos scale 2 2) ">): ")))
+                        (hal-debug (strcat "pg raw (nächster)=" (vl-princ-to-string pg)))
                       )
                     )
                   )
@@ -664,6 +911,26 @@
   (c:HoeheAufLinie)
 )
 
+;;; Debug ein/ausschalten + Log-Datei öffnen/schließen
+(defun c:HALDEBUG ()
+  (setq *hal-debug* (not *hal-debug*))
+  (if *hal-debug*
+    (progn
+      ;; Debug EIN: Log-Datei öffnen (überschreibt vorherige Sitzung)
+      (hal-log-open)
+      (princ (strcat "\nDebug-Modus: EIN"))
+      (princ (strcat "\nLog-Datei: " *hal-log-path*))
+    )
+    (progn
+      ;; Debug AUS: Log-Datei schließen
+      (hal-log-close)
+      (princ "\nDebug-Modus: AUS")
+      (princ (strcat "\nLog gespeichert: " *hal-log-path*))
+    )
+  )
+  (princ)
+)
+
 ;;; Zeigt konfigurierten Block-Pfad
 (defun c:ShowBlockPath ()
   (show-block-path)
@@ -684,12 +951,14 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nHoeheAufLinie.lsp v1.5.1 geladen.")
+(princ "\nHoeheAufLinie.lsp v1.5.3-debug geladen.")
 (princ "\nBefehle:")
 (princ "\n  HoeheAufLinie (HAL)      - Höheninterpolation entlang Linie (S für Skalierung)")
+(princ "\n  HALDEBUG                 - Debug ein/aus + Log-Datei")
 (princ "\n  ManageBlockImportHAL     - Block-Verwaltung für HoeheAufLinie")
 (princ "\n  ShowBlockPath            - Zeigt konfigurierten Block-Pfad")
 (princ "\n  ResetBlockPath           - Löscht gespeicherten Pfad")
+(princ (strcat "\n  Log-Pfad:                  " *hal-log-path*))
 (princ "\n")
 (princ)
 
