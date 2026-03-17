@@ -845,7 +845,7 @@
                             (hal-debug (strcat "interpolated-height=" (if interpolated-height (rtos interpolated-height 2 4) "nil")))
                             
                             (princ (strcat "\n  Berechnete Höhe: " (format-height interpolated-height)))
-                            ;; NEU: nil = immer einfügen für Zwischenpunkte
+                            ;; nil = immer einfügen für Zwischenpunkte
                             (insert-hoehenkote-block pg interpolated-height scale nil)
                           )
                           (progn
