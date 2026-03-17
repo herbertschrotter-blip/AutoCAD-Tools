@@ -13,7 +13,7 @@
 ;;; - Beliebig viele Zwischenpunkte setzen mit automatisch interpolierter Höhe
 ;;; - ESC zum Beenden
 ;;;
-;;; Version: 1.6.2-debug
+;;; Version: 1.6.3-debug
 ;;; Datum: 2026-03-17
 ;;; Autor: Herbert Schrotter
 
@@ -65,16 +65,14 @@
 )
 
 ;;; Debug-Ausgabe: Command-Line + Log-Datei (crash-safe)
-;;; Gibt nur aus wenn *hal-debug* = T
+;;; Debug-Ausgabe: Log-Datei IMMER, Command-Line nur wenn *hal-debug* = T
 (defun hal-debug (msg / line)
+  (setq line (strcat "[DEBUG] " msg))
+  ;; Log-Datei: IMMER schreiben (crash-safe)
+  (hal-log-write line)
+  ;; Command-Line: nur bei aktivem Debug
   (if *hal-debug*
-    (progn
-      (setq line (strcat "[DEBUG] " msg))
-      ;; Command-Line Ausgabe
-      (princ (strcat "\n  " line))
-      ;; Log-Datei Ausgabe (open-write-close pro Zeile)
-      (hal-log-write line)
-    )
+    (princ (strcat "\n  " line))
   )
 )
 
@@ -968,6 +966,9 @@
   (setvar "ATTDIA" 0)       ;; Attribut-Dialog aus
   ;; OSMODE wird NICHT geändert - User braucht Objektfang für präzise Punktwahl!
   
+  ;; Log-Datei starten (IMMER, jede Sitzung überschreibt vorherige)
+  (hal-log-start)
+  
   ;; Hauptprogramm
   (princ "\n=== Höheninterpolation entlang Linie ===")
   (if *hal-debug* (princ "\n*** DEBUG-MODUS AKTIV ***"))
@@ -1151,23 +1152,12 @@
   (c:HoeheAufLinie)
 )
 
-;;; Debug ein/ausschalten
+;;; Debug Command-Line Ausgabe ein/ausschalten
+;;; Log-Datei wird IMMER geschrieben, unabhängig von diesem Schalter
 (defun c:HALDEBUG ()
   (setq *hal-debug* (not *hal-debug*))
-  (if *hal-debug*
-    (progn
-      ;; Debug EIN: Neue Log-Datei erstellen (überschreibt vorherige Sitzung)
-      (hal-log-start)
-      (princ "\nDebug-Modus: EIN")
-      (princ (strcat "\nLog-Datei: " *hal-log-path*))
-    )
-    (progn
-      ;; Debug AUS
-      (hal-log-write "=== Log Ende ===")
-      (princ "\nDebug-Modus: AUS")
-      (princ (strcat "\nLog gespeichert: " *hal-log-path*))
-    )
-  )
+  (princ (strcat "\nDebug Command-Line: " (if *hal-debug* "EIN" "AUS")))
+  (princ (strcat "\nLog-Datei (immer aktiv): " *hal-log-path*))
   (princ)
 )
 
@@ -1191,7 +1181,7 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nHoeheAufLinie.lsp v1.6.2-debug geladen.")
+(princ "\nHoeheAufLinie.lsp v1.6.3-debug geladen.")
 (princ "\nBefehle:")
 (princ "\n  HoeheAufLinie (HAL)      - Höheninterpolation (S=Skalierung, K=Konstruktionslinie)")
 (princ "\n  HALDEBUG                 - Debug ein/aus + Log-Datei")
