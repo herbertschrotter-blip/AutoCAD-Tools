@@ -2,7 +2,7 @@
 ;;; Automatisches Setzen von Hoehenkoten-Bloecken in AutoCAD
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 2.3.0
+;;; Version: 2.3.1
 ;;; Datum: 2026-03-18
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SetHK (SetHoehenkote)
@@ -27,7 +27,7 @@
 ;;; KONSTANTEN & GLOBALE VARIABLEN
 ;;; ============================================================================
 
-(setq *SetHK:version* "2.3.0")
+(setq *SetHK:version* "2.3.1")
 (setq *SetHK:appdata-folder* "SetHoehenkote")
 (setq *SetHK:log-session-id* nil)
 (setq *SetHK:debug-mode* nil)
@@ -403,8 +403,8 @@
           )
           
           ;; HK-Layer Setting aus Config laden
-          (setq *SetHK:use-hk-layer* (SetHK:read-hk-layer-setting))
-          (SetHK:log-write "INFO" (strcat "HK-Layer: " (if *SetHK:use-hk-layer* "aktiv" "deaktiviert")))
+          (setq *SetHK:use-layer-suffix* (SetHK:read-layer-suffix-setting))
+          (SetHK:log-write "INFO" (strcat "HK-Layer: " (if *SetHK:use-layer-suffix* "aktiv" "deaktiviert")))
           
           ;; Layer-Suffix aus Config laden
           (if (SetHK:get-config-value "LAYER_SUFFIX")
@@ -705,7 +705,7 @@
 ;;; ============================================================================
 
 ;;; Default: HK-Layer aktiv
-(setq *SetHK:use-hk-layer* T)
+(setq *SetHK:use-layer-suffix* T)
 
 ;;; Layer-Suffix (frei konfigurierbar, wird mit _ getrennt)
 ;;; Beispiel: "HK" → Layer "Vermessung_HK"
@@ -713,8 +713,8 @@
 
 ;;; Liest HK-Layer Einstellung aus Config
 ;;; Rueckgabe: T oder nil
-(defun SetHK:read-hk-layer-setting ( / val)
-  (setq val (SetHK:get-config-value "USE_HK_LAYER"))
+(defun SetHK:read-layer-suffix-setting ( / val)
+  (setq val (SetHK:get-config-value "USE_LAYER_SUFFIX"))
   (if val
     (/= val "0")  ;; Alles ausser "0" = aktiv
     T  ;; Default: aktiv
@@ -864,7 +864,7 @@
           (command "._move" ent "" "_non" insertionPoint "_non" (list (car insertionPoint) (cadr insertionPoint) hoehe))
           
           ;; HK-Layer zuweisen (wenn aktiviert)
-          (if *SetHK:use-hk-layer*
+          (if *SetHK:use-layer-suffix*
             (progn
               (setq hk-layer (SetHK:ensure-hk-layer))
               (if hk-layer
@@ -886,12 +886,12 @@
           (SetHK:log-write "INFO" (strcat "Block gesetzt: " height2DecStr
                                           " | Z=" (rtos hoehe 2 3)
                                           " | Scale=" (rtos scale 2 2)
-                                          (if (and *SetHK:use-hk-layer* hk-layer)
+                                          (if (and *SetHK:use-layer-suffix* hk-layer)
                                             (strcat " | Layer=" hk-layer) "")))
           (princ (strcat "\nHoehenkote gesetzt: " height2DecStr
                         " | Z=" (rtos hoehe 2 3)
                         " | XY-Scale=" (rtos scale 2 2)
-                        (if (and *SetHK:use-hk-layer* hk-layer)
+                        (if (and *SetHK:use-layer-suffix* hk-layer)
                           (strcat " | Layer=" hk-layer) "")))
         )
         (progn
@@ -1030,7 +1030,7 @@
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"Layer\";" fp)
   (write-line "    : toggle {" fp)
-  (write-line "      key = \"hklayer\";" fp)
+  (write-line "      key = \"use_suffix\";" fp)
   (write-line "      label = \"Eigener Layer fuer Hoehenkoten\";" fp)
   (write-line "    }" fp)
   (write-line "    : edit_box {" fp)
@@ -1092,8 +1092,8 @@
 ;;; Einstellungen-Dialog
 ;;; Zeigt DCL mit aktuellen Werten, speichert bei OK
 (defun c:HKSETTINGS ( / *error* dcl-file dcl-id result
-                        cur-scale cur-default-scale cur-blockname cur-libpath cur-debug cur-hklayer
-                        new-scale new-default-scale new-blockname new-libpath new-debug new-hklayer
+                        cur-scale cur-default-scale cur-blockname cur-libpath cur-debug cur-use-suffix
+                        new-scale new-default-scale new-blockname new-libpath new-debug new-use-suffix
                         open-block-mgr cfg-val)
   
   ;; Lazy-Init
@@ -1133,7 +1133,7 @@
   
   (setq cur-debug *SetHK:debug-mode*)
   
-  (setq cur-hklayer *SetHK:use-hk-layer*)
+  (setq cur-use-suffix *SetHK:use-layer-suffix*)
   
   ;; DCL schreiben
   (setq dcl-file (SetHK:write-settings-dcl))
@@ -1153,7 +1153,7 @@
       (set_tile "blockname" cur-blockname)
       (set_tile "libpath" cur-libpath)
       (set_tile "debug" (if cur-debug "1" "0"))
-      (set_tile "hklayer" (if cur-hklayer "1" "0"))
+      (set_tile "use_suffix" (if cur-use-suffix "1" "0"))
       (set_tile "layer_suffix" *SetHK:layer-suffix*)
       (set_tile "layer_preview" (strcat "Vorschau: " (getvar "CLAYER") "_" *SetHK:layer-suffix*))
       (set_tile "logpath" (strcat "Log: " (SetHK:get-appdata-path) "\\Log"))
@@ -1191,7 +1191,7 @@
           "(setq *SetHK:tmp-blockname* (get_tile \"blockname\"))"
           "(setq *SetHK:tmp-libpath* (get_tile \"libpath\"))"
           "(setq *SetHK:tmp-debug* (get_tile \"debug\"))"
-          "(setq *SetHK:tmp-hklayer* (get_tile \"hklayer\"))"
+          "(setq *SetHK:tmp-use-suffix* (get_tile \"use_suffix\"))"
           "(setq *SetHK:tmp-layer-suffix* (get_tile \"layer_suffix\"))"
           "(setq *SetHK:tmp-open-block-mgr* T)"
           "(done_dialog 2)"
@@ -1206,7 +1206,7 @@
           "(setq *SetHK:tmp-blockname* (get_tile \"blockname\"))"
           "(setq *SetHK:tmp-libpath* (get_tile \"libpath\"))"
           "(setq *SetHK:tmp-debug* (get_tile \"debug\"))"
-          "(setq *SetHK:tmp-hklayer* (get_tile \"hklayer\"))"
+          "(setq *SetHK:tmp-use-suffix* (get_tile \"use_suffix\"))"
           "(setq *SetHK:tmp-layer-suffix* (get_tile \"layer_suffix\"))"
           "(done_dialog 1)"
         )
@@ -1276,10 +1276,10 @@
           (SetHK:log-write "INFO" (strcat "Debug: " (if new-debug "EIN" "AUS")))
           
           ;; HK-Layer Setting
-          (setq new-hklayer (= *SetHK:tmp-hklayer* "1"))
-          (setq *SetHK:use-hk-layer* new-hklayer)
-          (SetHK:set-config-value "USE_HK_LAYER" (if new-hklayer "1" "0"))
-          (SetHK:log-write "INFO" (strcat "HK-Layer: " (if new-hklayer "aktiv" "deaktiviert")))
+          (setq new-use-suffix (= *SetHK:tmp-use-suffix* "1"))
+          (setq *SetHK:use-layer-suffix* new-use-suffix)
+          (SetHK:set-config-value "USE_LAYER_SUFFIX" (if new-use-suffix "1" "0"))
+          (SetHK:log-write "INFO" (strcat "HK-Layer: " (if new-use-suffix "aktiv" "deaktiviert")))
           
           ;; Layer-Suffix speichern (nur wenn nicht leer)
           (if (and *SetHK:tmp-layer-suffix* (/= *SetHK:tmp-layer-suffix* ""))
@@ -1325,7 +1325,7 @@
   (setq *SetHK:tmp-blockname* nil)
   (setq *SetHK:tmp-libpath* nil)
   (setq *SetHK:tmp-debug* nil)
-  (setq *SetHK:tmp-hklayer* nil)
+  (setq *SetHK:tmp-use-suffix* nil)
   (setq *SetHK:tmp-layer-suffix* nil)
   (setq *SetHK:tmp-path* nil)
   (setq *SetHK:tmp-open-block-mgr* nil)
