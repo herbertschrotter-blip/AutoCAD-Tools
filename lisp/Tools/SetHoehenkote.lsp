@@ -2,7 +2,7 @@
 ;;; Automatisches Setzen von Hoehenkoten-Bloecken in AutoCAD
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 2.0.0
+;;; Version: 2.1.0
 ;;; Datum: 2026-03-18
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SetHK (SetHoehenkote)
@@ -27,7 +27,7 @@
 ;;; KONSTANTEN & GLOBALE VARIABLEN
 ;;; ============================================================================
 
-(setq *SetHK:version* "2.0.0")
+(setq *SetHK:version* "2.1.0")
 (setq *SetHK:appdata-folder* "SetHoehenkote")
 (setq *SetHK:log-session-id* nil)
 (setq *SetHK:debug-mode* nil)
@@ -402,6 +402,10 @@
             )
           )
           
+          ;; HK-Layer Setting aus Config laden
+          (setq *SetHK:use-hk-layer* (SetHK:read-hk-layer-setting))
+          (SetHK:log-write "INFO" (strcat "HK-Layer: " (if *SetHK:use-hk-layer* "aktiv" "deaktiviert")))
+          
           ;; Fertig
           (setq *SetHK:initialized* T)
           (SetHK:log-write "INFO" "Lazy-Init abgeschlossen")
@@ -687,11 +691,88 @@
 
 
 ;;; ============================================================================
+;;; HK-LAYER MANAGEMENT
+;;; ============================================================================
+
+;;; Default: HK-Layer aktiv
+(setq *SetHK:use-hk-layer* T)
+
+;;; Liest HK-Layer Einstellung aus Config
+;;; Rueckgabe: T oder nil
+(defun SetHK:read-hk-layer-setting ( / val)
+  (setq val (SetHK:get-config-value "USE_HK_LAYER"))
+  (if val
+    (/= val "0")  ;; Alles ausser "0" = aktiv
+    T  ;; Default: aktiv
+  )
+)
+
+;;; Erstellt den HK-Layer basierend auf dem aktuellen Layer
+;;; Wenn aktueller Layer schon auf _HK endet → direkt verwenden
+;;; Wenn nicht → _HK anhaengen, Layer erstellen falls noetig, Eigenschaften kopieren
+;;; Rueckgabe: Name des HK-Layers (String)
+(defun SetHK:ensure-hk-layer ( / cur-layer hk-layer-name cur-data cur-color cur-ltype suffix-len)
+  ;; Aktuellen Layer lesen
+  (setq cur-layer (getvar "CLAYER"))
+  
+  ;; Pruefen ob aktueller Layer schon auf _HK endet
+  (setq suffix-len 3) ;; Laenge von "_HK"
+  (if (and (>= (strlen cur-layer) suffix-len)
+           (= (strcase (substr cur-layer (- (strlen cur-layer) suffix-len -1)))
+              "_HK"))
+    (progn
+      ;; Layer endet bereits auf _HK → direkt verwenden
+      (SetHK:log-write "DEBUG" (strcat "Layer endet auf _HK, verwende direkt: " cur-layer))
+      cur-layer
+    )
+    (progn
+      ;; Layer endet NICHT auf _HK → _HK anhaengen
+      (setq hk-layer-name (strcat cur-layer "_HK"))
+      
+      (SetHK:log-write "DEBUG" (strcat "HK-Layer: " cur-layer " -> " hk-layer-name))
+      
+      ;; Pruefen ob HK-Layer schon existiert
+      (if (tblsearch "LAYER" hk-layer-name)
+        (progn
+          (SetHK:log-write "DEBUG" (strcat "HK-Layer existiert bereits: " hk-layer-name))
+          hk-layer-name
+        )
+        (progn
+          ;; Layer-Eigenschaften vom Original lesen
+          (setq cur-data (tblsearch "LAYER" cur-layer))
+          (setq cur-color (cdr (assoc 62 cur-data)))  ;; Farbe
+          (setq cur-ltype (cdr (assoc 6 cur-data)))   ;; Linientyp
+          
+          ;; Neuen Layer erstellen mit entmakex
+          (entmakex
+            (list
+              '(0 . "LAYER")
+              '(100 . "AcDbSymbolTableRecord")
+              '(100 . "AcDbLayerTableRecord")
+              (cons 2 hk-layer-name)                       ;; Layer-Name
+              '(70 . 0)                                    ;; Flags (0 = normal)
+              (cons 62 (if cur-color cur-color 7))         ;; Farbe (Default: weiss)
+              (cons 6 (if cur-ltype cur-ltype "Continuous")) ;; Linientyp
+            )
+          )
+          
+          (SetHK:log-write "INFO" (strcat "HK-Layer erstellt: " hk-layer-name
+                                           " (Farbe=" (itoa (if cur-color cur-color 7))
+                                           ", Linientyp=" (if cur-ltype cur-ltype "Continuous") ")"))
+          hk-layer-name
+        )
+      )
+    )
+  )
+)
+
+
+;;; ============================================================================
 ;;; HAUPTFUNKTIONEN
 ;;; ============================================================================
 
 ;;; Fuegt Hoehenkoten-Block an gegebenem Punkt mit Hoehe und Skalierung ein
-(defun SetHK:insert-block (einfuegepunkt hoehe scale / blockName heightStr intPart decPart height2DecStr attdia ent attribs insertionPoint block-available importEnt)
+(defun SetHK:insert-block (einfuegepunkt hoehe scale / blockName heightStr intPart decPart height2DecStr attdia ent attribs insertionPoint block-available importEnt hk-layer ent-data)
   (setq blockName *SetHK:blockname*)
   
   (SetHK:log-write "DEBUG" (strcat "insert-block: pt=("
@@ -764,6 +845,21 @@
           (setq insertionPoint (cdr (assoc 10 (entget ent))))
           (command "._move" ent "" "_non" insertionPoint "_non" (list (car insertionPoint) (cadr insertionPoint) hoehe))
           
+          ;; HK-Layer zuweisen (wenn aktiviert)
+          (if *SetHK:use-hk-layer*
+            (progn
+              (setq hk-layer (SetHK:ensure-hk-layer))
+              (if hk-layer
+                (progn
+                  ;; Block auf HK-Layer setzen via entmod
+                  (setq ent-data (entget ent))
+                  (entmod (subst (cons 8 hk-layer) (assoc 8 ent-data) ent-data))
+                  (SetHK:log-write "DEBUG" (strcat "Block auf Layer: " hk-layer))
+                )
+              )
+            )
+          )
+          
           ;; Den waehrend des Imports eingefuegten Block wieder entfernen
           (if importEnt
             (entdel importEnt)
@@ -771,10 +867,14 @@
           
           (SetHK:log-write "INFO" (strcat "Block gesetzt: " height2DecStr
                                           " | Z=" (rtos hoehe 2 3)
-                                          " | Scale=" (rtos scale 2 2)))
+                                          " | Scale=" (rtos scale 2 2)
+                                          (if (and *SetHK:use-hk-layer* hk-layer)
+                                            (strcat " | Layer=" hk-layer) "")))
           (princ (strcat "\nHoehenkote gesetzt: " height2DecStr
                         " | Z=" (rtos hoehe 2 3)
-                        " | XY-Scale=" (rtos scale 2 2)))
+                        " | XY-Scale=" (rtos scale 2 2)
+                        (if (and *SetHK:use-hk-layer* hk-layer)
+                          (strcat " | Layer=" hk-layer) "")))
         )
         (progn
           (SetHK:log-write "ERROR" "Block konnte nicht geladen werden")
@@ -908,6 +1008,16 @@
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
   
+  ;; --- Layer ---
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Layer\";" fp)
+  (write-line "    : toggle {" fp)
+  (write-line "      key = \"hklayer\";" fp)
+  (write-line "      label = \"Eigener _HK Layer (Kopie vom aktuellen Layer)\";" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  
   ;; --- BlockImport Pfad ---
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"BlockImport.lsp\";" fp)
@@ -955,8 +1065,8 @@
 ;;; Einstellungen-Dialog
 ;;; Zeigt DCL mit aktuellen Werten, speichert bei OK
 (defun c:HKSETTINGS ( / *error* dcl-file dcl-id result
-                        cur-scale cur-default-scale cur-blockname cur-libpath cur-debug
-                        new-scale new-default-scale new-blockname new-libpath new-debug
+                        cur-scale cur-default-scale cur-blockname cur-libpath cur-debug cur-hklayer
+                        new-scale new-default-scale new-blockname new-libpath new-debug new-hklayer
                         open-block-mgr cfg-val)
   
   ;; Lazy-Init
@@ -996,6 +1106,8 @@
   
   (setq cur-debug *SetHK:debug-mode*)
   
+  (setq cur-hklayer *SetHK:use-hk-layer*)
+  
   ;; DCL schreiben
   (setq dcl-file (SetHK:write-settings-dcl))
   (setq dcl-id (load_dialog dcl-file))
@@ -1014,6 +1126,7 @@
       (set_tile "blockname" cur-blockname)
       (set_tile "libpath" cur-libpath)
       (set_tile "debug" (if cur-debug "1" "0"))
+      (set_tile "hklayer" (if cur-hklayer "1" "0"))
       (set_tile "logpath" (strcat "Log: " (SetHK:get-appdata-path) "\\Log"))
       (set_tile "info" (strcat "SetHoehenkote v" *SetHK:version*))
       
@@ -1044,6 +1157,7 @@
           "(setq *SetHK:tmp-blockname* (get_tile \"blockname\"))"
           "(setq *SetHK:tmp-libpath* (get_tile \"libpath\"))"
           "(setq *SetHK:tmp-debug* (get_tile \"debug\"))"
+          "(setq *SetHK:tmp-hklayer* (get_tile \"hklayer\"))"
           "(setq *SetHK:tmp-open-block-mgr* T)"
           "(done_dialog 2)"
         )
@@ -1057,6 +1171,7 @@
           "(setq *SetHK:tmp-blockname* (get_tile \"blockname\"))"
           "(setq *SetHK:tmp-libpath* (get_tile \"libpath\"))"
           "(setq *SetHK:tmp-debug* (get_tile \"debug\"))"
+          "(setq *SetHK:tmp-hklayer* (get_tile \"hklayer\"))"
           "(done_dialog 1)"
         )
       )
@@ -1124,6 +1239,12 @@
           (setq *SetHK:debug-mode* new-debug)
           (SetHK:log-write "INFO" (strcat "Debug: " (if new-debug "EIN" "AUS")))
           
+          ;; HK-Layer Setting
+          (setq new-hklayer (= *SetHK:tmp-hklayer* "1"))
+          (setq *SetHK:use-hk-layer* new-hklayer)
+          (SetHK:set-config-value "USE_HK_LAYER" (if new-hklayer "1" "0"))
+          (SetHK:log-write "INFO" (strcat "HK-Layer: " (if new-hklayer "aktiv" "deaktiviert")))
+          
           (princ "\nEinstellungen gespeichert.")
         )
         
@@ -1155,6 +1276,7 @@
   (setq *SetHK:tmp-blockname* nil)
   (setq *SetHK:tmp-libpath* nil)
   (setq *SetHK:tmp-debug* nil)
+  (setq *SetHK:tmp-hklayer* nil)
   (setq *SetHK:tmp-path* nil)
   (setq *SetHK:tmp-open-block-mgr* nil)
   
