@@ -2,7 +2,7 @@
 ;;; Automatisches Setzen von Hoehenkoten-Bloecken in AutoCAD
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 2.1.0
+;;; Version: 2.2.0
 ;;; Datum: 2026-03-18
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SetHK (SetHoehenkote)
@@ -27,7 +27,7 @@
 ;;; KONSTANTEN & GLOBALE VARIABLEN
 ;;; ============================================================================
 
-(setq *SetHK:version* "2.1.0")
+(setq *SetHK:version* "2.2.0")
 (setq *SetHK:appdata-folder* "SetHoehenkote")
 (setq *SetHK:log-session-id* nil)
 (setq *SetHK:debug-mode* nil)
@@ -406,6 +406,14 @@
           (setq *SetHK:use-hk-layer* (SetHK:read-hk-layer-setting))
           (SetHK:log-write "INFO" (strcat "HK-Layer: " (if *SetHK:use-hk-layer* "aktiv" "deaktiviert")))
           
+          ;; Layer-Suffix aus Config laden
+          (if (SetHK:get-config-value "LAYER_SUFFIX")
+            (progn
+              (setq *SetHK:layer-suffix* (SetHK:get-config-value "LAYER_SUFFIX"))
+              (SetHK:log-write "INFO" (strcat "Layer-Suffix aus Config: _" *SetHK:layer-suffix*))
+            )
+          )
+          
           ;; Fertig
           (setq *SetHK:initialized* T)
           (SetHK:log-write "INFO" "Lazy-Init abgeschlossen")
@@ -697,6 +705,10 @@
 ;;; Default: HK-Layer aktiv
 (setq *SetHK:use-hk-layer* T)
 
+;;; Layer-Suffix (frei konfigurierbar, wird mit _ getrennt)
+;;; Beispiel: "HK" → Layer "Vermessung_HK"
+(setq *SetHK:layer-suffix* "HK")
+
 ;;; Liest HK-Layer Einstellung aus Config
 ;;; Rueckgabe: T oder nil
 (defun SetHK:read-hk-layer-setting ( / val)
@@ -707,41 +719,45 @@
   )
 )
 
-;;; Erstellt den HK-Layer basierend auf dem aktuellen Layer
-;;; Wenn aktueller Layer schon auf _HK endet → direkt verwenden
-;;; Wenn nicht → _HK anhaengen, Layer erstellen falls noetig, Eigenschaften kopieren
-;;; Rueckgabe: Name des HK-Layers (String)
-(defun SetHK:ensure-hk-layer ( / cur-layer hk-layer-name cur-data cur-color cur-ltype suffix-len)
+;;; Erstellt den Layer mit konfiguriertem Suffix basierend auf aktuellem Layer
+;;; Wenn aktueller Layer schon auf _<suffix> endet → direkt verwenden
+;;; Wenn nicht → _<suffix> anhaengen, Layer erstellen falls noetig
+;;; Rueckgabe: Name des Ziel-Layers (String)
+(defun SetHK:ensure-hk-layer ( / cur-layer hk-layer-name cur-data cur-color cur-ltype suffix suffix-with-sep suffix-len)
   ;; Aktuellen Layer lesen
   (setq cur-layer (getvar "CLAYER"))
   
-  ;; Pruefen ob aktueller Layer schon auf _HK endet
-  (setq suffix-len 3) ;; Laenge von "_HK"
+  ;; Suffix zusammenbauen: "_" + konfiguriertes Suffix
+  (setq suffix *SetHK:layer-suffix*)
+  (setq suffix-with-sep (strcat "_" suffix))
+  (setq suffix-len (strlen suffix-with-sep))
+  
+  ;; Pruefen ob aktueller Layer schon auf _<suffix> endet
   (if (and (>= (strlen cur-layer) suffix-len)
            (= (strcase (substr cur-layer (- (strlen cur-layer) suffix-len -1)))
-              "_HK"))
+              (strcase suffix-with-sep)))
     (progn
-      ;; Layer endet bereits auf _HK → direkt verwenden
-      (SetHK:log-write "DEBUG" (strcat "Layer endet auf _HK, verwende direkt: " cur-layer))
+      ;; Layer endet bereits auf _<suffix> → direkt verwenden
+      (SetHK:log-write "DEBUG" (strcat "Layer endet auf " suffix-with-sep ", verwende direkt: " cur-layer))
       cur-layer
     )
     (progn
-      ;; Layer endet NICHT auf _HK → _HK anhaengen
-      (setq hk-layer-name (strcat cur-layer "_HK"))
+      ;; Layer endet NICHT auf _<suffix> → anhaengen
+      (setq hk-layer-name (strcat cur-layer suffix-with-sep))
       
-      (SetHK:log-write "DEBUG" (strcat "HK-Layer: " cur-layer " -> " hk-layer-name))
+      (SetHK:log-write "DEBUG" (strcat "Layer: " cur-layer " -> " hk-layer-name))
       
-      ;; Pruefen ob HK-Layer schon existiert
+      ;; Pruefen ob Layer schon existiert
       (if (tblsearch "LAYER" hk-layer-name)
         (progn
-          (SetHK:log-write "DEBUG" (strcat "HK-Layer existiert bereits: " hk-layer-name))
+          (SetHK:log-write "DEBUG" (strcat "Layer existiert bereits: " hk-layer-name))
           hk-layer-name
         )
         (progn
           ;; Layer-Eigenschaften vom Original lesen
           (setq cur-data (tblsearch "LAYER" cur-layer))
-          (setq cur-color (cdr (assoc 62 cur-data)))  ;; Farbe
-          (setq cur-ltype (cdr (assoc 6 cur-data)))   ;; Linientyp
+          (setq cur-color (cdr (assoc 62 cur-data)))
+          (setq cur-ltype (cdr (assoc 6 cur-data)))
           
           ;; Neuen Layer erstellen mit entmakex
           (entmakex
@@ -749,14 +765,14 @@
               '(0 . "LAYER")
               '(100 . "AcDbSymbolTableRecord")
               '(100 . "AcDbLayerTableRecord")
-              (cons 2 hk-layer-name)                       ;; Layer-Name
-              '(70 . 0)                                    ;; Flags (0 = normal)
-              (cons 62 (if cur-color cur-color 7))         ;; Farbe (Default: weiss)
-              (cons 6 (if cur-ltype cur-ltype "Continuous")) ;; Linientyp
+              (cons 2 hk-layer-name)
+              '(70 . 0)
+              (cons 62 (if cur-color cur-color 7))
+              (cons 6 (if cur-ltype cur-ltype "Continuous"))
             )
           )
           
-          (SetHK:log-write "INFO" (strcat "HK-Layer erstellt: " hk-layer-name
+          (SetHK:log-write "INFO" (strcat "Layer erstellt: " hk-layer-name
                                            " (Farbe=" (itoa (if cur-color cur-color 7))
                                            ", Linientyp=" (if cur-ltype cur-ltype "Continuous") ")"))
           hk-layer-name
@@ -1013,7 +1029,16 @@
   (write-line "    label = \"Layer\";" fp)
   (write-line "    : toggle {" fp)
   (write-line "      key = \"hklayer\";" fp)
-  (write-line "      label = \"Eigener _HK Layer (Kopie vom aktuellen Layer)\";" fp)
+  (write-line "      label = \"Eigener Layer fuer Hoehenkoten\";" fp)
+  (write-line "    }" fp)
+  (write-line "    : edit_box {" fp)
+  (write-line "      key = \"layer_suffix\";" fp)
+  (write-line "      label = \"Suffix (nach _):\";" fp)
+  (write-line "      edit_width = 15;" fp)
+  (write-line "    }" fp)
+  (write-line "    : text {" fp)
+  (write-line "      key = \"layer_preview\";" fp)
+  (write-line "      label = \"\";" fp)
   (write-line "    }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
@@ -1127,8 +1152,15 @@
       (set_tile "libpath" cur-libpath)
       (set_tile "debug" (if cur-debug "1" "0"))
       (set_tile "hklayer" (if cur-hklayer "1" "0"))
+      (set_tile "layer_suffix" *SetHK:layer-suffix*)
+      (set_tile "layer_preview" (strcat "Vorschau: " (getvar "CLAYER") "_" *SetHK:layer-suffix*))
       (set_tile "logpath" (strcat "Log: " (SetHK:get-appdata-path) "\\Log"))
       (set_tile "info" (strcat "SetHoehenkote v" *SetHK:version*))
+      
+      ;; Action: Live-Vorschau wenn Suffix geaendert wird
+      (action_tile "layer_suffix"
+        "(set_tile \"layer_preview\" (strcat \"Vorschau: \" (getvar \"CLAYER\") \"_\" (get_tile \"layer_suffix\")))"
+      )
       
       ;; Action: Durchsuchen-Button fuer BlockImport.lsp
       (action_tile "btn_browse"
@@ -1158,6 +1190,7 @@
           "(setq *SetHK:tmp-libpath* (get_tile \"libpath\"))"
           "(setq *SetHK:tmp-debug* (get_tile \"debug\"))"
           "(setq *SetHK:tmp-hklayer* (get_tile \"hklayer\"))"
+          "(setq *SetHK:tmp-layer-suffix* (get_tile \"layer_suffix\"))"
           "(setq *SetHK:tmp-open-block-mgr* T)"
           "(done_dialog 2)"
         )
@@ -1172,6 +1205,7 @@
           "(setq *SetHK:tmp-libpath* (get_tile \"libpath\"))"
           "(setq *SetHK:tmp-debug* (get_tile \"debug\"))"
           "(setq *SetHK:tmp-hklayer* (get_tile \"hklayer\"))"
+          "(setq *SetHK:tmp-layer-suffix* (get_tile \"layer_suffix\"))"
           "(done_dialog 1)"
         )
       )
@@ -1245,6 +1279,19 @@
           (SetHK:set-config-value "USE_HK_LAYER" (if new-hklayer "1" "0"))
           (SetHK:log-write "INFO" (strcat "HK-Layer: " (if new-hklayer "aktiv" "deaktiviert")))
           
+          ;; Layer-Suffix speichern (nur wenn nicht leer)
+          (if (and *SetHK:tmp-layer-suffix* (/= *SetHK:tmp-layer-suffix* ""))
+            (progn
+              (setq *SetHK:layer-suffix* *SetHK:tmp-layer-suffix*)
+              (SetHK:set-config-value "LAYER_SUFFIX" *SetHK:layer-suffix*)
+              (SetHK:log-write "INFO" (strcat "Layer-Suffix: _" *SetHK:layer-suffix*))
+            )
+            (progn
+              (princ "\n*** Layer-Suffix darf nicht leer sein, nicht geaendert ***")
+              (SetHK:log-write "WARN" "Leeres Layer-Suffix ignoriert")
+            )
+          )
+          
           (princ "\nEinstellungen gespeichert.")
         )
         
@@ -1277,6 +1324,7 @@
   (setq *SetHK:tmp-libpath* nil)
   (setq *SetHK:tmp-debug* nil)
   (setq *SetHK:tmp-hklayer* nil)
+  (setq *SetHK:tmp-layer-suffix* nil)
   (setq *SetHK:tmp-path* nil)
   (setq *SetHK:tmp-open-block-mgr* nil)
   
