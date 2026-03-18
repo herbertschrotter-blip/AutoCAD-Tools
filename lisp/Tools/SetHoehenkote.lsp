@@ -413,25 +413,130 @@
 
 
 ;;; ============================================================================
-;;; SKALIERUNG CONFIG
+;;; SKALIERUNG - DWG CUSTOM PROPERTY + CONFIG FALLBACK
 ;;; ============================================================================
 
-;;; Liest gespeicherte XY-Skalierung aus Config
+;;; Custom Property Name fuer Skalierung in DWG SummaryInfo
+(setq *SetHK:scale-property* "SetHK_Scale")
+
+;;; Liest Skalierung aus DWG Custom Property
+;;; Verwendet safe-variant-value Pattern (GetCustomByIndex Quirk)
 ;;; Rueckgabe: Skalierung als Real oder nil
-(defun SetHK:read-scale ( / val)
-  (setq val (SetHK:get-config-value "SCALE"))
-  (if val
-    (atof val)
+(defun SetHK:read-dwg-scale ( / doc info num-props i key val scale-str)
+  (setq doc (vla-get-activedocument (vlax-get-acad-object)))
+  (setq info (vla-get-summaryinfo doc))
+  (setq num-props (vla-numcustominfo info))
+  (setq scale-str nil)
+  
+  ;; Alle Custom Properties durchsuchen
+  (setq i 0)
+  (while (and (< i num-props) (null scale-str))
+    (vla-getcustombyindex info i 'key 'val)
+    ;; Safe-Variant-Value: kann String oder Variant sein
+    (setq key (SetHK:safe-variant-value key))
+    (setq val (SetHK:safe-variant-value val))
+    (if (and key (= (strcase key) (strcase *SetHK:scale-property*)))
+      (setq scale-str val)
+    )
+    (setq i (1+ i))
+  )
+  
+  (if (and scale-str (/= scale-str ""))
+    (progn
+      (SetHK:log-write "DEBUG" (strcat "DWG-Scale gelesen: " scale-str))
+      (atof scale-str)
+    )
     nil
   )
 )
 
-;;; Speichert XY-Skalierung in Config
-(defun SetHK:save-scale (scale-value / )
-  (SetHK:set-config-value "SCALE" (rtos scale-value 2 6))
+;;; Schreibt Skalierung in DWG Custom Property
+;;; Erstellt Property falls nicht vorhanden, aktualisiert falls vorhanden
+(defun SetHK:write-dwg-scale (scale-value / doc info num-props i key val found)
+  (setq doc (vla-get-activedocument (vlax-get-acad-object)))
+  (setq info (vla-get-summaryinfo doc))
+  (setq num-props (vla-numcustominfo info))
+  (setq found nil)
+  
+  ;; Suche ob Property schon existiert
+  (setq i 0)
+  (while (and (< i num-props) (not found))
+    (vla-getcustombyindex info i 'key 'val)
+    (setq key (SetHK:safe-variant-value key))
+    (if (and key (= (strcase key) (strcase *SetHK:scale-property*)))
+      (progn
+        ;; Update existierendes Property
+        (vla-setcustombyindex info i *SetHK:scale-property* (rtos scale-value 2 6))
+        (setq found T)
+        (SetHK:log-write "INFO" (strcat "DWG-Scale aktualisiert: " (rtos scale-value 2 2)))
+      )
+    )
+    (setq i (1+ i))
+  )
+  
+  ;; Wenn nicht gefunden: Neu anlegen
+  (if (not found)
+    (progn
+      (vla-addcustominfo info *SetHK:scale-property* (rtos scale-value 2 6))
+      (SetHK:log-write "INFO" (strcat "DWG-Scale neu angelegt: " (rtos scale-value 2 2)))
+    )
+  )
 )
 
-;;; Fragt Benutzer nach XY-Skalierung und speichert in Config
+;;; Safe-Variant-Value Pattern (GetCustomByIndex Quirk)
+;;; Gibt manchmal Strings direkt, manchmal Variants zurueck
+(defun SetHK:safe-variant-value (val / )
+  (cond
+    ((= (type val) 'STR) val)
+    ((= (type val) 'VLA-OBJECT) val)
+    ((not (null val))
+      (vl-catch-all-apply 'vlax-variant-value (list val))
+    )
+    (T nil)
+  )
+)
+
+;;; Liest Skalierung: Erst DWG, dann Config-Default, dann 1.0
+;;; Rueckgabe: Skalierung als Real (immer ein Wert, nie nil)
+(defun SetHK:read-scale ( / dwg-scale cfg-val)
+  ;; 1. Aus DWG Custom Property
+  (setq dwg-scale (SetHK:read-dwg-scale))
+  (if (and dwg-scale (> dwg-scale 0.0))
+    (progn
+      (SetHK:log-write "DEBUG" (strcat "Scale aus DWG: " (rtos dwg-scale 2 2)))
+      dwg-scale
+    )
+    ;; 2. Fallback: Config-Default
+    (progn
+      (setq cfg-val (SetHK:get-config-value "DEFAULT_SCALE"))
+      (if (and cfg-val (/= cfg-val ""))
+        (progn
+          (SetHK:log-write "DEBUG" (strcat "Scale aus Config-Default: " cfg-val))
+          (atof cfg-val)
+        )
+        ;; 3. Fallback: 1.0
+        (progn
+          (SetHK:log-write "DEBUG" "Scale: kein Wert gefunden, verwende 1.0")
+          1.0
+        )
+      )
+    )
+  )
+)
+
+;;; Speichert Skalierung in DWG Custom Property
+;;; Config-Default bleibt unveraendert (wird nur ueber HKSETTINGS geaendert)
+(defun SetHK:save-scale (scale-value / )
+  (SetHK:write-dwg-scale scale-value)
+)
+
+;;; Speichert Default-Skalierung in Config (fuer neue Zeichnungen)
+(defun SetHK:save-default-scale (scale-value / )
+  (SetHK:set-config-value "DEFAULT_SCALE" (rtos scale-value 2 6))
+  (SetHK:log-write "INFO" (strcat "Default-Scale in Config: " (rtos scale-value 2 2)))
+)
+
+;;; Fragt Benutzer nach XY-Skalierung und speichert in DWG
 (defun SetHK:get-scale ( / scaleValue prompt current-scale)
   (setq current-scale (SetHK:read-scale))
   
@@ -460,10 +565,10 @@
     )
   )
   
-  ;; Skalierung in Config speichern
+  ;; Skalierung in DWG speichern
   (SetHK:save-scale scaleValue)
-  (SetHK:log-write "INFO" (strcat "Skalierung gesetzt: " (rtos scaleValue 2 2)))
-  (princ (strcat "\nSkalierung gespeichert: " (rtos scaleValue 2 2)))
+  (SetHK:log-write "INFO" (strcat "Skalierung gesetzt: " (rtos scaleValue 2 2) " (in DWG)"))
+  (princ (strcat "\nSkalierung gespeichert: " (rtos scaleValue 2 2) " (in DWG)"))
   
   scaleValue
 )
@@ -777,9 +882,13 @@
   (write-line "    label = \"XY-Skalierung\";" fp)
   (write-line "    : edit_box {" fp)
   (write-line "      key = \"scale\";" fp)
-  (write-line "      label = \"Skalierung:\";" fp)
+  (write-line "      label = \"Aktuelle Zeichnung:\";" fp)
   (write-line "      edit_width = 10;" fp)
-  (write-line "      value = \"1.0\";" fp)
+  (write-line "    }" fp)
+  (write-line "    : edit_box {" fp)
+  (write-line "      key = \"default_scale\";" fp)
+  (write-line "      label = \"Default (neue Zeichnungen):\";" fp)
+  (write-line "      edit_width = 10;" fp)
   (write-line "    }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
@@ -846,9 +955,9 @@
 ;;; Einstellungen-Dialog
 ;;; Zeigt DCL mit aktuellen Werten, speichert bei OK
 (defun c:HKSETTINGS ( / *error* dcl-file dcl-id result
-                        cur-scale cur-blockname cur-libpath cur-debug
-                        new-scale new-blockname new-libpath new-debug
-                        open-block-mgr)
+                        cur-scale cur-default-scale cur-blockname cur-libpath cur-debug
+                        new-scale new-default-scale new-blockname new-libpath new-debug
+                        open-block-mgr cfg-val)
   
   ;; Lazy-Init
   (SetHK:ensure-init)
@@ -872,8 +981,13 @@
   )
   
   ;; Aktuelle Werte lesen
-  (setq cur-scale (SetHK:read-scale))
-  (if (null cur-scale) (setq cur-scale 1.0))
+  ;; DWG-Scale: Aus Custom Property der aktuellen Zeichnung
+  (setq cur-scale (SetHK:read-dwg-scale))
+  (if (null cur-scale) (setq cur-scale 0.0)) ;; 0 = "nicht gesetzt"
+  
+  ;; Default-Scale: Aus Config (fuer neue Zeichnungen)
+  (setq cfg-val (SetHK:get-config-value "DEFAULT_SCALE"))
+  (setq cur-default-scale (if (and cfg-val (/= cfg-val "")) (atof cfg-val) 1.0))
   
   (setq cur-blockname *SetHK:blockname*)
   
@@ -895,7 +1009,8 @@
     )
     (progn
       ;; Werte in Dialog setzen
-      (set_tile "scale" (rtos cur-scale 2 2))
+      (set_tile "scale" (if (> cur-scale 0.0) (rtos cur-scale 2 2) "(nicht gesetzt)"))
+      (set_tile "default_scale" (rtos cur-default-scale 2 2))
       (set_tile "blockname" cur-blockname)
       (set_tile "libpath" cur-libpath)
       (set_tile "debug" (if cur-debug "1" "0"))
@@ -925,11 +1040,12 @@
       (action_tile "btn_block"
         (strcat
           "(setq *SetHK:tmp-scale* (get_tile \"scale\"))"
+          "(setq *SetHK:tmp-default-scale* (get_tile \"default_scale\"))"
           "(setq *SetHK:tmp-blockname* (get_tile \"blockname\"))"
           "(setq *SetHK:tmp-libpath* (get_tile \"libpath\"))"
           "(setq *SetHK:tmp-debug* (get_tile \"debug\"))"
           "(setq *SetHK:tmp-open-block-mgr* T)"
-          "(done_dialog 2)"  ;; Status 2 = Block-Manager oeffnen
+          "(done_dialog 2)"
         )
       )
       
@@ -937,6 +1053,7 @@
       (action_tile "accept"
         (strcat
           "(setq *SetHK:tmp-scale* (get_tile \"scale\"))"
+          "(setq *SetHK:tmp-default-scale* (get_tile \"default_scale\"))"
           "(setq *SetHK:tmp-blockname* (get_tile \"blockname\"))"
           "(setq *SetHK:tmp-libpath* (get_tile \"libpath\"))"
           "(setq *SetHK:tmp-debug* (get_tile \"debug\"))"
@@ -952,19 +1069,35 @@
         ;; OK gedrueckt (result = 1)
         ((= result 1)
           (setq new-scale (atof *SetHK:tmp-scale*))
+          (setq new-default-scale (atof *SetHK:tmp-default-scale*))
           (setq new-blockname *SetHK:tmp-blockname*)
           (setq new-libpath *SetHK:tmp-libpath*)
           (setq new-debug (= *SetHK:tmp-debug* "1"))
           
-          ;; Skalierung speichern (nur wenn gueltig)
+          ;; DWG-Skalierung speichern (nur wenn gueltig und nicht "(nicht gesetzt)")
           (if (> new-scale 0.0)
             (progn
-              (SetHK:save-scale new-scale)
-              (SetHK:log-write "INFO" (strcat "Skalierung: " (rtos new-scale 2 2)))
+              (SetHK:write-dwg-scale new-scale)
+              (SetHK:log-write "INFO" (strcat "DWG-Skalierung: " (rtos new-scale 2 2)))
+            )
+            ;; Wenn 0 oder ungueltig: nicht aendern
+            (if (/= *SetHK:tmp-scale* "(nicht gesetzt)")
+              (progn
+                (princ "\n*** DWG-Skalierung muss > 0 sein, nicht geaendert ***")
+                (SetHK:log-write "WARN" (strcat "Ungueltige DWG-Skalierung: " *SetHK:tmp-scale*))
+              )
+            )
+          )
+          
+          ;; Default-Skalierung speichern (in Config)
+          (if (> new-default-scale 0.0)
+            (progn
+              (SetHK:save-default-scale new-default-scale)
+              (SetHK:log-write "INFO" (strcat "Default-Skalierung: " (rtos new-default-scale 2 2)))
             )
             (progn
-              (princ "\n*** Skalierung muss > 0 sein, nicht geaendert ***")
-              (SetHK:log-write "WARN" (strcat "Ungueltige Skalierung ignoriert: " *SetHK:tmp-scale*))
+              (princ "\n*** Default-Skalierung muss > 0 sein, nicht geaendert ***")
+              (SetHK:log-write "WARN" (strcat "Ungueltige Default-Skalierung: " *SetHK:tmp-default-scale*))
             )
           )
           
@@ -1018,6 +1151,7 @@
   
   ;; Temp-Variablen aufraeumen
   (setq *SetHK:tmp-scale* nil)
+  (setq *SetHK:tmp-default-scale* nil)
   (setq *SetHK:tmp-blockname* nil)
   (setq *SetHK:tmp-libpath* nil)
   (setq *SetHK:tmp-debug* nil)
