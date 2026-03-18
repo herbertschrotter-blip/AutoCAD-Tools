@@ -2,9 +2,14 @@
 ;;; BgColor.lsp
 ;;; Hintergrundfarbe per Toggle umschalten
 ;;;
-;;; Version: 1.7.2
-;;; Datum:   2026-03-17
+;;; Version: 1.8.1
+;;; Datum:   2026-03-18
 ;;; Autor:   Herbert Schrotter
+;;; Namespace: BGC (BgColor)
+;;;
+;;; AppData: %APPDATA%\AutoCAD\Lisp\BgColor\
+;;;   - Log:    Log\BgColor_YYYYMMDD_HHMMSS.log
+;;;   - Config: Config\BgColor.cfg
 ;;;
 ;;; Installation:
 ;;;   APPLOAD > BgColor.lsp > Startup Suite hinzufuegen
@@ -20,14 +25,115 @@
 ;;;                     aktueller Farbe (robust bei manuellen Aenderungen)
 ;;; ============================================================
 
-(vl-load-com)
-
 ;;; ============================================================
 ;;; Globale Variablen - nur setzen wenn noch nil (Session-persistent)
 ;;; ============================================================
 (if (not *BGC:color-a*) (setq *BGC:color-a* '(43 43 43)))     ; Dunkel
 (if (not *BGC:color-b*) (setq *BGC:color-b* '(255 255 255)))  ; Hell
 (if (not *BGC:state*)   (setq *BGC:state* "b"))                 ; "b" -> erster Toggle -> A
+
+(setq *BGC:appdata-folder* "BgColor")
+(setq *BGC:log-session-id* nil)
+(setq *BGC:debug-mode* nil)
+(setq *BGC:initialized* nil)
+
+;;; ============================================================
+;;; AppData & Logging
+;;; ============================================================
+
+;; AppData-Ordner ermitteln und ggf. erstellen
+;; Pfad: %APPDATA%\AutoCAD\Lisp\BgColor\
+(defun BGC:get-appdata-path ( / base)
+  (setq base (strcat (getenv "APPDATA") "\\AutoCAD\\Lisp\\" *BGC:appdata-folder*))
+  (if (not (vl-file-directory-p base))
+    (progn
+      (vl-mkdir (strcat (getenv "APPDATA") "\\AutoCAD"))
+      (vl-mkdir (strcat (getenv "APPDATA") "\\AutoCAD\\Lisp"))
+      (vl-mkdir base)
+      (vl-mkdir (strcat base "\\Log"))
+      (vl-mkdir (strcat base "\\Config"))
+      (vl-mkdir (strcat base "\\Backup"))
+    )
+  )
+  base
+)
+
+;; Log-Rotation: max 5 Session-Logs behalten
+;; Wird beim ersten log-write der Session aufgerufen
+(defun BGC:log-rotate ( / appdata log-dir pattern files sorted-files delete-count i f)
+  (setq appdata (BGC:get-appdata-path))
+  (setq log-dir (strcat appdata "\\Log"))
+  (setq pattern (strcat *BGC:appdata-folder* "_*.log"))
+  (setq files nil)
+  (setq f (vl-directory-files log-dir pattern 1))
+  (if f (setq files f))
+  (setq sorted-files (vl-sort files '<))
+  ;; 5. ist die aktuelle (noch nicht erstellt) → 4 behalten
+  (setq delete-count (- (length sorted-files) 4))
+  (if (> delete-count 0)
+    (progn
+      (setq i 0)
+      (repeat delete-count
+        (vl-file-delete (strcat log-dir "\\" (nth i sorted-files)))
+        (setq i (1+ i))
+      )
+    )
+  )
+)
+
+;; Log-Eintrag schreiben
+;; level: "INFO", "WARN", "ERROR", "DEBUG"
+;; message: Beliebiger String
+(defun BGC:log-write (level message / appdata log-path fp timestamp)
+  ;; Debug nur wenn aktiviert
+  (if (and (= level "DEBUG") (not *BGC:debug-mode*))
+    (progn) ; Skip
+    (progn
+      ;; Session-ID einmal pro Session erzeugen
+      (if (not *BGC:log-session-id*)
+        (progn
+          (setq *BGC:log-session-id*
+            (strcat *BGC:appdata-folder* "_"
+              (menucmd "M=$(edtime,0,YYYYMMDD_HHMMSS)")
+            )
+          )
+          ;; Log-Rotation beim ersten Schreiben
+          (BGC:log-rotate)
+        )
+      )
+      (setq appdata (BGC:get-appdata-path))
+      (setq log-path (strcat appdata "\\Log\\" *BGC:log-session-id* ".log"))
+      ;; Timestamp erzeugen
+      (setq timestamp (menucmd "M=$(edtime,0,YYYY-MO-DD HH:MM:SS)"))
+      ;; Schreiben
+      (setq fp (open log-path "a"))
+      (if fp
+        (progn
+          (write-line
+            (strcat "[" timestamp "] ["
+              (substr (strcat level "     ") 1 5) ; Padding auf 5 Zeichen
+              "] " message)
+            fp)
+          (close fp)
+        )
+      )
+    )
+  )
+)
+
+;;; ============================================================
+;;; Lazy-Init
+;;; ============================================================
+
+(defun BGC:ensure-init ( / )
+  (if (not *BGC:initialized*)
+    (progn
+      (vl-load-com)
+      (setq *BGC:initialized* T)
+      (BGC:log-write "INFO" "=== BgColor v1.8.1 initialisiert ===")
+    )
+  )
+)
 
 ;;; ============================================================
 ;;; Hilfsfunktionen
@@ -199,6 +305,8 @@
     (princ)
   )
 
+  (BGC:ensure-init)
+
   (setq old-cmdecho (getvar "CMDECHO"))
   (setvar "CMDECHO" 0)
 
@@ -231,7 +339,7 @@
 ;;; ============================================================
 ;;; Ladebestaetigung
 ;;; ============================================================
-(princ "\nBgColor.lsp v1.7.2 geladen.")
+(princ "\nBgColor.lsp v1.8.1 geladen.")
 (princ (strcat "\n  A: (" (BGC:rgb->str *BGC:color-a*)
                ")  B: (" (BGC:rgb->str *BGC:color-b*) ")"))
 (princ "\nBefehl: BGCOLOR  [Enter=Toggle | E=Einstellungen]")
