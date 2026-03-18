@@ -173,7 +173,7 @@ Wenn der Layer-Suffix aktiviert ist (Standard: ein), wird der Hoehenkoten-Block 
 | `Gelaende` | `KOTE` | `Gelaende_KOTE` |
 | `0` | `HK` | `0_HK` |
 
-Der Layer wird automatisch erstellt falls er nicht existiert. Farbe und Linientyp werden vom aktuellen Layer kopiert. Wenn der aktuelle Layer bereits auf `_<Suffix>` endet, wird er direkt verwendet ohne einen neuen anzulegen.
+Der Layer wird automatisch erstellt falls er nicht existiert. Alle Eigenschaften werden vom aktuellen Layer kopiert: Farbe (ACI und TrueColor), Linientyp, Linienstaerke, Plot-Flag und Transparenz. Wenn der aktuelle Layer bereits auf `_<Suffix>` endet, wird er direkt verwendet ohne einen neuen anzulegen.
 
 ## Skalierung
 
@@ -241,7 +241,7 @@ Maximal 5 Session-Logs werden aufbewahrt, aeltere werden automatisch geloescht.
 ### Log-Format
 
 ```
-[2026-03-18 14:30:22] [INFO ] === SetHoehenkote v2.3.2 ===
+[2026-03-18 14:30:22] [INFO ] === SetHoehenkote v2.3.3 ===
 [2026-03-18 14:30:22] [INFO ] Befehl SetHK gestartet
 [2026-03-18 14:30:22] [INFO ] Zeichnung: Projekt_001.dwg
 [2026-03-18 14:30:25] [INFO ] Punkt: (1234.567 890.123 0.000) Scale=1.00
