@@ -2,7 +2,7 @@
 ;;; Automatisches Setzen von Hoehenkoten-Bloecken in AutoCAD
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 2.3.1
+;;; Version: 2.3.2
 ;;; Datum: 2026-03-18
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SetHK (SetHoehenkote)
@@ -27,7 +27,7 @@
 ;;; KONSTANTEN & GLOBALE VARIABLEN
 ;;; ============================================================================
 
-(setq *SetHK:version* "2.3.1")
+(setq *SetHK:version* "2.3.2")
 (setq *SetHK:appdata-folder* "SetHoehenkote")
 (setq *SetHK:log-session-id* nil)
 (setq *SetHK:debug-mode* nil)
@@ -724,8 +724,10 @@
 ;;; Erstellt den Layer mit konfiguriertem Suffix basierend auf aktuellem Layer
 ;;; Wenn aktueller Layer schon auf _<suffix> endet → direkt verwenden
 ;;; Wenn nicht → _<suffix> anhaengen, Layer erstellen falls noetig
-;;; Rueckgabe: Name des Ziel-Layers (String)
-(defun SetHK:ensure-hk-layer ( / cur-layer hk-layer-name cur-data cur-color cur-ltype suffix suffix-with-sep suffix-len)
+;;; Kopiert via VLA: Farbe (ACI+TrueColor), Linientyp, Linienstaerke, Plot, Transparenz
+;;; Rueckgabe: Name des Ziel-Layers (String) oder nil bei Fehler
+(defun SetHK:ensure-hk-layer ( / cur-layer hk-layer-name suffix suffix-with-sep suffix-len
+                                  doc layers src-layer new-layer color-obj)
   ;; Aktuellen Layer lesen
   (setq cur-layer (getvar "CLAYER"))
   
@@ -756,28 +758,59 @@
           hk-layer-name
         )
         (progn
-          ;; Layer-Eigenschaften vom Original lesen
-          (setq cur-data (tblsearch "LAYER" cur-layer))
-          (setq cur-color (cdr (assoc 62 cur-data)))
-          (setq cur-ltype (cdr (assoc 6 cur-data)))
+          ;; VLA: Quell-Layer und Layers-Collection holen
+          (setq doc (vla-get-activedocument (vlax-get-acad-object)))
+          (setq layers (vla-get-layers doc))
+          (setq src-layer (vla-item layers cur-layer))
           
-          ;; Neuen Layer erstellen mit entmakex
-          (entmakex
-            (list
-              '(0 . "LAYER")
-              '(100 . "AcDbSymbolTableRecord")
-              '(100 . "AcDbLayerTableRecord")
-              (cons 2 hk-layer-name)
-              '(70 . 0)
-              (cons 62 (if cur-color cur-color 7))
-              (cons 6 (if cur-ltype cur-ltype "Continuous"))
+          ;; Neuen Layer erstellen
+          (setq new-layer
+            (vl-catch-all-apply 'vla-add (list layers hk-layer-name)))
+          
+          (if (vl-catch-all-error-p new-layer)
+            (progn
+              (SetHK:log-write "ERROR"
+                (strcat "Layer erstellen fehlgeschlagen: " hk-layer-name
+                        " - " (vl-catch-all-error-message new-layer)))
+              nil ;; Fallback: Block bleibt auf aktuellem Layer
+            )
+            (progn
+              ;; === Properties vom Quell-Layer kopieren ===
+              
+              ;; ACI-Farbe (Index-Farbe)
+              (vl-catch-all-apply 'vla-put-color
+                (list new-layer (vla-get-color src-layer)))
+              
+              ;; TrueColor (wenn vorhanden)
+              (setq color-obj
+                (vl-catch-all-apply 'vla-get-truecolor (list src-layer)))
+              (if (and color-obj (not (vl-catch-all-error-p color-obj)))
+                (vl-catch-all-apply 'vla-put-truecolor
+                  (list new-layer color-obj))
+              )
+              
+              ;; Linientyp
+              (vl-catch-all-apply 'vla-put-linetype
+                (list new-layer (vla-get-linetype src-layer)))
+              
+              ;; Linienstaerke (Lineweight)
+              (vl-catch-all-apply 'vla-put-lineweight
+                (list new-layer (vla-get-lineweight src-layer)))
+              
+              ;; Plot-Flag (ob Layer geplottet wird)
+              (vl-catch-all-apply 'vla-put-plottable
+                (list new-layer (vla-get-plottable src-layer)))
+              
+              ;; Transparenz
+              (vl-catch-all-apply 'vla-put-transparency
+                (list new-layer (vla-get-transparency src-layer)))
+              
+              (SetHK:log-write "INFO"
+                (strcat "Layer erstellt: " hk-layer-name
+                        " (kopiert von " cur-layer ")"))
+              hk-layer-name
             )
           )
-          
-          (SetHK:log-write "INFO" (strcat "Layer erstellt: " hk-layer-name
-                                           " (Farbe=" (itoa (if cur-color cur-color 7))
-                                           ", Linientyp=" (if cur-ltype cur-ltype "Continuous") ")"))
-          hk-layer-name
         )
       )
     )

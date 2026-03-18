@@ -241,7 +241,7 @@ Maximal 5 Session-Logs werden aufbewahrt, aeltere werden automatisch geloescht.
 ### Log-Format
 
 ```
-[2026-03-18 14:30:22] [INFO ] === SetHoehenkote v2.3.1 ===
+[2026-03-18 14:30:22] [INFO ] === SetHoehenkote v2.3.2 ===
 [2026-03-18 14:30:22] [INFO ] Befehl SetHK gestartet
 [2026-03-18 14:30:22] [INFO ] Zeichnung: Projekt_001.dwg
 [2026-03-18 14:30:25] [INFO ] Punkt: (1234.567 890.123 0.000) Scale=1.00
