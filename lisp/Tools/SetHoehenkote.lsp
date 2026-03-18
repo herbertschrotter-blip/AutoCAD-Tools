@@ -2,7 +2,7 @@
 ;;; Automatisches Setzen von Hoehenkoten-Bloecken in AutoCAD
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 2.2.0
+;;; Version: 2.3.0
 ;;; Datum: 2026-03-18
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SetHK (SetHoehenkote)
@@ -27,7 +27,7 @@
 ;;; KONSTANTEN & GLOBALE VARIABLEN
 ;;; ============================================================================
 
-(setq *SetHK:version* "2.2.0")
+(setq *SetHK:version* "2.3.0")
 (setq *SetHK:appdata-folder* "SetHoehenkote")
 (setq *SetHK:log-session-id* nil)
 (setq *SetHK:debug-mode* nil)
@@ -628,30 +628,32 @@
 ;;; HILFSFUNKTIONEN - BENUTZEREINGABEN
 ;;; ============================================================================
 
-;;; Fragt Benutzer nach Einfuegepunkt mit Keyword fuer Skalierung
+;;; Fragt Benutzer nach Einfuegepunkt mit Keywords fuer Skalierung und Einstellungen
 ;;; Rueckgabe: Liste (punkt scale) oder nil bei Abbruch
 (defun SetHK:get-insert-point ( / pt scale current-scale)
-  ;; Aktuelle Skalierung aus Config lesen
+  ;; Aktuelle Skalierung lesen (DWG → Config → 1.0)
   (setq current-scale (SetHK:read-scale))
+  (setq scale current-scale)
   
-  ;; Wenn keine Skalierung gespeichert: Zuerst fragen
-  (if (null current-scale)
-    (progn
-      (princ "\n*** Keine Skalierung konfiguriert ***")
-      (setq scale (SetHK:get-scale))
+  ;; Punkt mit Keyword-Optionen abfragen
+  (initget "Skalierung Einstellungen")
+  (setq pt (getpoint (strcat "\nPunkt waehlen [Skalierung/Einstellungen] <" (rtos scale 2 2) ">: ")))
+  
+  ;; Keyword-Schleife
+  (while (and pt (= (type pt) 'STR))
+    (cond
+      ((= pt "Skalierung")
+        (setq scale (SetHK:get-scale))
+      )
+      ((= pt "Einstellungen")
+        (c:HKSETTINGS)
+        ;; Nach Settings: Skalierung neu lesen (koennte geaendert sein)
+        (setq scale (SetHK:read-scale))
+      )
     )
-    (setq scale current-scale)
-  )
-  
-  ;; Punkt mit Keyword-Option abfragen
-  (initget "Skalierung")
-  (setq pt (getpoint (strcat "\nPunkt waehlen [Skalierung] <" (rtos scale 2 2) ">: ")))
-  
-  ;; Prüfe ob Keyword "Skalierung" gewaehlt wurde
-  (while (= pt "Skalierung")
-    (setq scale (SetHK:get-scale))
-    (initget "Skalierung")
-    (setq pt (getpoint (strcat "\nPunkt waehlen [Skalierung] <" (rtos scale 2 2) ">: ")))
+    ;; Nochmal Punkt abfragen
+    (initget "Skalierung Einstellungen")
+    (setq pt (getpoint (strcat "\nPunkt waehlen [Skalierung/Einstellungen] <" (rtos scale 2 2) ">: ")))
   )
   
   ;; Wenn pt = nil (ESC) → Abbruch
