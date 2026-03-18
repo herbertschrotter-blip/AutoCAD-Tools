@@ -2,7 +2,7 @@
 ;;; BgColor.lsp
 ;;; Hintergrundfarbe per Toggle umschalten
 ;;;
-;;; Version: 1.8.1
+;;; Version: 1.9.1
 ;;; Datum:   2026-03-18
 ;;; Autor:   Herbert Schrotter
 ;;; Namespace: BGC (BgColor)
@@ -122,6 +122,74 @@
 )
 
 ;;; ============================================================
+;;; Config-Management
+;;; ============================================================
+
+;; Config lesen aus %APPDATA%\AutoCAD\Lisp\BgColor\Config\BgColor.cfg
+;; Format: KEY=VALUE pro Zeile
+;; Setzt Defaults wenn Datei nicht existiert oder Werte ungueltig
+(defun BGC:load-config ( / appdata cfg-path fp line key val parsed)
+  (setq appdata (BGC:get-appdata-path))
+  (setq cfg-path (strcat appdata "\\Config\\" *BGC:appdata-folder* ".cfg"))
+  (if (findfile cfg-path)
+    (progn
+      (setq fp (open cfg-path "r"))
+      (if fp
+        (progn
+          (while (setq line (read-line fp))
+            ;; Zeile an "=" splitten
+            (if (vl-string-search "=" line)
+              (progn
+                (setq key (substr line 1 (vl-string-search "=" line)))
+                (setq val (substr line (+ 2 (vl-string-search "=" line))))
+                (cond
+                  ((= key "COLOR_A")
+                   (setq parsed (BGC:str->rgb val))
+                   (if parsed (setq *BGC:color-a* parsed))
+                  )
+                  ((= key "COLOR_B")
+                   (setq parsed (BGC:str->rgb val))
+                   (if parsed (setq *BGC:color-b* parsed))
+                  )
+                ) ;end cond
+              )
+            ) ;end if "="
+          ) ;end while
+          (close fp)
+          (BGC:log-write "INFO"
+            (strcat "Config geladen: A=(" (BGC:rgb->str *BGC:color-a*)
+                    ") B=(" (BGC:rgb->str *BGC:color-b*) ")"))
+        )
+      )
+    )
+    ;; Keine Config vorhanden → Defaults beibehalten, Config erstellen
+    (progn
+      (BGC:log-write "INFO" "Keine Config gefunden, verwende Defaults")
+      (BGC:save-config)
+    )
+  )
+)
+
+;; Config schreiben
+(defun BGC:save-config ( / appdata cfg-path fp)
+  (setq appdata (BGC:get-appdata-path))
+  (setq cfg-path (strcat appdata "\\Config\\" *BGC:appdata-folder* ".cfg"))
+  (setq fp (open cfg-path "w"))
+  (if fp
+    (progn
+      (write-line (strcat "VERSION=1.0") fp)
+      (write-line (strcat "COLOR_A=" (BGC:rgb->str *BGC:color-a*)) fp)
+      (write-line (strcat "COLOR_B=" (BGC:rgb->str *BGC:color-b*)) fp)
+      (close fp)
+      (BGC:log-write "INFO"
+        (strcat "Config gespeichert: A=(" (BGC:rgb->str *BGC:color-a*)
+                ") B=(" (BGC:rgb->str *BGC:color-b*) ")"))
+    )
+    (BGC:log-write "ERROR" (strcat "Config nicht schreibbar: " cfg-path))
+  )
+)
+
+;;; ============================================================
 ;;; Lazy-Init
 ;;; ============================================================
 
@@ -129,8 +197,9 @@
   (if (not *BGC:initialized*)
     (progn
       (vl-load-com)
+      (BGC:load-config)
       (setq *BGC:initialized* T)
-      (BGC:log-write "INFO" "=== BgColor v1.8.1 initialisiert ===")
+      (BGC:log-write "INFO" "=== BgColor v1.9.1 initialisiert ===")
     )
   )
 )
@@ -200,13 +269,14 @@
 )
 
 ;; Beide Bereiche setzen (Model + Layout immer gleichzeitig)
-;; vlax-variant-change-type zum Lesen (Variant Type 19 -> Long)
 ;; plain Integer zum Schreiben
 (defun BGC:set-all (rgb / disp ole)
   (setq disp (BGC:get-display)
         ole  (BGC:rgb->ole rgb))
   (vla-put-GraphicsWinModelBackgrndColor  disp ole)
   (vla-put-GraphicsWinLayoutBackgrndColor disp ole)
+  (BGC:log-write "DEBUG"
+    (strcat "VLA: Model+Layout gesetzt, OLE=" (itoa ole)))
 )
 
 ;;; ============================================================
@@ -239,15 +309,21 @@
   (close f)
 )
 
-(defun BGC:show-settings ( / dcl-file dcl-id result str-a str-b new-a new-b)
+(defun BGC:show-settings ( / dcl-file dcl-id result str-a str-b new-a new-b old-a-str old-b-str)
+  (BGC:log-write "INFO" "Einstellungen-Dialog geoeffnet")
   (setq dcl-file (strcat (getvar "TEMPPREFIX") "bgcolor_settings.dcl"))
   (BGC:write-dcl dcl-file)
   (setq dcl-id (load_dialog dcl-file))
   (if (< dcl-id 0)
-    (progn (princ "\n[BgColor] Fehler: DCL nicht geladen.") (exit))
+    (progn
+      (BGC:log-write "ERROR" "DCL nicht geladen")
+      (princ "\n[BgColor] Fehler: DCL nicht geladen.")
+      (exit)
+    )
   )
   (if (not (new_dialog "bgcolor_settings" dcl-id))
     (progn
+      (BGC:log-write "ERROR" "Dialog nicht geoeffnet")
       (princ "\n[BgColor] Fehler: Dialog nicht geoeffnet.")
       (unload_dialog dcl-id)
       (exit)
@@ -255,6 +331,9 @@
   )
   (setq str-a (BGC:rgb->str *BGC:color-a*)
         str-b (BGC:rgb->str *BGC:color-b*))
+  ;; Alte Werte merken fuer Log-Vergleich
+  (setq old-a-str str-a
+        old-b-str str-b)
   (set_tile "edit_a" str-a)
   (set_tile "edit_b" str-b)
   (set_tile "preview_a" (strcat "Farbe A: " str-a))
@@ -276,19 +355,39 @@
             new-b (BGC:str->rgb str-b))
       (cond
         ((not new-a)
+         (BGC:log-write "WARN" (strcat "Ungueltige Farbe A: '" str-a "'"))
          (princ (strcat "\n[BgColor] Ungueltige Farbe A: '" str-a "' - Format: R,G,B")))
         ((not new-b)
+         (BGC:log-write "WARN" (strcat "Ungueltige Farbe B: '" str-b "'"))
          (princ (strcat "\n[BgColor] Ungueltige Farbe B: '" str-b "' - Format: R,G,B")))
         (T
          (setq *BGC:color-a* new-a
                *BGC:color-b* new-b)
+         ;; Config persistent speichern
+         (BGC:save-config)
+         ;; Log: was hat sich geaendert?
+         (if (not (equal old-a-str (BGC:rgb->str *BGC:color-a*)))
+           (BGC:log-write "INFO"
+             (strcat "Farbe A geaendert: (" old-a-str ") -> (" (BGC:rgb->str *BGC:color-a*) ")"))
+         )
+         (if (not (equal old-b-str (BGC:rgb->str *BGC:color-b*)))
+           (BGC:log-write "INFO"
+             (strcat "Farbe B geaendert: (" old-b-str ") -> (" (BGC:rgb->str *BGC:color-b*) ")"))
+         )
+         (if (and (equal old-a-str (BGC:rgb->str *BGC:color-a*))
+                  (equal old-b-str (BGC:rgb->str *BGC:color-b*)))
+           (BGC:log-write "INFO" "Einstellungen: keine Aenderung")
+         )
          (princ (strcat "\n[BgColor] A: (" (BGC:rgb->str *BGC:color-a*)
                         ")  B: (" (BGC:rgb->str *BGC:color-b*) ")"))
          (princ "\n[BgColor] Einstellungen gespeichert.")
         )
       )
     )
-    (princ "\n[BgColor] Abgebrochen.")
+    (progn
+      (BGC:log-write "INFO" "Einstellungen: Abgebrochen")
+      (princ "\n[BgColor] Abgebrochen.")
+    )
   )
 )
 
@@ -298,14 +397,20 @@
 (defun c:BGCOLOR ( / *error* old-cmdecho choice next-rgb next-state)
 
   (defun *error* (msg)
-    (if (not (wcmatch (strcase msg) "*ABBRUCH*,*CANCEL*,*QUIT*"))
-      (princ (strcat "\n[BgColor] Fehler: " msg))
+    (if (not (wcmatch (strcase msg) "*ABBRUCH*,*ABGEBROCHEN*,*CANCEL*,*QUIT*,*EXIT*"))
+      (progn
+        (BGC:log-write "ERROR" (strcat "Error-Handler: " msg))
+        (princ (strcat "\n[BgColor] Fehler: " msg))
+      )
+      (BGC:log-write "INFO" "User: Abbruch (ESC/Cancel)")
     )
     (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
     (princ)
   )
 
   (BGC:ensure-init)
+
+  (BGC:log-write "INFO" "Befehl BGCOLOR gestartet")
 
   (setq old-cmdecho (getvar "CMDECHO"))
   (setvar "CMDECHO" 0)
@@ -316,6 +421,7 @@
 
   (cond
     ((= choice "Einstellungen")
+     (BGC:log-write "INFO" "Option: Einstellungen")
      (BGC:show-settings)
     )
     (T
@@ -327,11 +433,15 @@
      ;; Beide Bereiche setzen
      (BGC:set-all next-rgb)
      (setq *BGC:state* next-state)
+     (BGC:log-write "INFO"
+       (strcat "Toggle: " (strcase *BGC:state*) " -> ("
+               (BGC:rgb->str next-rgb) ")"))
      (princ (strcat "\n[BgColor] -> (" (BGC:rgb->str next-rgb) ")"
                     "  [" (strcase next-state) "]"))
     )
   )
 
+  (BGC:log-write "INFO" "Befehl BGCOLOR beendet")
   (setvar "CMDECHO" old-cmdecho)
   (princ)
 )
@@ -339,7 +449,7 @@
 ;;; ============================================================
 ;;; Ladebestaetigung
 ;;; ============================================================
-(princ "\nBgColor.lsp v1.8.1 geladen.")
+(princ "\nBgColor.lsp v1.9.1 geladen.")
 (princ (strcat "\n  A: (" (BGC:rgb->str *BGC:color-a*)
                ")  B: (" (BGC:rgb->str *BGC:color-b*) ")"))
 (princ "\nBefehl: BGCOLOR  [Enter=Toggle | E=Einstellungen]")
