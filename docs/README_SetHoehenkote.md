@@ -1,251 +1,329 @@
 # SetHoehenkote
 
-Automatisches Setzen von Höhenkoten-Blocks in AutoCAD mit konfigurierbarer XY-Skalierung.
-Nutzt BlockImport.lsp für zentrale Block-Verwaltung.
+Automatisches Setzen von Hoehenkoten-Bloecken in AutoCAD.
+Speziell fuer Leica-Vermessungsarbeiten mit konfigurierbarer Skalierung pro Zeichnung.
 
 ## Befehle
 
 | Befehl | Beschreibung |
 |--------|--------------|
-| SetHK | Höhenkote-Block an gewähltem Punkt setzen |
-| ShowBlockPath | Zeigt konfigurierten Block-Pfad |
-| ResetBlockPath | Löscht gespeicherten Block-Pfad |
+| SetHK | Hoehenkote-Block an gewaehltem Punkt setzen |
+| HKSETTINGS | Einstellungen (Skalierung, Block, Layer, Pfad, Debug) |
+| HKBLOCK | Block-Verwaltung (Liste/Standard/Hinzufuegen/Entfernen) |
 
 ## Features
 
-- ✅ Keyword-basierte Skalierungs-Option am Punkt-Prompt
-- ✅ Persistente XY-Skalierung über Sessions
-- ✅ Automatische Block-Verwaltung via BlockImport.lsp
-- ✅ Context-Namespace "SetHK" für Isolation
-- ✅ Höhenwert-Eingabe mit Fehlerbehandlung
-- ✅ Kein manuelles ENTER nötig
+- Skalierung pro Zeichnung (DWG Custom Property, reist mit der Datei)
+- Konfigurierbarer Default fuer neue Zeichnungen
+- Automatischer Layer mit konfigurierbarem Suffix (z.B. `_HK`, `_KOTE`)
+- Einstellungen-Dialog (DCL) mit Live-Vorschau fuer Layer-Suffix
+- Einstellungen direkt aus SetHK erreichbar (Keyword `E`)
+- Ausfuehrliches Session-Logging (max 5 Sessions)
+- Persistente Konfiguration in %APPDATA%
+- Lazy-Init fuer DokaCAD-Kompatibilitaet
 
 ## Installation
 
 ### APPLOAD (Empfohlen)
 
-1. **BlockImport.lsp** laden (Voraussetzung!)
-2. Befehl `APPLOAD` in AutoCAD ausführen
-3. `SetHoehenkote.lsp` auswählen und laden
-4. **Automatisches Laden:** Zu Startup Suite hinzufügen
+1. Befehl `APPLOAD` in AutoCAD ausfuehren
+2. `SetHoehenkote.lsp` auswaehlen und laden
+3. **Automatisches Laden:** Zu Startup Suite hinzufuegen
 
-### Support-Ordner (Alternative)
+### Abhaengigkeiten
 
-Kopieren nach:
-```
-%APPDATA%\Autodesk\AutoCAD 2024\R24.3\deu\Support\
-```
+- `BlockImport.lsp` muss im selben Ordner, Support-Pfad oder `lib/` Unterordner liegen
+- Wird beim ersten Befehlsaufruf automatisch gesucht (3-Fallback Pfadaufloesung)
+- Falls nicht gefunden: File-Dialog zur manuellen Auswahl, Pfad wird gespeichert
 
-**Wichtig:** BlockImport.lsp muss vorher geladen sein!
+## Block-Anforderungen
+
+Der Hoehenkoten-Block kann frei erstellt werden. Er muss als DWG-Datei vorliegen und wird ueber BlockImport.lsp in die Zeichnung importiert.
+
+### Pflicht-Attribut
+
+| Attribut-Tag | Typ | Beschreibung |
+|-------------|-----|--------------|
+| `HOEHE` | String | Hoehenwert mit Vorzeichen. Wird automatisch gefuellt, z.B. `+322.45` oder `-12.30` oder `%%p0.00` (fuer Hoehe 0) |
+
+### Optionales Attribut
+
+| Attribut-Tag | Typ | Beschreibung |
+|-------------|-----|--------------|
+| `3DEZ` | String | Dritte Dezimalstelle der Hoehe. Wird nur gefuellt wenn die 3. Dezimalstelle ungleich 0 ist. Z.B. bei Hoehe 322.456 wird `3DEZ` auf `6` gesetzt |
+
+### Formatierung der Hoehe
+
+Die Hoehe wird im Attribut `HOEHE` als 2-Dezimalstellen-Wert mit Vorzeichen gespeichert:
+
+| Eingabe | HOEHE | 3DEZ |
+|---------|-------|------|
+| 322.456 | +322.45 | 6 |
+| 322.450 | +322.45 | (leer) |
+| -12.300 | -12.30 | (leer) |
+| 0.000 | %%p0.00 | (leer) |
+
+Das Sonderzeichen `%%p` erzeugt in AutoCAD das Plus-Minus-Zeichen (±).
+
+### Block erstellen
+
+1. Neue DWG-Datei erstellen
+2. Block mit `ATTDEF` erstellen:
+   - Tag `HOEHE`: Sichtbar, Texthoehe nach Bedarf
+   - Tag `3DEZ` (optional): Sichtbar, kleinere Texthoehe, positioniert nach der 2. Dezimalstelle
+3. Block definieren (`BLOCK` Befehl)
+4. DWG speichern
+5. In HKSETTINGS oder HKBLOCK den Pfad zur DWG konfigurieren
+
+### Empfohlener Block-Name
+
+- `BLK_Hoehenkote` (Standard)
+- Kann beliebig benannt und in HKSETTINGS geaendert werden
 
 ## Verwendung
 
-### SetHK - Höhenkote setzen
+### SetHK - Hoehenkote setzen
 
-Platziert einen Höhenkote-Block an einem gewählten Punkt mit optionaler XY-Skalierung.
+Platziert einen Hoehenkoten-Block an einem gewaehlten Punkt. Die Skalierung wird pro Zeichnung gespeichert.
 
 **Aufruf:**
 ```
 Command: SetHK
 ```
 
-**Workflow - Beim ersten Mal:**
+**Optionen waehrend Punktwahl:**
+- `S` - Skalierung aendern (wird in DWG gespeichert)
+- `E` - Einstellungen oeffnen (DCL-Dialog)
 
-1. **Skalierung einstellen (erste Verwendung):**
+**Workflow - Erste Verwendung:**
 ```
-*** Keine Skalierung konfiguriert ***
-XY-Skalierung eingeben <1.0>: 0.5
-✓ Skalierung gespeichert: 0.5
-
-Punkt wählen (oder [S]kalierung <0.5>): [Klick]
-Höhe: 100.500
-✓ Höhenkote gesetzt: +100.50 | Z=100.500 | XY-Scale=0.50
-```
-
-**Workflow - Normale Verwendung:**
-
-2. **Punkt wählen (mit gespeicherter Skalierung):**
-```
-Punkt wählen (oder [S]kalierung <0.5>): [Klick direkt]
-Höhe: 123.456
-✓ Höhenkote gesetzt: +123.46 | Z=123.456 | XY-Scale=0.50
+Command: SetHK
+Punkt waehlen [Skalierung/Einstellungen] <1.00>: [Klick]
+Hoehe eingeben: 322.456
+Hoehenkote gesetzt: +322.45 | Z=322.456 | XY-Scale=1.00 | Layer=Vermessung_HK
 ```
 
-3. **Skalierung ändern:**
+**Workflow - Skalierung aendern:**
 ```
-Punkt wählen (oder [S]kalierung <0.5>): S
-Neue XY-Skalierung <0.5>: 2.0
-✓ Skalierung gespeichert: 2.0
-
-Punkt wählen (oder [S]kalierung <2.0>): [Klick]
-Höhe: 150.250
-✓ Höhenkote gesetzt: +150.25 | Z=150.250 | XY-Scale=2.00
+Command: SetHK
+Punkt waehlen [Skalierung/Einstellungen] <1.00>: S
+Neue XY-Skalierung <1.00>: 0.50
+Skalierung gespeichert: 0.50 (in DWG)
+Punkt waehlen [Skalierung/Einstellungen] <0.50>: [Klick]
+Hoehe eingeben <322.456>: 323.100
+Hoehenkote gesetzt: +323.10 | Z=323.100 | XY-Scale=0.50 | Layer=Vermessung_HK
 ```
 
-**Keyword-Option:**
-- **[S]kalierung** - Ändert XY-Skalierung
-- Direkt klicken - Nutzt gespeicherte Skalierung
-- **Kein** extra ENTER nötig!
+**Workflow - Einstellungen oeffnen:**
+```
+Command: SetHK
+Punkt waehlen [Skalierung/Einstellungen] <0.50>: E
+→ DCL-Dialog oeffnet sich
+→ Aenderungen vornehmen, OK klicken
+Punkt waehlen [Skalierung/Einstellungen] <0.50>: [Klick]
+```
 
----
+### HKSETTINGS - Einstellungen
 
-### ShowBlockPath - Block-Pfad anzeigen
-
-Zeigt den konfigurierten Pfad zum Höhenkote-Block.
+Oeffnet den Einstellungen-Dialog (DCL) mit allen konfigurierbaren Optionen.
 
 **Aufruf:**
 ```
-Command: ShowBlockPath
+Command: HKSETTINGS
 ```
 
-**Ausgabe:**
-```
-=== Konfigurierte Block-Pfade (Context: SetHK) ===
-*STANDARD*: BLK_Hoehenkote
-BLK_Hoehenkote: D:/Pfad/zu/BLK_Hoehenkote.dwg [✓ Existiert]
+**Einstellungen im Dialog:**
 
-Config-Datei: C:\Users\...\AppData\Roaming\AutoCAD\BlockImportConfig.txt
-```
+| Bereich | Feld | Beschreibung |
+|---------|------|--------------|
+| XY-Skalierung | Aktuelle Zeichnung | Skalierung fuer diese DWG (Custom Property) |
+| XY-Skalierung | Default (neue Zeichnungen) | Fallback fuer DWGs ohne eigene Skalierung |
+| Hoehenkoten-Block | Block-Name | Name des zu verwendenden Blocks |
+| Hoehenkoten-Block | Block-Verwaltung oeffnen... | Oeffnet HKBLOCK Manager |
+| Layer | Eigener Layer fuer Hoehenkoten | Toggle: Automatische Layer-Erstellung |
+| Layer | Suffix (nach _) | Frei konfigurierbares Suffix mit Live-Vorschau |
+| BlockImport.lsp | Pfad | Pfad zur BlockImport.lsp Library |
+| BlockImport.lsp | Durchsuchen... | File-Dialog zur Pfadauswahl |
+| Debug | Debug-Modus aktivieren | Toggle: Zusaetzliche DEBUG-Eintraege im Log |
 
----
+### HKBLOCK - Block-Verwaltung
 
-### ResetBlockPath - Block-Pfad zurücksetzen
-
-Löscht den gespeicherten Block-Pfad.
+Interaktives Keyword-Menue zur Verwaltung der konfigurierten Hoehenkoten-Bloecke.
 
 **Aufruf:**
 ```
-Command: ResetBlockPath
+Command: HKBLOCK
 ```
 
-**Hinweis:** Beim nächsten `SetHK` Aufruf wird nach dem Block gefragt.
+**Optionen:**
+- `L` - Liste aller konfigurierten Bloecke
+- `S` - Standard-Block waehlen
+- `H` - Neuen Block hinzufuegen
+- `E` - Block entfernen
+- `A` - Abbrechen
+
+## Layer-Verhalten
+
+Wenn der Layer-Suffix aktiviert ist (Standard: ein), wird der Hoehenkoten-Block automatisch auf einen eigenen Layer gesetzt:
+
+| Aktueller Layer | Suffix | Block-Layer |
+|-----------------|--------|-------------|
+| `Vermessung` | `HK` | `Vermessung_HK` |
+| `Vermessung_HK` | `HK` | `Vermessung_HK` (direkt, keine Kopie) |
+| `Gelaende` | `KOTE` | `Gelaende_KOTE` |
+| `0` | `HK` | `0_HK` |
+
+Der Layer wird automatisch erstellt falls er nicht existiert. Farbe und Linientyp werden vom aktuellen Layer kopiert. Wenn der aktuelle Layer bereits auf `_<Suffix>` endet, wird er direkt verwendet ohne einen neuen anzulegen.
+
+## Skalierung
+
+Die Skalierung wird **pro Zeichnung** als DWG Custom Property `SetHK_Scale` gespeichert. Dadurch reist die Skalierung mit der Zeichnungsdatei mit, auch bei Weitergabe an andere PCs.
+
+**Reihenfolge beim Lesen:**
+1. DWG Custom Property `SetHK_Scale` → gefunden? → verwenden
+2. Config `DEFAULT_SCALE` → gefunden? → verwenden
+3. Fallback: 1.0
+
+Die Skalierung betrifft nur X und Y. Z bleibt immer 1.0.
+
+Der Wert ist sichtbar unter Datei → Zeichnungseigenschaften → Benutzerdefiniert.
 
 ## Konfiguration
 
-### Block-Konfiguration
+### AppData-Ordner
+
+Alle Daten werden gespeichert in:
+```
+%APPDATA%\AutoCAD\Lisp\SetHoehenkote\
+  ├── Log\        (Session-Logs)
+  ├── Config\     (Konfiguration)
+  └── Backup\     (reserviert)
+```
+
+### Config-Datei
 
 **Speicherort:**
 ```
-%APPDATA%\AutoCAD\BlockImportConfig.txt
-```
-
-**Format (mit Context "SetHK"):**
-```
-1.0
-*STANDARD:SetHK*=BLK_Hoehenkote
-SetHK:BLK_Hoehenkote=D:/Pfad/zu/BLK_Hoehenkote.dwg
-SetHK:BLK_Anderer=D:/Pfad/zu/BLK_Anderer.dwg
-```
-
-### Skalierungs-Konfiguration
-
-**Speicherort:**
-```
-%APPDATA%\AutoCAD\SetHoehenkoteScale.txt
+%APPDATA%\AutoCAD\Lisp\SetHoehenkote\Config\SetHoehenkote.cfg
 ```
 
 **Format:**
 ```
-1.0
-0.5
+LAYER_SUFFIX=HK
+BLOCKNAME=BLK_Hoehenkote
+DEFAULT_SCALE=1.000000
+BLOCKIMPORT_PATH=D:\Pfad\zu\lib\BlockImport.lsp
+USE_LAYER_SUFFIX=1
 ```
 
-**Erste Zeile:** Versions-Nummer (1.0)  
-**Zweite Zeile:** XY-Skalierung (z.B. 0.5)
+**Einstellungen:**
+- `LAYER_SUFFIX` - Suffix fuer automatischen Layer (nach `_`)
+- `BLOCKNAME` - Name des Hoehenkoten-Blocks
+- `DEFAULT_SCALE` - Standard-Skalierung fuer neue Zeichnungen
+- `BLOCKIMPORT_PATH` - Pfad zur BlockImport.lsp Library
+- `USE_LAYER_SUFFIX` - Automatischer Layer ein/aus (1/0)
 
-### Context-Namespace
+### Einstellungen aendern
 
-SetHoehenkote nutzt den Context "SetHK" für:
-- Isolation von anderen Scripts
-- Eigene Block-Liste in BlockImport
-- Eigener Standard-Block
-- Keine Konflikte mit anderen Tools
+Ueber den Befehl `HKSETTINGS` oder das Keyword `E` im SetHK-Befehl.
 
-**Interner Aufruf:**
-```lisp
-(setq *block-import-context* "SetHK")
-(ensure-block-available *hoehenkote-blockname*)
+## Log-Datei
+
+### Speicherort
+
+```
+%APPDATA%\AutoCAD\Lisp\SetHoehenkote\Log\SetHoehenkote_YYYYMMDD_HHMMSS.log
 ```
 
-## Block-Anforderungen
+Pro Session wird eine neue Log-Datei erstellt.
+Maximal 5 Session-Logs werden aufbewahrt, aeltere werden automatisch geloescht.
 
-Der Höhenkote-Block muss folgende Attribute enthalten:
+### Log-Format
 
-**Attribut-Tags:**
-- `HOEHE` - Höhenwert (wird automatisch gefüllt)
+```
+[2026-03-18 14:30:22] [INFO ] === SetHoehenkote v2.3.1 ===
+[2026-03-18 14:30:22] [INFO ] Befehl SetHK gestartet
+[2026-03-18 14:30:22] [INFO ] Zeichnung: Projekt_001.dwg
+[2026-03-18 14:30:25] [INFO ] Punkt: (1234.567 890.123 0.000) Scale=1.00
+[2026-03-18 14:30:28] [INFO ] Hoehe: 322.456
+[2026-03-18 14:30:28] [INFO ] Layer erstellt: Vermessung_HK (Farbe=7, Linientyp=Continuous)
+[2026-03-18 14:30:28] [INFO ] Block gesetzt: +322.45 | Z=322.456 | Scale=1.00 | Layer=Vermessung_HK
+[2026-03-18 14:30:30] [INFO ] User: Abbruch (Funktion abgebrochen)
+[2026-03-18 14:30:30] [INFO ] Befehl SetHK beendet (Error/Cancel)
+```
 
-**Format:**
-- Höhe wird als 2-stelliger Dezimalwert formatiert
-- Beispiel: 123.456 → "+123.46"
+### Log-Level
 
-**Empfohlener Block-Name:**
-- `BLK_Hoehenkote` (Standard)
-- Kann beliebig benannt sein
+| Level | Bedeutung |
+|-------|-----------|
+| INFO | Normaler Ablauf |
+| WARN | Unerwartetes, nicht kritisch |
+| ERROR | Fehler, Funktion abgebrochen |
+| DEBUG | Detaillierte Infos (nur bei Debug-Modus) |
+
+### Debug-Modus
+
+Debug-Modus aktivieren ueber HKSETTINGS (Toggle im Dialog).
+
+Im Debug-Modus werden zusaetzliche DEBUG-Eintraege ins Log geschrieben (z.B. Punkt-Koordinaten, VLA-Aufrufe, Layer-Entscheidungen).
+
+## Context-Namespace
+
+Prefix: `SetHK:` (SetHoehenkote)
+
+### Wichtige Funktionen
+
+| Funktion | Beschreibung |
+|----------|--------------|
+| SetHK:ensure-init | Lazy-Init (VLA + BlockImport laden) |
+| SetHK:log-write | Log-Eintrag schreiben |
+| SetHK:load-config | Config laden |
+| SetHK:save-config | Config speichern |
+| SetHK:read-scale | Skalierung lesen (DWG → Config → 1.0) |
+| SetHK:read-dwg-scale | Skalierung aus DWG Custom Property |
+| SetHK:write-dwg-scale | Skalierung in DWG Custom Property |
+| SetHK:ensure-hk-layer | Layer mit Suffix erstellen/pruefen |
+| SetHK:insert-block | Block einfuegen mit Attributen |
+| SetHK:cancel-p | Cancel-Erkennung (DE+EN) |
+| SetHK:safe-variant-value | VLA String/Variant Handler |
+
+### Globale Variablen
+
+| Variable | Beschreibung |
+|----------|--------------|
+| *SetHK:version* | Script-Version |
+| *SetHK:initialized* | Init-Status (T/nil) |
+| *SetHK:debug-mode* | Debug ein/aus |
+| *SetHK:blockname* | Aktueller Block-Name |
+| *SetHK:layer-suffix* | Aktuelles Layer-Suffix |
+| *SetHK:use-layer-suffix* | Layer-Suffix aktiv (T/nil) |
+| *SetHK:last-height* | Zuletzt eingegebene Hoehe |
+| *SetHK:log-session-id* | Aktueller Log-Dateiname |
+
+## Vergleich
+
+| Feature | SetHK | HoeheAufLinie |
+|---------|-------|---------------|
+| Einzelpunkte setzen | Ja | Nein |
+| Interpolation | Nein | Ja |
+| Konstruktionslinie | Nein | Ja |
+| XY-Skalierung | Ja (pro DWG) | Ja |
+| Eigener Layer | Ja (konfigurierbar) | Nein |
+| Einstellungen-Dialog | Ja (DCL) | Nein |
+| BlockImport.lsp | Ja | Ja |
+| Log-Datei | Ja | Ja |
+
+**Wann was verwenden:**
+- **SetHK:** Einzelne Hoehenkoten an beliebigen Punkten setzen
+- **HoeheAufLinie:** Mehrere Punkte entlang einer Linie interpolieren
 
 ## Technische Details
 
 - **AutoCAD Version:** 2024+ (getestet mit 2024 Deutsch)
 - **AutoLISP:** Erforderlich
-- **Visual LISP:** vl-load-com wird verwendet
-- **AutoCAD LT:** ❌ Nicht kompatibel (kein AutoLISP Support)
-- **Abhängigkeiten:** BlockImport.lsp (v1.5.0+)
-
-### Funktionsweise
-
-**Block-Import:**
-- Nutzt `ensure-block-available` von BlockImport.lsp
-- Lädt Block automatisch aus konfigurierter DWG-Datei
-- Temporärer Import wird nach Verwendung wieder entfernt
-
-**Skalierung:**
-- Nur X und Y werden skaliert
-- Z bleibt immer 1.0
-- Persistente Speicherung über Sessions
-- Keyword-Option direkt am Punkt-Prompt
-
-**Höhen-Eingabe:**
-- Akzeptiert Dezimalzahlen
-- Fehlerbehandlung bei ungültigen Eingaben
-- Formatierung auf 2 Dezimalstellen für Anzeige
-
-## Workflow-Beispiele
-
-**Erstes Setup:**
-```
-Command: SetHK
-*** Keine Skalierung konfiguriert ***
-XY-Skalierung: 0.5
-✓ Gespeichert
-
-Punkt wählen: [Klick]
-Höhe: 100.0
-✓ Höhenkote gesetzt: +100.00 | Z=100.000 | XY-Scale=0.50
-```
-
-**Tägliche Nutzung:**
-```
-Command: SetHK
-Punkt wählen <0.5>: [Klick] [Klick] [Klick]
-Höhe: 101.5
-Höhe: 102.0  
-Höhe: 102.5
-✓ ✓ ✓
-```
-
-**Skalierung anpassen:**
-```
-Command: SetHK
-Punkt wählen <0.5>: S
-Neue Skalierung: 1.0
-Punkt wählen <1.0>: [Klick]
-```
-
-## Lizenz
-
-Nutzt BlockImport.lsp Library.
-
----
-
-**Version:** 1.5.0  
-**Datum:** 2026-02-13  
-**Autor:** Herbert Schrotter
+- **Visual LISP:** vl-load-com wird verwendet (Lazy-Init)
+- **AutoCAD LT:** Nicht kompatibel (kein AutoLISP Support)
+- **Abhaengigkeiten:** BlockImport.lsp (lib/)
+- **AppData:** %APPDATA%\AutoCAD\Lisp\SetHoehenkote\
+- **Namespace:** SetHK (SetHoehenkote)
+- **DWG Custom Property:** SetHK_Scale (Skalierung pro Zeichnung)
