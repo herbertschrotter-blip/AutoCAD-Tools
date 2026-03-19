@@ -12,16 +12,17 @@
 ;;; (load "lib/BlockImport.lsp")
 ;;; (ensure-block-available "BLK_Hoehenkote")
 ;;;
-;;; AppData: %APPDATA%\AutoCAD\BlockImport\
-;;;   - Log:    BlockImport_YYYYMMDD_HHMMSS.log (max 5 Sessions)
-;;;   - Config: BlockImportConfig.txt
+;;; AppData: %APPDATA%\AutoCAD\Lisp\BlockImport\
+;;;   - Log:    Log\BlockImport_YYYYMMDD_HHMMSS.log (max 5 Sessions)
+;;;   - Config: Config\BlockImportConfig.txt
+;;;   - Backup: Backup\
 ;;;
 ;;; Befehle:
 ;;; ManageBlockImport - Block-Verwaltung (DCL-Dialog)
 ;;; ShowBlockPath     - Zeigt konfigurierte Pfade
 ;;; ResetBlockPath    - Löscht alle Pfade
 ;;;
-;;; Version: 1.6.0
+;;; Version: 1.7.0
 ;;; Datum: 2026-03-19
 ;;; Autor: Herbert Schrotter
 
@@ -35,8 +36,9 @@
 )
 
 ;; Pfad zur Konfigurationsdatei (speichert alle Block-Dateipfade)
+;; Neuer Pfad: %APPDATA%\AutoCAD\Lisp\BlockImport\Config\BlockImportConfig.txt
 (if (not *block-config-file*)
-  (setq *block-config-file* (strcat (getenv "APPDATA") "/AutoCAD/BlockImportConfig.txt"))
+  (setq *block-config-file* nil)  ;; Wird in BLI:get-appdata-path gesetzt
 )
 
 ;;; ============================================================================
@@ -48,24 +50,42 @@
 (setq *BLI:log-session-id* nil)
 (setq *BLI:debug-mode* nil)
 
-;;; Gibt den AppData-Ordner zurück, erstellt ihn falls nicht vorhanden
-;;; Rückgabe: Pfad als String
+;;; Gibt den AppData-Basispfad zurück, erstellt Ordnerstruktur falls nicht vorhanden
+;;; Struktur: %APPDATA%\AutoCAD\Lisp\BlockImport\{Log,Config,Backup}
+;;; Rückgabe: Basispfad als String
 (defun BLI:get-appdata-path ( / base)
-  (setq base (strcat (getenv "APPDATA") "\\AutoCAD\\" *BLI:appdata-folder*))
+  (setq base (strcat (getenv "APPDATA") "\\AutoCAD\\Lisp\\" *BLI:appdata-folder*))
   (if (not (vl-file-directory-p base))
     (progn
       (vl-mkdir (strcat (getenv "APPDATA") "\\AutoCAD"))
+      (vl-mkdir (strcat (getenv "APPDATA") "\\AutoCAD\\Lisp"))
       (vl-mkdir base)
+      (vl-mkdir (strcat base "\\Log"))
+      (vl-mkdir (strcat base "\\Config"))
+      (vl-mkdir (strcat base "\\Backup"))
     )
+    ;; Basis existiert, Unterordner sicherstellen
+    (progn
+      (if (not (vl-file-directory-p (strcat base "\\Log")))
+        (vl-mkdir (strcat base "\\Log")))
+      (if (not (vl-file-directory-p (strcat base "\\Config")))
+        (vl-mkdir (strcat base "\\Config")))
+      (if (not (vl-file-directory-p (strcat base "\\Backup")))
+        (vl-mkdir (strcat base "\\Backup")))
+    )
+  )
+  ;; Config-Pfad setzen (einmalig)
+  (if (not *block-config-file*)
+    (setq *block-config-file* (strcat base "\\Config\\BlockImportConfig.txt"))
   )
   base
 )
 
 ;;; Löscht alte Logs, behält nur die 5 neuesten
 ;;; Wird beim ersten log-write der Session aufgerufen
-(defun BLI:log-rotate ( / appdata files sorted-files delete-count i)
-  (setq appdata (BLI:get-appdata-path))
-  (setq files (vl-directory-files appdata (strcat *BLI:appdata-folder* "_*.log") 1))
+(defun BLI:log-rotate ( / logdir files sorted-files delete-count i)
+  (setq logdir (strcat (BLI:get-appdata-path) "\\Log"))
+  (setq files (vl-directory-files logdir (strcat *BLI:appdata-folder* "_*.log") 1))
   (if files
     (progn
       (setq sorted-files (vl-sort files '<))
@@ -75,7 +95,7 @@
         (progn
           (setq i 0)
           (repeat delete-count
-            (vl-file-delete (strcat appdata "\\" (nth i sorted-files)))
+            (vl-file-delete (strcat logdir "\\" (nth i sorted-files)))
             (setq i (1+ i))
           )
         )
@@ -87,7 +107,7 @@
 ;;; Schreibt eine Zeile ins Session-Log
 ;;; level: "INFO", "WARN", "ERROR", "DEBUG"
 ;;; message: Beliebiger String
-(defun BLI:log-write (level message / appdata log-path fp timestamp)
+(defun BLI:log-write (level message / logdir log-path fp timestamp)
   ;; Debug nur wenn aktiviert
   (if (or (/= level "DEBUG") *BLI:debug-mode*)
     (progn
@@ -103,8 +123,8 @@
         )
       )
 
-      (setq appdata (BLI:get-appdata-path))
-      (setq log-path (strcat appdata "\\" *BLI:log-session-id* ".log"))
+      (setq logdir (strcat (BLI:get-appdata-path) "\\Log"))
+      (setq log-path (strcat logdir "\\" *BLI:log-session-id* ".log"))
       (setq timestamp (menucmd "M=$(edtime,0,YYYY-MO-DD HH:MM:SS)"))
 
       (setq fp (open log-path "a"))
@@ -130,6 +150,9 @@
 ;;; Rückgabe: Association-Liste ((blockname . filepath) ...) oder nil
 (defun read-all-block-paths ( / file line pos key value result version context-prefix)
   (setq result '())
+
+  ;; AppData-Pfad sicherstellen (setzt *block-config-file*)
+  (BLI:get-appdata-path)
 
   ;; Context-Präfix bestimmen (falls gesetzt)
   (setq context-prefix
@@ -200,6 +223,9 @@
 ;;; Berücksichtigt Context (*block-import-context*)
 ;;; Rückgabe: Blockname (String) oder nil
 (defun get-standard-block ( / file line pos key value version standard-key found)
+  ;; AppData-Pfad sicherstellen (setzt *block-config-file*)
+  (BLI:get-appdata-path)
+
   ;; Standard-Key bestimmen (mit oder ohne Context)
   (setq standard-key
     (if *block-import-context*
@@ -269,6 +295,9 @@
 ;;; Parameter: blockname - Name des Blocks, filepath - Pfad zur Block-Datei
 ;;; Rückgabe: T bei Erfolg, nil bei Fehler
 (defun save-block-path (blockname filepath / file dir all-paths updated key-with-context line pos key value version)
+  ;; AppData-Pfad sicherstellen (setzt *block-config-file*)
+  (BLI:get-appdata-path)
+
   ;; Erstelle Verzeichnis falls nicht vorhanden
   (setq dir (vl-filename-directory *block-config-file*))
   (if (not (vl-file-directory-p dir))
@@ -782,6 +811,9 @@
 
 ;;; Entfernt Block aus Config
 (defun remove-block ( / all-paths block-list choice selected-block new-paths file dir standard-block was-standard remaining-blocks line pos key value version context-prefix selected-block-with-context counter)
+  ;; AppData-Pfad sicherstellen (setzt *block-config-file*)
+  (BLI:get-appdata-path)
+
   ;; Lese ALLE Pfade UNGEFILTERT (wie in save-block-path)
   (setq all-paths '())
   (if (findfile *block-config-file*)
@@ -1100,6 +1132,9 @@
 ;;; Löscht gespeicherten Block-Pfad
 ;;; Kann als Befehl verwendet werden: (defun c:ResetBlockPath () (reset-block-path))
 (defun reset-block-path ( / )
+  ;; AppData-Pfad sicherstellen (setzt *block-config-file*)
+  (BLI:get-appdata-path)
+
   (if (findfile *block-config-file*)
     (progn
       (vl-file-delete *block-config-file*)
@@ -1151,8 +1186,8 @@
 (vl-load-com)
 
 ;; Lade-Meldung
-(BLI:log-write "INFO" "=== BlockImport.lsp v1.6.0 geladen ===")
-(princ "\nBlockImport.lsp v1.6.0 geladen.")
+(BLI:log-write "INFO" "=== BlockImport.lsp v1.7.0 geladen ===")
+(princ "\nBlockImport.lsp v1.7.0 geladen.")
 (princ "\nBefehle: ManageBlockImport - Block-Verwaltung")
 (princ "\n         ShowBlockPath - Zeigt konfigurierte Pfade")
 (princ "\n         ResetBlockPath - Löscht alle Pfade")
