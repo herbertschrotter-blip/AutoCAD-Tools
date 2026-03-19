@@ -13,284 +13,305 @@
 ;;; - Beliebig viele Zwischenpunkte setzen mit automatisch interpolierter Hoehe
 ;;; - ESC zum Beenden
 ;;;
-;;; Version: 2.0.0
+;;; Version: 2.1.0
 ;;; Datum: 2026-03-19
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAL (HoeheAufLinie)
+;;;
+;;; AppData: %APPDATA%\AutoCAD\Lisp\HoeheAufLinie\
+;;;   - Log\    HoeheAufLinie_YYYYMMDD_HHMMSS.log (max 5 Sessions)
+;;;   - Config\ HoeheAufLinie.cfg
+;;;
+;;; Befehle:
+;;; HoeheAufLinie (HAL) - Hoeheninterpolation
+;;; HALDEBUG            - Debug ein/aus
 
 ;;; ============================================================================
-;;; DEBUG-SYSTEM MIT CRASH-SAFE LOG-DATEI
+;;; KONSTANTEN (Top-Level erlaubt)
 ;;; ============================================================================
 
-;; Debug-Modus: T = ein, nil = aus
+(setq *HAL:version* "2.1.0")
+(setq *HAL:appdata-folder* "HoeheAufLinie")
+(setq *HAL:blockname* "BLK_Hoehenkote")
+
+;;; ============================================================================
+;;; GLOBALE VARIABLEN (Top-Level erlaubt)
+;;; ============================================================================
+
 (if (not (boundp '*HAL:debug-mode*))
   (setq *HAL:debug-mode* nil)
 )
-
-;; Log-Datei Pfad: %APPDATA%/AutoCAD/log/ (neben den Config-Dateien)
-(setq *HAL:log-dir*
-  (strcat (getenv "APPDATA") "/AutoCAD/log")
-)
-
-;; Ordner erstellen falls nicht vorhanden
-(if (not (vl-file-directory-p *HAL:log-dir*))
-  (vl-mkdir *HAL:log-dir*)
-)
-
-(setq *HAL:log-path* (strcat *HAL:log-dir* "/HoeheAufLinie_debug.log"))
-
-;;; Schreibt eine Zeile in die Log-Datei (open-append-write-close pro Zeile)
-;;; Crash-safe: Jede Zeile wird sofort auf die Platte geschrieben
-(defun HAL:log-write (text / file)
-  (if (setq file (open *HAL:log-path* "a"))
-    (progn
-      (write-line text file)
-      (close file)
-    )
-  )
-)
-
-;;; Erstellt neue Log-Datei mit Header (ueberschreibt vorherige Sitzung)
-(defun HAL:log-start ( / file)
-  (if (setq file (open *HAL:log-path* "w"))
-    (progn
-      (write-line "=== HoeheAufLinie Debug Log ===" file)
-      (write-line (strcat "Datum: " (menucmd "M=$(edtime,0,DD.MO.YYYY HH:MM:SS)")) file)
-      (write-line (strcat "Zeichnung: " (getvar "DWGNAME")) file)
-      (write-line "===============================" file)
-      (write-line "" file)
-      (close file)
-    )
-    (princ (strcat "\n*** Fehler: Log-Datei kann nicht erstellt werden: " *HAL:log-path* " ***"))
-  )
-)
-
-;;; Debug-Ausgabe: Log-Datei IMMER, Command-Line nur wenn *HAL:debug-mode* = T
-(defun HAL:debug (msg / line)
-  (setq line (strcat "[DEBUG] " msg))
-  ;; Log-Datei: IMMER schreiben (crash-safe)
-  (HAL:log-write line)
-  ;; Command-Line: nur bei aktivem Debug
-  (if *HAL:debug-mode*
-    (princ (strcat "\n  " line))
-  )
-)
+(setq *HAL:initialized* nil)
+(setq *HAL:last-height* nil)
+(setq *HAL:log-session-id* nil)
 
 ;;; ============================================================================
-;;; BIBLIOTHEKEN LADEN
+;;; APPDATA & LOGGING (frueh definieren!)
 ;;; ============================================================================
 
-;; Config-Datei fuer BlockImport.lsp Pfad
-(setq *HAL:config-file* 
-  (if (getenv "APPDATA")
-    (strcat (getenv "APPDATA") "/AutoCAD/HoeheAufLinieConfig.txt")
-    "C:/Temp/HoeheAufLinieConfig.txt"
-  )
-)
-
-;;; Liest gespeicherten BlockImport.lsp Pfad aus Config
-(defun HAL:read-blockimport-path ( / file path version)
-  (setq path nil)
-  
-  ;; Pruefe ob Config-Datei existiert
-  (if (not (findfile *HAL:config-file*))
-    nil  ;; Datei existiert nicht
-    ;; Versuche Datei zu oeffnen mit Error-Handling
-    (if (vl-catch-all-error-p
-          (setq file (vl-catch-all-apply 'open (list *HAL:config-file* "r"))))
-      (progn
-        (princ (strcat "\n*** Fehler beim Oeffnen der Config-Datei: " *HAL:config-file* " ***"))
-        nil
-      )
-      (progn
-        ;; Erste Zeile: Version
-        (setq version (read-line file))
-        ;; Zweite Zeile: Pfad
-        (setq path (read-line file))
-        (close file)
-        path
-      )
-    )
-  )
-)
-
-;;; Speichert BlockImport.lsp Pfad in Config
-(defun HAL:save-blockimport-path (filepath / file dir)
-  ;; Erstelle Verzeichnis falls nicht vorhanden
-  (setq dir (vl-filename-directory *HAL:config-file*))
-  (if (not (vl-file-directory-p dir))
-    (if (vl-catch-all-error-p (vl-catch-all-apply 'vl-mkdir (list dir)))
-      (progn
-        (princ (strcat "\n*** Fehler beim Erstellen des Config-Verzeichnis: " dir " ***"))
-        nil
-      )
-      ;; Verzeichnis erfolgreich erstellt
-      T
-    )
-  )
-  
-  ;; Speichere Pfad mit Error-Handling
-  (if (vl-catch-all-error-p
-        (setq file (vl-catch-all-apply 'open (list *HAL:config-file* "w"))))
+;;; Gibt den AppData-Ordner fuer dieses Script zurueck
+;;; Erstellt den Ordner (inkl. Parents) falls nicht vorhanden
+(defun HAL:get-appdata-path ( / base parent)
+  (setq parent (strcat (getenv "APPDATA") "\\AutoCAD\\Lisp"))
+  (setq base (strcat parent "\\" *HAL:appdata-folder*))
+  (if (not (vl-file-directory-p base))
     (progn
-      (princ (strcat "\n*** Fehler beim Schreiben der Config-Datei: " *HAL:config-file* " ***"))
-      nil
-    )
-    (progn
-      (write-line "1.0" file)
-      (write-line filepath file)
-      (close file)
-      T
-    )
-  )
-)
-
-;; Lade gemeinsame Block-Import Bibliothek
-;; Intelligente Pfad-Suche mit mehreren Fallbacks
-
-;; Versuche gespeicherten Pfad zu laden
-(setq *HAL:blockimport-path* (HAL:read-blockimport-path))
-
-;; Wenn gespeicherter Pfad existiert, pruefe ob Datei noch da ist
-(if (and *HAL:blockimport-path* (not (findfile *HAL:blockimport-path*)))
-  (setq *HAL:blockimport-path* nil)  ;; Pfad ungueltig
-)
-
-;; Wenn kein gueltiger Pfad: Suche in Standard-Orten
-(if (null *HAL:blockimport-path*)
-  (setq *HAL:blockimport-path*
-    (cond
-      ;; 1. Versuch: lib/ Unterordner im Support-Ordner
-      ((findfile "lib/BlockImport.lsp"))
-      
-      ;; 2. Versuch: Direkt im Support-Ordner
-      ((findfile "BlockImport.lsp"))
-    )
-  )
-)
-
-;; Wenn immer noch nicht gefunden: Bitte User um Auswahl
-(if (null *HAL:blockimport-path*)
-  (progn
-    (princ "\n*** BlockImport.lsp wird nicht im Support-Pfad gefunden ***")
-    (princ "\nBitte waehlen Sie die Datei lib/BlockImport.lsp aus...")
-    
-    ;; Oeffne File-Dialog
-    (if (setq *HAL:blockimport-path* 
-          (getfiled "BlockImport.lsp auswaehlen" 
-                    ;; Start-Ordner: Zeichnungs-Verzeichnis oder User-Profile
-                    (cond
-                      ((getvar "DWGPREFIX"))
-                      ((getenv "USERPROFILE"))
-                      (T "")
-                    )
-                    "lsp" 
-                    0))
-      (progn
-        (princ (strcat "\nGewaehlte Datei: " *HAL:blockimport-path*))
-        ;; Speichere Pfad fuer naechstes Mal
-        (HAL:save-blockimport-path *HAL:blockimport-path*)
-        (princ "\nPfad wurde gespeichert fuer zukuenftige Sitzungen.")
+      (if (not (vl-file-directory-p (strcat (getenv "APPDATA") "\\AutoCAD")))
+        (vl-mkdir (strcat (getenv "APPDATA") "\\AutoCAD"))
       )
-      (progn
-        (alert "FEHLER: Keine Datei ausgewaehlt!")
-        (exit)
+      (if (not (vl-file-directory-p parent))
+        (vl-mkdir parent)
       )
+      (vl-mkdir base)
     )
   )
+  base
 )
 
-;; Lade Bibliothek
-(if *HAL:blockimport-path*
-  (progn
-    (load *HAL:blockimport-path*)
-    (princ (strcat "\n  Bibliothek geladen: " *HAL:blockimport-path*))
+;;; Stellt sicher dass der Log-Unterordner existiert
+(defun HAL:ensure-log-dir ( / appdata log-dir)
+  (setq appdata (HAL:get-appdata-path))
+  (setq log-dir (strcat appdata "\\Log"))
+  (if (not (vl-file-directory-p log-dir))
+    (vl-mkdir log-dir)
   )
+  log-dir
 )
 
-;;; ============================================================================
-;;; KONFIGURATION
-;;; ============================================================================
-
-;; Block-Import Context fuer dieses Script (NACH dem Laden setzen!)
-(setq *HAL:block-import-context* "HoeheAufLinie")
-(setq *block-import-context* *HAL:block-import-context*)
-
-;; Name des Hoehenkoten-Blocks
-(setq *HAL:blockname* "BLK_Hoehenkote")
-
-;; Config-Datei fuer XY-Skalierung
-(setq *HAL:scale-config-file* 
-  (if (getenv "APPDATA")
-    (strcat (getenv "APPDATA") "/AutoCAD/HoeheAufLinieScale.txt")
-    "C:/Temp/HoeheAufLinieScale.txt"
-  )
-)
-
-;;; Liest gespeicherte XY-Skalierung aus Config
-(defun HAL:read-scale-config ( / file scale version)
-  (setq scale nil)
-  
-  (if (not (findfile *HAL:scale-config-file*))
+;;; Schreibt eine Zeile ins Session-Log
+;;; level: "INFO", "WARN", "ERROR", "DEBUG"
+;;; message: Beliebiger String
+(defun HAL:log-write (level message / log-dir log-path fp timestamp)
+  ;; Debug nur wenn aktiviert
+  (if (and (= level "DEBUG") (not *HAL:debug-mode*))
     nil
-    (if (vl-catch-all-error-p
-          (setq file (vl-catch-all-apply 'open (list *HAL:scale-config-file* "r"))))
-      nil
-      (progn
-        (setq version (read-line file))
-        (setq scale (read-line file))
-        (close file)
-        (if scale
-          (atof scale)
-          nil
+    (progn
+      ;; Session-Log-Pfad ermitteln (einmal pro Session)
+      (if (not *HAL:log-session-id*)
+        (progn
+          (setq *HAL:log-session-id*
+            (strcat *HAL:appdata-folder* "_"
+              (menucmd "M=$(edtime,0,YYYYMMDD_HHMMSS)")
+            )
+          )
+          ;; Log-Rotation beim ersten Schreiben
+          (HAL:log-rotate)
+        )
+      )
+      
+      (setq log-dir (HAL:ensure-log-dir))
+      (setq log-path (strcat log-dir "\\" *HAL:log-session-id* ".log"))
+      
+      ;; Timestamp erzeugen
+      (setq timestamp (menucmd "M=$(edtime,0,YYYY-MO-DD HH:MM:SS)"))
+      
+      ;; Schreiben (open-append-close = crash-safe)
+      (setq fp (open log-path "a"))
+      (if fp
+        (progn
+          (write-line 
+            (strcat "[" timestamp "] [" 
+              (substr (strcat level "     ") 1 5)
+              "] " message)
+            fp)
+          (close fp)
         )
       )
     )
   )
 )
 
-;;; Speichert XY-Skalierung in Config
-(defun HAL:save-scale-config (scale-value / file dir)
-  (setq dir (vl-filename-directory *HAL:scale-config-file*))
-  (if (not (vl-file-directory-p dir))
-    (vl-catch-all-apply 'vl-mkdir (list dir))
-  )
+;;; Log-Rotation: Nur die letzten 5 Session-Logs behalten
+(defun HAL:log-rotate ( / log-dir pattern files sorted-files delete-count i)
+  (setq log-dir (HAL:ensure-log-dir))
+  (setq pattern (strcat *HAL:appdata-folder* "_*.log"))
   
-  (if (vl-catch-all-error-p
-        (setq file (vl-catch-all-apply 'open (list *HAL:scale-config-file* "w"))))
-    nil
+  (setq files (vl-directory-files log-dir pattern 1))
+  
+  (if files
     (progn
-      (write-line "1.0" file)
-      (write-line (rtos scale-value 2 6) file)
-      (close file)
+      (setq sorted-files (vl-sort files '<))
+      (setq delete-count (- (length sorted-files) 4))
+      (if (> delete-count 0)
+        (progn
+          (setq i 0)
+          (repeat delete-count
+            (vl-file-delete (strcat log-dir "\\" (nth i sorted-files)))
+            (setq i (1+ i))
+          )
+        )
+      )
+    )
+  )
+)
+
+;;; Debug-Ausgabe: Log IMMER, Command-Line nur wenn *HAL:debug-mode* = T
+(defun HAL:debug (msg / )
+  (HAL:log-write "DEBUG" msg)
+  (if *HAL:debug-mode*
+    (princ (strcat "\n  [DEBUG] " msg))
+  )
+)
+
+;;; ============================================================================
+;;; CONFIG-MANAGEMENT
+;;; ============================================================================
+
+;;; Laedt Config-Datei
+(defun HAL:load-config ( / appdata cfg-path fp line)
+  (setq appdata (HAL:get-appdata-path))
+  (setq cfg-path (strcat appdata "\\Config\\" *HAL:appdata-folder* ".cfg"))
+  
+  (if (findfile cfg-path)
+    (progn
+      (setq fp (open cfg-path "r"))
+      (if fp
+        (progn
+          (while (setq line (read-line fp))
+            (cond
+              ((and (> (strlen line) 16) (= (substr line 1 16) "BLOCKIMPORTPATH="))
+               (setq *HAL:blockimport-path* (substr line 17))
+               (if (= *HAL:blockimport-path* "") (setq *HAL:blockimport-path* nil))
+              )
+              ((and (> (strlen line) 6) (= (substr line 1 6) "DEBUG="))
+               (setq *HAL:debug-mode* (= (substr line 7) "1"))
+              )
+            )
+          )
+          (close fp)
+          (HAL:log-write "INFO" (strcat "Config geladen: " cfg-path))
+        )
+      )
+    )
+    (HAL:log-write "WARN" "Keine Config gefunden, verwende Defaults")
+  )
+)
+
+;;; Speichert Config-Datei (alle Settings in einer Datei)
+(defun HAL:save-config ( / appdata cfg-dir cfg-path fp)
+  (setq appdata (HAL:get-appdata-path))
+  (setq cfg-dir (strcat appdata "\\Config"))
+  (if (not (vl-file-directory-p cfg-dir))
+    (vl-mkdir cfg-dir)
+  )
+  (setq cfg-path (strcat cfg-dir "\\" *HAL:appdata-folder* ".cfg"))
+  
+  (setq fp (open cfg-path "w"))
+  (if fp
+    (progn
+      (write-line (strcat "VERSION=" *HAL:version*) fp)
+      (write-line (strcat "BLOCKIMPORTPATH=" (if (boundp '*HAL:blockimport-path*) (if *HAL:blockimport-path* *HAL:blockimport-path* "") "")) fp)
+      (write-line (strcat "DEBUG=" (if *HAL:debug-mode* "1" "0")) fp)
+      (close fp)
+      (HAL:log-write "INFO" (strcat "Config gespeichert: " cfg-path))
       T
+    )
+    (progn
+      (HAL:log-write "ERROR" (strcat "Config schreiben fehlgeschlagen: " cfg-path))
+      nil
     )
   )
 )
 
 ;;; ============================================================================
-;;; GLOBALE VARIABLEN
+;;; BIBLIOTHEK LADEN (wird von ensure-init aufgerufen)
 ;;; ============================================================================
 
-;; Speichert die zuletzt eingegebene Hoehe fuer Default-Vorschlag
-;; Wird ueber Sessions hinweg NICHT gespeichert (nur im RAM)
-(setq *HAL:last-height* nil)
+;;; Laedt BlockImport.lsp mit 3-Fallback Pfadsuche + File-Dialog
+(defun HAL:load-library ( / path)
+  ;; 1. Aus Config
+  (setq path (if (boundp '*HAL:blockimport-path*) *HAL:blockimport-path* nil))
+  
+  ;; Pruefe ob gespeicherter Pfad noch gueltig ist
+  (if (and path (not (findfile path)))
+    (setq path nil)
+  )
+  
+  ;; 2. Fallback: Standard-Orte
+  (if (null path)
+    (setq path
+      (cond
+        ((findfile "lib/BlockImport.lsp"))
+        ((findfile "BlockImport.lsp"))
+      )
+    )
+  )
+  
+  ;; 3. Fallback: File-Dialog
+  (if (null path)
+    (progn
+      (princ "\n*** BlockImport.lsp wird nicht im Support-Pfad gefunden ***")
+      (princ "\nBitte waehlen Sie die Datei lib/BlockImport.lsp aus...")
+      (setq path 
+        (getfiled "BlockImport.lsp auswaehlen" 
+                  (cond
+                    ((getvar "DWGPREFIX"))
+                    ((getenv "USERPROFILE"))
+                    (T "")
+                  )
+                  "lsp" 
+                  0))
+      (if (null path)
+        (progn
+          (HAL:log-write "ERROR" "BlockImport.lsp: User hat Auswahl abgebrochen")
+          (alert "FEHLER: Keine Datei ausgewaehlt!")
+          (exit)
+        )
+      )
+    )
+  )
+  
+  ;; Laden
+  (if path
+    (progn
+      (load path)
+      (setq *HAL:blockimport-path* path)
+      (HAL:save-config)
+      (HAL:log-write "INFO" (strcat "Library geladen: " path))
+      T
+    )
+    nil
+  )
+)
+
+;;; ============================================================================
+;;; LAZY-INIT (wird beim ersten Befehl aufgerufen)
+;;; ============================================================================
+
+(defun HAL:ensure-init ( / )
+  (if (not *HAL:initialized*)
+    (progn
+      ;; VLA laden
+      (vl-load-com)
+      
+      ;; Config laden (BlockImport-Pfad, Debug-Modus)
+      (HAL:load-config)
+      
+      ;; Library laden
+      (HAL:load-library)
+      
+      ;; Block-Import Context setzen
+      (setq *block-import-context* "HoeheAufLinie")
+      
+      ;; Fertig
+      (setq *HAL:initialized* T)
+      (HAL:log-write "INFO" (strcat "=== HoeheAufLinie v" *HAL:version* " initialisiert ==="))
+    )
+  )
+)
 
 ;;; ============================================================================
 ;;; HILFSFUNKTIONEN - FORMATIERUNG
 ;;; ============================================================================
 
-;;; Konvertiert Hoehe in String mit genau 2 Dezimalstellen
 (defun HAL:ensure-two-decimals (heightValue)
   (rtos heightValue 2 2)
 )
 
-;;; Formatiert Hoehenwert fuer Anzeige (mit 2 Dezimalstellen)
 (defun HAL:format-height (heightValue)
   (rtos heightValue 2 2)
 )
 
-;;; Formatiert Hoehenwert mit Vorzeichen (+ oder %%p fuer +/-0)
 (defun HAL:format-height-value (heightValue / formattedHeight)
   (setq formattedHeight (HAL:ensure-two-decimals heightValue))
   (cond
@@ -305,36 +326,19 @@
 ;;; ============================================================================
 
 ;;; Prueft ob Block bereits nahe dieser Position+Hoehe existiert
-;;; Verwendet distance-Funktion statt einzelner Koordinaten-Checks
 ;;; WICHTIG: Transformiert BKS->WKS fuer korrekten Vergleich!
-;;; 
-;;; Parameter:
-;;;   pt - Punkt (Liste x y z) in BKS-Koordinaten
-;;;   height - Hoehe (Zahl)
-;;;   blockname - Block-Name (String)
-;;; 
-;;; Rueckgabe:
-;;;   T wenn Block existiert, nil sonst
-;;; 
-;;; Toleranzen:
-;;;   XY-Ebene: 0.05 Einheiten (5cm) - faengt auch Attribut-Klicks
-;;;   Z-Hoehe: 0.001 Einheiten (1mm) - praezise Hoehenpruefung
 (defun HAL:block-exists-at-position (pt height blockname / ss i ent inspt pt-wcs tolerance-xy tolerance-z dist-xy dist-z found)
-  (setq tolerance-xy 0.05)   ; 5cm Toleranz fuer XY (OSNAP kann Attribut fangen)
-  (setq tolerance-z 0.001)   ; 1mm Toleranz fuer Z (praezise Hoehe)
+  (setq tolerance-xy 0.05)
+  (setq tolerance-z 0.001)
   (setq found nil)
   
-  ;; KRITISCH: Transformiere Punkt von BKS zu WKS
-  ;; Block-Einfuegepunkte (DXF 10) sind IMMER in WKS!
-  ;; getpoint gibt BKS-Koordinaten zurueck!
-  (setq pt-wcs (trans pt 1 0))  ; 1=UCS(BKS), 0=WCS
+  (setq pt-wcs (trans pt 1 0))
   
   (HAL:debug (strcat "HAL:block-exists-at-position: blockname=" blockname))
   (HAL:debug (strcat "  pt(BKS)=(" (rtos (car pt) 2 4) " " (rtos (cadr pt) 2 4) " " (rtos (caddr pt) 2 4) ")"))
   (HAL:debug (strcat "  pt(WKS)=(" (rtos (car pt-wcs) 2 4) " " (rtos (cadr pt-wcs) 2 4) " " (rtos (caddr pt-wcs) 2 4) ")"))
   (HAL:debug (strcat "  height=" (rtos height 2 4)))
   
-  ;; Suche alle Bloecke mit diesem Namen
   (setq ss (ssget "_X" (list (cons 0 "INSERT") (cons 2 blockname))))
   
   (if ss
@@ -345,18 +349,14 @@
         (setq ent (ssname ss i))
         (setq inspt (cdr (assoc 10 (entget ent))))
         
-        ;; Berechne XY-Abstand mit distance (2D) - WKS zu WKS!
         (setq dist-xy (distance (list (car pt-wcs) (cadr pt-wcs)) 
                                 (list (car inspt) (cadr inspt))))
-        
-        ;; Berechne Z-Abstand
         (setq dist-z (abs (- height (caddr inspt))))
         
         (HAL:debug (strcat "  Block[" (itoa i) "] inspt=(" 
                            (rtos (car inspt) 2 4) " " (rtos (cadr inspt) 2 4) " " (rtos (caddr inspt) 2 4) 
                            ") dist-xy=" (rtos dist-xy 2 4) " dist-z=" (rtos dist-z 2 4)))
         
-        ;; Pruefe beide Abstaende
         (if (and (< dist-xy tolerance-xy)
                  (< dist-z tolerance-z))
           (progn
@@ -368,7 +368,6 @@
         (setq i (1+ i))
       )
       
-      ;; Selection Set freigeben
       (setq ss nil)
       
       (if (not found)
@@ -390,41 +389,22 @@
 
 ;;; Berechnet interpolierte Hoehe fuer Punkt auf Linie zwischen zwei Fixpunkten
 ;;; Verwendet Skalarprojektion - funktioniert auch fuer Punkte ausserhalb der Strecke
-;;; 
-;;; Parameter:
-;;;   pf1 - Fixpunkt 1 (Liste x y z)
-;;;   height1 - Hoehe bei Fixpunkt 1 (Zahl)
-;;;   pf2 - Fixpunkt 2 (Liste x y z)
-;;;   height2 - Hoehe bei Fixpunkt 2 (Zahl)
-;;;   pg - Gesuchter Punkt (Liste x y z)
-;;; 
-;;; Rueckgabe:
-;;;   Interpolierte Hoehe (Zahl)
-;;;   
-;;; Funktioniert fuer:
-;;;   - Punkte zwischen PF1 und PF2 (0 < scalar < 1)
-;;;   - Punkte links von PF1 (scalar < 0) -> Extrapolation
-;;;   - Punkte rechts von PF2 (scalar > 1) -> Extrapolation
 (defun HAL:calc-interpolated-height (pf1 height1 pf2 height2 pg / vpf vpg scalar dist-pf1-pf2 height-diff interpolated-height)
   (HAL:debug "=== HAL:calc-interpolated-height ===")
   (HAL:debug (strcat "  pf1=(" (rtos (car pf1) 2 4) " " (rtos (cadr pf1) 2 4) " " (rtos (caddr pf1) 2 4) ") h1=" (rtos height1 2 4)))
   (HAL:debug (strcat "  pf2=(" (rtos (car pf2) 2 4) " " (rtos (cadr pf2) 2 4) " " (rtos (caddr pf2) 2 4) ") h2=" (rtos height2 2 4)))
   (HAL:debug (strcat "  pg=(" (rtos (car pg) 2 4) " " (rtos (cadr pg) 2 4) " " (rtos (caddr pg) 2 4) ")"))
   
-  ;; Vektor von pf1 zu pf2 (nur XY-Ebene)
   (setq vpf (list (- (car pf2) (car pf1)) 
                   (- (cadr pf2) (cadr pf1))))
   
-  ;; Vektor von pf1 zu pg (nur XY-Ebene)
   (setq vpg (list (- (car pg) (car pf1)) 
                   (- (cadr pg) (cadr pf1))))
   
   (HAL:debug (strcat "  vpf=(" (rtos (car vpf) 2 4) " " (rtos (cadr vpf) 2 4) ")"))
   (HAL:debug (strcat "  vpg=(" (rtos (car vpg) 2 4) " " (rtos (cadr vpg) 2 4) ")"))
   
-  ;; 2D-Distanz PF1-PF2 (nur XY!) fuer Division-by-Zero Check
-  ;; WICHTIG: distance() rechnet 3D wenn Punkte Z-Werte haben!
-  ;; Wir brauchen NUR die XY-Distanz, daher aus vpf-Vektor berechnen
+  ;; 2D-Distanz aus vpf-Vektor (NICHT distance() - rechnet 3D!)
   (setq dist-pf1-pf2 (sqrt (+ (expt (car vpf) 2) (expt (cadr vpf) 2))))
   (HAL:debug (strcat "  dist-2D(pf1,pf2)=" (rtos dist-pf1-pf2 2 6)))
   
@@ -432,19 +412,14 @@
     (progn
       (HAL:debug "  *** WARNUNG: PF1 und PF2 zu nahe beieinander! Division by zero vermieden ***")
       (princ "\n*** WARNUNG: Fixpunkte haben gleiche XY-Position! ***")
-      height1  ; Fallback: Hoehe von PF1
+      height1
     )
     (progn
-      ;; Skalarprojektion: Wie weit liegt pg auf der Linie pf1-pf2?
-      ;; Scalar = 0.0 bei pf1, 1.0 bei pf2, <0 links von pf1, >1 rechts von pf2
       (setq scalar (/ (+ (* (car vpg) (car vpf)) 
                          (* (cadr vpg) (cadr vpf))) 
                       (expt dist-pf1-pf2 2)))
       
-      ;; Hoehendifferenz zwischen Fixpunkten
       (setq height-diff (- height2 height1))
-      
-      ;; Interpolierte Hoehe berechnen
       (setq interpolated-height (+ height1 (* scalar height-diff)))
       
       (HAL:debug (strcat "  scalar=" (rtos scalar 2 6)))
@@ -452,7 +427,7 @@
       (HAL:debug (strcat "  interpolated-height=" (rtos interpolated-height 2 4)))
       
       (if (or (< scalar -0.1) (> scalar 1.1))
-        (HAL:debug (strcat "  *** HINWEIS: Punkt liegt ausserhalb der Strecke (Extrapolation)! ***"))
+        (HAL:debug "  *** HINWEIS: Punkt liegt ausserhalb der Strecke (Extrapolation)! ***")
       )
       
       interpolated-height
@@ -465,17 +440,6 @@
 ;;; ============================================================================
 
 ;;; Berechnet den XY-Punkt auf der Linie PF1-PF2 fuer eine gegebene Zielhoehe
-;;; (Umgekehrte Interpolation: Hoehe -> Punkt statt Punkt -> Hoehe)
-;;;
-;;; Parameter:
-;;;   pf1 - Fixpunkt 1 (Liste x y z)
-;;;   height1 - Hoehe bei Fixpunkt 1 (Zahl)
-;;;   pf2 - Fixpunkt 2 (Liste x y z)
-;;;   height2 - Hoehe bei Fixpunkt 2 (Zahl)
-;;;   target-height - Gesuchte Hoehe (Zahl)
-;;;
-;;; Rueckgabe:
-;;;   XY-Punkt auf der Linie (Liste x y 0.0) oder nil bei Fehler
 (defun HAL:calc-point-for-height (pf1 height1 pf2 height2 target-height / height-diff scalar px py)
   (HAL:debug "=== HAL:calc-point-for-height ===")
   (HAL:debug (strcat "  target-height=" (rtos target-height 2 4)))
@@ -484,15 +448,12 @@
   
   (if (< (abs height-diff) 0.0001)
     (progn
-      (HAL:debug "  *** WARNUNG: Fixpunkte haben gleiche Hoehe! Keine Berechnung moeglich ***")
+      (HAL:debug "  *** WARNUNG: Fixpunkte haben gleiche Hoehe! ***")
       (princ "\n*** Fixpunkte haben gleiche Hoehe - Konstruktionslinie nicht moeglich ***")
       nil
     )
     (progn
-      ;; Scalar = (target - h1) / (h2 - h1)
       (setq scalar (/ (- target-height height1) height-diff))
-      
-      ;; XY-Punkt auf der Linie berechnen
       (setq px (+ (car pf1) (* scalar (- (car pf2) (car pf1)))))
       (setq py (+ (cadr pf1) (* scalar (- (cadr pf2) (cadr pf1)))))
       
@@ -508,29 +469,15 @@
   )
 )
 
-;;; Erzeugt eine XLINE (Konstruktionslinie) im rechten Winkel zur Linie PF1-PF2
-;;; durch einen gegebenen Punkt
-;;;
-;;; Parameter:
-;;;   base-pt - Durchgangspunkt (Liste x y z)
-;;;   pf1 - Fixpunkt 1 (fuer Richtungsberechnung)
-;;;   pf2 - Fixpunkt 2 (fuer Richtungsberechnung)
-;;;
-;;; Rueckgabe:
-;;;   Entity-Name der XLINE oder nil bei Fehler
+;;; Erzeugt eine XLINE im rechten Winkel zur Linie PF1-PF2
 (defun HAL:create-perp-xline (base-pt pf1 pf2 / dx dy perp-dx perp-dy len ent base-pt-wcs dir-bks dir-wcs)
   (HAL:debug "=== HAL:create-perp-xline ===")
   (HAL:debug (strcat "  base-pt(BKS)=(" (rtos (car base-pt) 2 4) " " (rtos (cadr base-pt) 2 4) ")"))
   
-  ;; Richtungsvektor PF1->PF2 (XY, in BKS)
   (setq dx (- (car pf2) (car pf1)))
   (setq dy (- (cadr pf2) (cadr pf1)))
-  
-  ;; Normalvektor (90 Grad gedreht): (-dy, dx)
   (setq perp-dx (- dy))
   (setq perp-dy dx)
-  
-  ;; Normieren auf Einheitsvektor
   (setq len (sqrt (+ (expt perp-dx 2) (expt perp-dy 2))))
   
   (if (< len 0.0001)
@@ -542,12 +489,8 @@
       (setq perp-dx (/ perp-dx len))
       (setq perp-dy (/ perp-dy len))
       
-      ;; KRITISCH: BKS -> WKS transformieren!
-      ;; entmakex DXF 10/11 erwarten WKS-Koordinaten!
+      ;; BKS -> WKS (entmakex erwartet WKS)
       (setq base-pt-wcs (trans (list (car base-pt) (cadr base-pt) 0.0) 1 0))
-      
-      ;; Richtungsvektor transformieren (als Vektor, nicht als Punkt!)
-      ;; trans mit 0->0 und T-Flag fuer Vektoren (displacement)
       (setq dir-bks (list perp-dx perp-dy 0.0))
       (setq dir-wcs (trans dir-bks 1 0 T))  ; T = displacement/Vektor
       
@@ -555,18 +498,16 @@
       (HAL:debug (strcat "  base-pt(WKS)=(" (rtos (car base-pt-wcs) 2 4) " " (rtos (cadr base-pt-wcs) 2 4) ")"))
       (HAL:debug (strcat "  dir(WKS)=(" (rtos (car dir-wcs) 2 6) " " (rtos (cadr dir-wcs) 2 6) ")"))
       
-      ;; XLINE erzeugen mit entmakex
-      ;; DXF 10 = Basispunkt (WKS), DXF 11 = Richtungsvektor (WKS)
       (setq ent (entmakex
         (list
           '(0 . "XLINE")
           '(100 . "AcDbEntity")
           '(67 . 0)
-          '(8 . "0")           ; Layer 0
-          '(62 . 1)            ; Farbe Rot (gut sichtbar)
+          '(8 . "0")
+          '(62 . 1)
           '(100 . "AcDbXline")
-          (cons 10 base-pt-wcs)    ; Basispunkt in WKS
-          (cons 11 dir-wcs)        ; Richtungsvektor in WKS
+          (cons 10 base-pt-wcs)
+          (cons 11 dir-wcs)
         )
       ))
       
@@ -598,23 +539,11 @@
 )
 
 ;;; Fragt Zielhoehe und erstellt/aktualisiert Konstruktionslinie
-;;; Loescht vorherige XLINE falls vorhanden
-;;; Verlaengert die gelbe Linie A-B falls Zielhoehe ausserhalb liegt
-;;;
-;;; Parameter:
-;;;   pf1, height1, pf2, height2 - Fixpunkte
-;;;   current-xline - Entity-Name der aktuellen XLINE (oder nil)
-;;;   line-ab - Entity-Name der gelben Linie A-B (oder nil)
-;;;
-;;; Rueckgabe:
-;;;   Liste (new-xline updated-line-ab) 
-(defun HAL:update-construction-line (pf1 height1 pf2 height2 current-xline line-ab / target-height base-pt new-xline prompt scalar ent-data)
-  ;; Vorherige XLINE loeschen
+(defun HAL:update-construction-line (pf1 height1 pf2 height2 current-xline line-ab / target-height base-pt new-xline prompt scalar)
   (if current-xline
     (HAL:delete-xline current-xline)
   )
   
-  ;; Zielhoehe abfragen
   (setq prompt "\nZielhoehe fuer Konstruktionslinie eingeben: ")
   (setq target-height (getreal prompt))
   
@@ -624,12 +553,10 @@
       (list nil line-ab)
     )
     (progn
-      ;; Punkt auf der Linie fuer diese Hoehe berechnen
       (setq base-pt (HAL:calc-point-for-height pf1 height1 pf2 height2 target-height))
       
       (if base-pt
         (progn
-          ;; XLINE im rechten Winkel erstellen
           (setq new-xline (HAL:create-perp-xline base-pt pf1 pf2))
           
           (if new-xline
@@ -637,32 +564,18 @@
                            " | Punkt=(" (rtos (car base-pt) 2 2) ", " (rtos (cadr base-pt) 2 2) ")"))
           )
           
-          ;; Gelbe Linie A-B verlaengern wenn Zielhoehe ausserhalb liegt
-          ;; Scalar: 0=bei A, 1=bei B, <0=vor A, >1=nach B
           (setq scalar (/ (- target-height height1) (- height2 height1)))
           (HAL:debug (strcat "  Konstruktions-Scalar=" (rtos scalar 2 6)))
           
           (if (and line-ab (or (< scalar 0.0) (> scalar 1.0)))
             (progn
               (HAL:debug "  Linie A-B wird verlaengert bis Konstruktionspunkt")
-              ;; Alte Linie loeschen
               (entdel line-ab)
-              ;; Neue Linie erstellen: 
-              ;; Wenn scalar < 0 -> Punkt liegt vor A -> Linie von base-pt bis B
-              ;; Wenn scalar > 1 -> Punkt liegt nach B -> Linie von A bis base-pt
               (setq line-ab (entmakex
                 (list
-                  '(0 . "LINE")
-                  '(100 . "AcDbEntity")
-                  '(8 . "0")
-                  '(62 . 2)       ; Farbe Gelb
-                  '(100 . "AcDbLine")
-                  (cons 10 (if (< scalar 0.0)
-                             (trans base-pt 1 0)     ; Start = Konstruktionspunkt
-                             (trans pf1 1 0)))        ; Start = A
-                  (cons 11 (if (> scalar 1.0)
-                             (trans base-pt 1 0)     ; Ende = Konstruktionspunkt
-                             (trans pf2 1 0)))        ; Ende = B
+                  '(0 . "LINE") '(100 . "AcDbEntity") '(8 . "0") '(62 . 2) '(100 . "AcDbLine")
+                  (cons 10 (if (< scalar 0.0) (trans base-pt 1 0) (trans pf1 1 0)))
+                  (cons 11 (if (> scalar 1.0) (trans base-pt 1 0) (trans pf2 1 0)))
                 )
               ))
               (if line-ab
@@ -670,17 +583,12 @@
                 (HAL:debug "  *** Linie A-B Verlaengerung fehlgeschlagen ***")
               )
             )
-            ;; Innerhalb A-B: Linie auf Original zuruecksetzen
             (if line-ab
               (progn
                 (entdel line-ab)
                 (setq line-ab (entmakex
                   (list
-                    '(0 . "LINE")
-                    '(100 . "AcDbEntity")
-                    '(8 . "0")
-                    '(62 . 2)
-                    '(100 . "AcDbLine")
+                    '(0 . "LINE") '(100 . "AcDbEntity") '(8 . "0") '(62 . 2) '(100 . "AcDbLine")
                     (cons 10 (trans pf1 1 0))
                     (cons 11 (trans pf2 1 0))
                   )
@@ -691,13 +599,16 @@
           
           (list new-xline line-ab)
         )
-        (list nil line-ab)  ; Berechnung fehlgeschlagen
+        (list nil line-ab)
       )
     )
   )
 )
 
-;;; Validiert ob Punkt gueltig ist
+;;; ============================================================================
+;;; HILFSFUNKTIONEN - VALIDIERUNG & EINGABE
+;;; ============================================================================
+
 (defun HAL:valid-point-p (pt)
   (HAL:debug (strcat "HAL:valid-point-p: pt=" (vl-princ-to-string pt)))
   (HAL:debug (strcat "  pt ist nil? " (if (null pt) "JA" "NEIN")))
@@ -727,13 +638,10 @@
        (numberp (caddr pt)))
 )
 
-;;; Validiert ob Hoehenwert gueltig ist
 (defun HAL:valid-height-p (height)
-  (and height
-       (numberp height))
+  (and height (numberp height))
 )
 
-;;; Holt Hoehenwert mit Validierung und Default
 (defun HAL:get-validated-height (prompt default / height)
   (if default
     (setq prompt (strcat prompt " <" (HAL:format-height default) ">: "))
@@ -744,14 +652,12 @@
   
   (HAL:debug (strcat "HAL:get-validated-height: height=" (if height (rtos height 2 4) "nil") " default=" (if default (rtos default 2 4) "nil")))
   
-  ;; Falls ENTER gedrueckt: Default verwenden
   (if (null height)
     (if default
       (progn
         (setq height default)
         (HAL:debug (strcat "  Verwende Default: " (rtos height 2 4)))
       )
-      ;; Kein Default: Nochmal fragen
       (progn
         (while (null height)
           (princ "\n*** Bitte geben Sie eine Hoehe ein ***")
@@ -761,17 +667,13 @@
     )
   )
   
-  ;; Validierung
-  (if (HAL:valid-height-p height)
-    height
-    nil
-  )
+  (if (HAL:valid-height-p height) height nil)
 )
 
-;;; Fragt Benutzer nach XY-Skalierung und speichert in Config
+;;; Fragt Benutzer nach XY-Skalierung
+;;; Skalierung wird in RAM gemerkt (Custom Property in DWG kommt spaeter)
 (defun HAL:get-scale ( / scaleValue prompt current-scale)
-  ;; Aktuelle Skalierung aus Config lesen
-  (setq current-scale (HAL:read-scale-config))
+  (setq current-scale (if (and (boundp '*HAL:current-scale*) *HAL:current-scale*) *HAL:current-scale* nil))
   
   (setq prompt (strcat "\nNeue XY-Skalierung" 
                        (if current-scale 
@@ -781,7 +683,6 @@
   
   (setq scaleValue (getreal prompt))
   
-  ;; Wenn ENTER gedrueckt
   (if (null scaleValue)
     (if current-scale
       (setq scaleValue current-scale)
@@ -789,7 +690,6 @@
     )
   )
   
-  ;; Validierung: Skalierung muss > 0 sein
   (if (<= scaleValue 0.0)
     (progn
       (princ "\n*** Skalierung muss groesser als 0 sein! Verwende 1.0 ***")
@@ -797,9 +697,9 @@
     )
   )
   
-  ;; Skalierung in Config speichern
-  (HAL:save-scale-config scaleValue)
-  (princ (strcat "\n Skalierung gespeichert: " (rtos scaleValue 2 2)))
+  (setq *HAL:current-scale* scaleValue)
+  (HAL:log-write "INFO" (strcat "Skalierung gesetzt: " (rtos scaleValue 2 2)))
+  (princ (strcat "\n Skalierung: " (rtos scaleValue 2 2)))
   
   scaleValue
 )
@@ -808,60 +708,41 @@
 ;;; HILFSFUNKTIONEN - BLOCK EINFUEGEN
 ;;; ============================================================================
 
-;;; Fuegt Hoehenkoten-Block an gegebenem Punkt mit Hoehe und Skalierung ein
-;;; Parameter:
-;;;   einfuegepunkt - XYZ Punkt (Liste)
-;;;   hoehe - Hoehenwert (Zahl)
-;;;   scale - XY-Skalierung (Zahl)
-;;;   skip-if-exists - T = Nicht einfuegen wenn Block schon existiert (fuer Fixpunkte)
-;;;                    nil = Immer einfuegen (fuer Zwischenpunkte)
 (defun HAL:insert-block (einfuegepunkt hoehe scale skip-if-exists / blockName heightStr old-attdia block-available importEnt ent attribs insertionPoint)
   (setq blockName *HAL:blockname*)
   
   (HAL:debug "=== HAL:insert-block ===")
   (HAL:debug (strcat "  einfuegepunkt=(" (rtos (car einfuegepunkt) 2 4) " " (rtos (cadr einfuegepunkt) 2 4) " " (rtos (caddr einfuegepunkt) 2 4) ")"))
-  (HAL:debug (strcat "  hoehe=" (rtos hoehe 2 4)))
-  (HAL:debug (strcat "  scale=" (rtos scale 2 4)))
-  (HAL:debug (strcat "  skip-if-exists=" (if skip-if-exists "T" "nil")))
-  (HAL:debug (strcat "  blockName=" blockName))
+  (HAL:debug (strcat "  hoehe=" (rtos hoehe 2 4) " scale=" (rtos scale 2 4) " skip=" (if skip-if-exists "T" "nil")))
   
-  ;; Parameter-Pruefung
   (if (and (HAL:valid-point-p einfuegepunkt) (HAL:valid-height-p hoehe) scale)
     (progn
-      (HAL:debug "  Parameter-Pruefung: OK")
-      
-      ;; NEU: Pruefe ob Block bereits existiert (nur wenn skip-if-exists = T)
       (if (and skip-if-exists (HAL:block-exists-at-position einfuegepunkt hoehe blockName))
         (progn
           (HAL:debug "  >>> Block existiert bereits - UEBERSPRUNGEN")
           (princ (strcat "\n  Block existiert bereits: " (HAL:format-height-value hoehe) " | Z=" (rtos hoehe 2 3)))
-          nil  ; Kein Block eingefuegt
+          nil
         )
         (progn
           (HAL:debug "  Block wird eingefuegt...")
           
-          ;; BESTEHENDER CODE: Block verfuegbar machen
           (setq block-available (ensure-block-available blockName))
-          (HAL:debug (strcat "  ensure-block-available Ergebnis: car=" (if (car block-available) "T" "nil")))
+          (HAL:debug (strcat "  ensure-block-available: car=" (if (car block-available) "T" "nil")))
           
           (if (car block-available)
             (progn
               (setq importEnt (cadr block-available))
               (HAL:debug (strcat "  importEnt=" (if importEnt (vl-princ-to-string importEnt) "nil")))
               
-              ;; Hoehe formatieren
               (setq heightStr (HAL:format-height-value hoehe))
               (HAL:debug (strcat "  heightStr=" heightStr))
               
-              ;; ATTDIA sichern
               (setq old-attdia (getvar "ATTDIA"))
               (setvar "ATTDIA" 0)
               
-              ;; Block einfuegen MIT XY-SKALIERUNG
               (HAL:debug (strcat "  _-insert: blockName=" blockName " scale=" (rtos scale 2 4)))
               (command "_-insert" blockName einfuegepunkt scale scale "" "")
               
-              ;; Pruefe ob command erfolgreich war
               (setq ent (entlast))
               (HAL:debug (strcat "  entlast nach insert: " (if ent (vl-princ-to-string ent) "nil")))
               
@@ -869,7 +750,6 @@
                 (HAL:debug (strcat "  entlast Typ: " (cdr (assoc 0 (entget ent)))))
               )
               
-              ;; ATTDIA wiederherstellen
               (setvar "ATTDIA" old-attdia)
               
               ;; Attribute setzen
@@ -913,11 +793,12 @@
                 )
               )
               
+              (HAL:log-write "INFO" (strcat "Block gesetzt: " heightStr " Z=" (rtos hoehe 2 3) " Scale=" (rtos scale 2 2)))
               (princ (strcat "\n  Hoehenkote gesetzt: " heightStr " | Z=" (rtos hoehe 2 3) " | XY-Scale=" (rtos scale 2 2)))
               T
             )
             (progn
-              (HAL:debug "  *** ensure-block-available FEHLGESCHLAGEN!")
+              (HAL:log-write "ERROR" "ensure-block-available fehlgeschlagen")
               (princ "\n*** FEHLER: Block konnte nicht geladen werden ***")
               nil
             )
@@ -943,35 +824,32 @@
 ;;; Hauptbefehl: Hoeheninterpolation entlang Linie
 (defun c:HoeheAufLinie ( / *error* old-cmdecho old-attdia pf1 height1 pf2 height2 pg interpolated-height scale current-xline line-ab result-list)
   
-  ;; Lokaler Error-Handler
+  ;; Lazy-Init: Erste Zeile in jedem c:Befehl!
+  (HAL:ensure-init)
+  
+  ;; Lokaler Error-Handler mit wcmatch Cancel-Detection (DE+EN)
   (defun *error* (msg)
-    (if (not (member msg '("Function cancelled" "quit / exit abort")))
+    (if (not (wcmatch (strcase msg) "*ABBRUCH*,*ABGEBROCHEN*,*CANCEL*,*QUIT*,*EXIT*"))
       (progn
         (princ (strcat "\nFehler: " msg))
-        (HAL:debug (strcat "*** ERROR: " msg " ***"))
+        (HAL:log-write "ERROR" (strcat "Error-Handler: " msg))
       )
-      (HAL:debug (strcat "Benutzer-Abbruch: " msg))
+      (HAL:log-write "INFO" (strcat "Benutzer-Abbruch: " msg))
     )
-    ;; Konstruktionslinien aufraeumen
     (if current-xline (HAL:delete-xline current-xline))
     (if line-ab (entdel line-ab))
-    ;; Systemvariablen wiederherstellen
     (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
     (if old-attdia (setvar "ATTDIA" old-attdia))
     (princ)
   )
   
-  ;; Systemvariablen sichern
+  ;; Systemvariablen sichern & setzen
   (setq old-cmdecho (getvar "CMDECHO"))
   (setq old-attdia (getvar "ATTDIA"))
+  (setvar "CMDECHO" 0)
+  (setvar "ATTDIA" 0)
   
-  ;; Systemvariablen setzen
-  (setvar "CMDECHO" 0)      ;; Command-Echo aus
-  (setvar "ATTDIA" 0)       ;; Attribut-Dialog aus
-  ;; OSMODE wird NICHT geaendert - User braucht Objektfang fuer praezise Punktwahl!
-  
-  ;; Log-Datei starten (IMMER, jede Sitzung ueberschreibt vorherige)
-  (HAL:log-start)
+  (HAL:log-write "INFO" "Befehl HoeheAufLinie gestartet")
   
   ;; Hauptprogramm
   (princ "\n=== Hoeheninterpolation entlang Linie ===")
@@ -979,30 +857,20 @@
   (princ "\nSetzen Sie zwei Fixpunkte mit bekannten Hoehen.")
   (princ "\nDann koennen Sie beliebig viele Zwischenpunkte setzen.")
   
-  ;; Skalierung laden oder initialisieren
-  (setq scale (HAL:read-scale-config))
-  (HAL:debug (strcat "Scale aus Config: " (if scale (rtos scale 2 4) "nil")))
+  ;; Skalierung aus Session oder Default
+  (setq scale (if (and (boundp '*HAL:current-scale*) *HAL:current-scale*) *HAL:current-scale* 1.0))
+  (HAL:debug (strcat "Scale: " (rtos scale 2 4)))
   
-  (if (null scale)
-    (progn
-      (princ "\n*** Keine Skalierung konfiguriert ***")
-      (setq scale (HAL:get-scale))
-    )
-  )
-  
-  ;; Fixpunkt 1 mit Skalierungs-Option
+  ;; Fixpunkt 1
   (princ "\n")
   (initget "Skalierung")
-  (setq pf1 (getpoint (strcat "\nFixpunkt 1 waehlen (oder Skalierung <" (rtos scale 2 2) ">): ")))
-  
+  (setq pf1 (getpoint (strcat "\nFixpunkt 1 waehlen [Skalierung] <" (rtos scale 2 2) ">: ")))
   (HAL:debug (strcat "pf1 raw=" (vl-princ-to-string pf1)))
   
-  ;; Pruefe ob Keyword "Skalierung" gewaehlt wurde
   (while (= pf1 "Skalierung")
     (setq scale (HAL:get-scale))
     (initget "Skalierung")
-    (setq pf1 (getpoint (strcat "\nFixpunkt 1 waehlen (oder Skalierung <" (rtos scale 2 2) ">): ")))
-    (HAL:debug (strcat "pf1 raw (nach Skalierung)=" (vl-princ-to-string pf1)))
+    (setq pf1 (getpoint (strcat "\nFixpunkt 1 waehlen [Skalierung] <" (rtos scale 2 2) ">: ")))
   )
   
   (if (not (HAL:valid-point-p pf1))
@@ -1011,31 +879,27 @@
       (princ "\n*** Abbruch: Kein gueltiger Punkt gewaehlt ***")
     )
     (progn
-      (HAL:debug (strcat "pf1 gueltig: (" (rtos (car pf1) 2 4) " " (rtos (cadr pf1) 2 4) " " (rtos (caddr pf1) 2 4) ")"))
+      (HAL:log-write "INFO" (strcat "Fixpunkt 1: (" (rtos (car pf1) 2 3) " " (rtos (cadr pf1) 2 3) ")"))
       
       (setq height1 (HAL:get-validated-height "\nHoehe Fixpunkt 1 eingeben" *HAL:last-height*))
       
       (if (not height1)
         (princ "\n*** Abbruch: Keine gueltige Hoehe eingegeben ***")
         (progn
-          (HAL:debug (strcat "height1=" (rtos height1 2 4)))
+          (HAL:log-write "INFO" (strcat "Hoehe 1: " (rtos height1 2 4)))
           (setq *HAL:last-height* height1)
-          ;; NEU: T = skip-if-exists fuer Fixpunkte
           (HAL:insert-block pf1 height1 scale T)
           
-          ;; Fixpunkt 2 mit Skalierungs-Option
+          ;; Fixpunkt 2
           (princ "\n")
           (initget "Skalierung")
-          (setq pf2 (getpoint (strcat "\nFixpunkt 2 waehlen (oder Skalierung <" (rtos scale 2 2) ">): ")))
-          
+          (setq pf2 (getpoint (strcat "\nFixpunkt 2 waehlen [Skalierung] <" (rtos scale 2 2) ">: ")))
           (HAL:debug (strcat "pf2 raw=" (vl-princ-to-string pf2)))
           
-          ;; Pruefe ob Keyword "Skalierung" gewaehlt wurde
           (while (= pf2 "Skalierung")
             (setq scale (HAL:get-scale))
             (initget "Skalierung")
-            (setq pf2 (getpoint (strcat "\nFixpunkt 2 waehlen (oder Skalierung <" (rtos scale 2 2) ">): ")))
-            (HAL:debug (strcat "pf2 raw (nach Skalierung)=" (vl-princ-to-string pf2)))
+            (setq pf2 (getpoint (strcat "\nFixpunkt 2 waehlen [Skalierung] <" (rtos scale 2 2) ">: ")))
           )
           
           (if (not (HAL:valid-point-p pf2))
@@ -1044,28 +908,23 @@
               (princ "\n*** Abbruch: Kein gueltiger Punkt gewaehlt ***")
             )
             (progn
-              (HAL:debug (strcat "pf2 gueltig: (" (rtos (car pf2) 2 4) " " (rtos (cadr pf2) 2 4) " " (rtos (caddr pf2) 2 4) ")"))
+              (HAL:log-write "INFO" (strcat "Fixpunkt 2: (" (rtos (car pf2) 2 3) " " (rtos (cadr pf2) 2 3) ")"))
               
               (setq height2 (HAL:get-validated-height "\nHoehe Fixpunkt 2 eingeben" *HAL:last-height*))
               
               (if (not height2)
                 (princ "\n*** Abbruch: Keine gueltige Hoehe eingegeben ***")
                 (progn
-                  (HAL:debug (strcat "height2=" (rtos height2 2 4)))
+                  (HAL:log-write "INFO" (strcat "Hoehe 2: " (rtos height2 2 4)))
                   (setq *HAL:last-height* height2)
-                  ;; NEU: T = skip-if-exists fuer Fixpunkte
                   (HAL:insert-block pf2 height2 scale T)
                   
-                  ;; Temporaere Linie A->B zeichnen (gelb, wird am Ende geloescht)
+                  ;; Temporaere Linie A->B (gelb)
                   (setq line-ab (entmakex
                     (list
-                      '(0 . "LINE")
-                      '(100 . "AcDbEntity")
-                      '(8 . "0")
-                      '(62 . 2)       ; Farbe Gelb
-                      '(100 . "AcDbLine")
-                      (cons 10 (trans pf1 1 0))   ; Startpunkt BKS->WKS
-                      (cons 11 (trans pf2 1 0))   ; Endpunkt BKS->WKS
+                      '(0 . "LINE") '(100 . "AcDbEntity") '(8 . "0") '(62 . 2) '(100 . "AcDbLine")
+                      (cons 10 (trans pf1 1 0))
+                      (cons 11 (trans pf2 1 0))
                     )
                   ))
                   (if line-ab
@@ -1073,7 +932,7 @@
                     (HAL:debug "*** Linie A-B Erstellung fehlgeschlagen ***")
                   )
                   
-                  ;; Schleife: Gesuchte Punkte mit Skalierungs- und Konstruktionslinien-Option
+                  ;; Zwischenpunkte-Schleife
                   (princ "\n")
                   (princ "\n--- Zwischenpunkte setzen (K=Konstruktionslinie, S=Skalierung, ESC=Ende) ---")
                   
@@ -1081,17 +940,14 @@
                   
                   (initget "Skalierung Konstruktion")
                   (setq pg (getpoint (strcat "\nPunkt waehlen [Skalierung/Konstruktion] <" (rtos scale 2 2) ">: ")))
-                  
                   (HAL:debug (strcat "pg raw=" (vl-princ-to-string pg)))
                   
                   (while pg
                     (cond
-                      ;; Keyword "Skalierung" gewaehlt
                       ((= pg "Skalierung")
                        (setq scale (HAL:get-scale))
                       )
                       
-                      ;; Keyword "Konstruktion" gewaehlt
                       ((= pg "Konstruktion")
                        (setq result-list 
                          (HAL:update-construction-line pf1 height1 pf2 height2 current-xline line-ab))
@@ -1099,19 +955,12 @@
                        (setq line-ab (cadr result-list))
                       )
                       
-                      ;; Normal: Punkt gewaehlt
                       (T
-                       (HAL:debug (strcat "--- Zwischenpunkt-Berechnung ---"))
-                       
                        (if (HAL:valid-point-p pg)
                          (progn
-                           (HAL:debug (strcat "pg gueltig: (" (rtos (car pg) 2 4) " " (rtos (cadr pg) 2 4) " " (rtos (caddr pg) 2 4) ")"))
-                           
                            (setq interpolated-height (HAL:calc-interpolated-height pf1 height1 pf2 height2 pg))
-                           (HAL:debug (strcat "interpolated-height=" (if interpolated-height (rtos interpolated-height 2 4) "nil")))
-                           
                            (princ (strcat "\n  Berechnete Hoehe: " (HAL:format-height interpolated-height)))
-                           ;; nil = immer einfuegen fuer Zwischenpunkte
+                           (HAL:log-write "INFO" (strcat "Interpolation: (" (rtos (car pg) 2 3) " " (rtos (cadr pg) 2 3) ") -> " (rtos interpolated-height 2 4)))
                            (HAL:insert-block pg interpolated-height scale nil)
                          )
                          (progn
@@ -1122,16 +971,16 @@
                       )
                     )
                     
-                    ;; Naechsten Punkt abfragen
                     (initget "Skalierung Konstruktion")
                     (setq pg (getpoint (strcat "\nPunkt waehlen [Skalierung/Konstruktion] <" (rtos scale 2 2) ">: ")))
                     (HAL:debug (strcat "pg raw (naechster)=" (vl-princ-to-string pg)))
                   )
                   
-                  ;; Konstruktionslinien aufraeumen
+                  ;; Aufraeumen
                   (if current-xline (HAL:delete-xline current-xline))
                   (if line-ab (entdel line-ab))
                   
+                  (HAL:log-write "INFO" "Befehl HoeheAufLinie beendet")
                   (princ "\n\n Hoeheninterpolation abgeschlossen.")
                 )
               )
@@ -1156,43 +1005,45 @@
   (c:HoeheAufLinie)
 )
 
-;;; Debug Command-Line Ausgabe ein/ausschalten
-;;; Log-Datei wird IMMER geschrieben, unabhaengig von diesem Schalter
-(defun c:HALDEBUG ()
+;;; Debug-Modus ein/aus (persistiert in Config)
+(defun c:HALDEBUG ( / )
+  (HAL:ensure-init)
   (setq *HAL:debug-mode* (not *HAL:debug-mode*))
-  (princ (strcat "\nDebug Command-Line: " (if *HAL:debug-mode* "EIN" "AUS")))
-  (princ (strcat "\nLog-Datei (immer aktiv): " *HAL:log-path*))
+  (HAL:save-config)
+  (princ (strcat "\nDebug-Modus: " (if *HAL:debug-mode* "EIN" "AUS")))
+  (HAL:log-write "INFO" (strcat "Debug-Modus: " (if *HAL:debug-mode* "EIN" "AUS")))
   (princ)
 )
 
 ;;; Zeigt konfigurierten Block-Pfad
 (defun c:ShowBlockPath ()
+  (HAL:ensure-init)
   (show-block-path)
 )
 
 ;;; Loescht gespeicherten Pfad
 (defun c:ResetBlockPath ()
+  (HAL:ensure-init)
   (reset-block-path)
 )
 
 ;;; Block Import Manager
 (defun c:ManageBlockImportHAL ()
+  (HAL:ensure-init)
   (manage-block-import "HoeheAufLinie")
 )
 
 ;;; ============================================================================
-;;; LADE-MELDUNG
+;;; LADE-MELDUNG (NUR PRINC auf Top-Level!)
 ;;; ============================================================================
 
-(vl-load-com)
-(princ "\nHoeheAufLinie.lsp v2.0.0 geladen.")
+(princ (strcat "\nHoeheAufLinie.lsp v" *HAL:version* " geladen."))
 (princ "\nBefehle:")
 (princ "\n  HoeheAufLinie (HAL)      - Hoeheninterpolation (S=Skalierung, K=Konstruktionslinie)")
-(princ "\n  HALDEBUG                 - Debug ein/aus + Log-Datei")
+(princ "\n  HALDEBUG                 - Debug ein/aus")
 (princ "\n  ManageBlockImportHAL     - Block-Verwaltung fuer HoeheAufLinie")
 (princ "\n  ShowBlockPath            - Zeigt konfigurierten Block-Pfad")
 (princ "\n  ResetBlockPath           - Loescht gespeicherten Pfad")
-(princ (strcat "\n  Log-Pfad:                  " *HAL:log-path*))
 (princ "\n")
 (princ)
 
