@@ -6,13 +6,23 @@
 ;;; - Block-Import via ObjectDBX (Lee Mac Utilities)
 ;;; - Config-Management für Block-Pfade
 ;;; - Automatische Fallback-Mechanismen
+;;; - Session-basiertes Logging (BLI: Namespace)
 ;;;
 ;;; Verwendung:
 ;;; (load "lib/BlockImport.lsp")
 ;;; (ensure-block-available "BLK_Hoehenkote")
 ;;;
-;;; Version: 1.5.1
-;;; Datum: 2026-02-13
+;;; AppData: %APPDATA%\AutoCAD\BlockImport\
+;;;   - Log:    BlockImport_YYYYMMDD_HHMMSS.log (max 5 Sessions)
+;;;   - Config: BlockImportConfig.txt
+;;;
+;;; Befehle:
+;;; ManageBlockImport - Block-Verwaltung (DCL-Dialog)
+;;; ShowBlockPath     - Zeigt konfigurierte Pfade
+;;; ResetBlockPath    - Löscht alle Pfade
+;;;
+;;; Version: 1.6.0
+;;; Datum: 2026-03-19
 ;;; Autor: Herbert Schrotter
 
 ;;; ============================================================================
@@ -30,6 +40,89 @@
 )
 
 ;;; ============================================================================
+;;; APPDATA & LOGGING (BLI: Namespace)
+;;; ============================================================================
+
+;; AppData-Ordner für BlockImport
+(setq *BLI:appdata-folder* "BlockImport")
+(setq *BLI:log-session-id* nil)
+(setq *BLI:debug-mode* nil)
+
+;;; Gibt den AppData-Ordner zurück, erstellt ihn falls nicht vorhanden
+;;; Rückgabe: Pfad als String
+(defun BLI:get-appdata-path ( / base)
+  (setq base (strcat (getenv "APPDATA") "\\AutoCAD\\" *BLI:appdata-folder*))
+  (if (not (vl-file-directory-p base))
+    (progn
+      (vl-mkdir (strcat (getenv "APPDATA") "\\AutoCAD"))
+      (vl-mkdir base)
+    )
+  )
+  base
+)
+
+;;; Löscht alte Logs, behält nur die 5 neuesten
+;;; Wird beim ersten log-write der Session aufgerufen
+(defun BLI:log-rotate ( / appdata files sorted-files delete-count i)
+  (setq appdata (BLI:get-appdata-path))
+  (setq files (vl-directory-files appdata (strcat *BLI:appdata-folder* "_*.log") 1))
+  (if files
+    (progn
+      (setq sorted-files (vl-sort files '<))
+      ;; 4 behalten (5. ist die aktuelle, noch nicht erstellt)
+      (setq delete-count (- (length sorted-files) 4))
+      (if (> delete-count 0)
+        (progn
+          (setq i 0)
+          (repeat delete-count
+            (vl-file-delete (strcat appdata "\\" (nth i sorted-files)))
+            (setq i (1+ i))
+          )
+        )
+      )
+    )
+  )
+)
+
+;;; Schreibt eine Zeile ins Session-Log
+;;; level: "INFO", "WARN", "ERROR", "DEBUG"
+;;; message: Beliebiger String
+(defun BLI:log-write (level message / appdata log-path fp timestamp)
+  ;; Debug nur wenn aktiviert
+  (if (or (/= level "DEBUG") *BLI:debug-mode*)
+    (progn
+      ;; Session-ID beim ersten Aufruf erstellen
+      (if (not *BLI:log-session-id*)
+        (progn
+          (setq *BLI:log-session-id*
+            (strcat *BLI:appdata-folder* "_"
+              (menucmd "M=$(edtime,0,YYYYMMDD_HHMMSS)")
+            )
+          )
+          (BLI:log-rotate)
+        )
+      )
+
+      (setq appdata (BLI:get-appdata-path))
+      (setq log-path (strcat appdata "\\" *BLI:log-session-id* ".log"))
+      (setq timestamp (menucmd "M=$(edtime,0,YYYY-MO-DD HH:MM:SS)"))
+
+      (setq fp (open log-path "a"))
+      (if fp
+        (progn
+          (write-line
+            (strcat "[" timestamp "] ["
+              (substr (strcat level "     ") 1 5)
+              "] " message)
+            fp)
+          (close fp)
+        )
+      )
+    )
+  )
+)
+
+;;; ============================================================================
 ;;; CONFIG MANAGEMENT
 ;;; ============================================================================
 
@@ -37,29 +130,33 @@
 ;;; Rückgabe: Association-Liste ((blockname . filepath) ...) oder nil
 (defun read-all-block-paths ( / file line pos key value result version context-prefix)
   (setq result '())
-  
+
   ;; Context-Präfix bestimmen (falls gesetzt)
-  (setq context-prefix 
+  (setq context-prefix
     (if *block-import-context*
       (strcat *block-import-context* ":")
       nil
     )
   )
-  
+
   ;; Prüfe ob Config-Datei existiert
   (if (not (findfile *block-config-file*))
-    nil  ;; Datei existiert nicht
+    (progn
+      (BLI:log-write "DEBUG" "Config-Datei nicht gefunden")
+      nil  ;; Datei existiert nicht
+    )
     ;; Versuche Datei zu öffnen mit Error-Handling
     (if (vl-catch-all-error-p
           (setq file (vl-catch-all-apply 'open (list *block-config-file* "r"))))
       (progn
         (princ (strcat "\n*** Fehler beim Öffnen der Config-Datei: " *block-config-file* " ***"))
+        (BLI:log-write "ERROR" (strcat "Config-Datei kann nicht geöffnet werden: " *block-config-file*))
         nil
       )
       (progn
         ;; Erste Zeile: Version (überspringen)
         (setq version (read-line file))
-        
+
         ;; Alle weiteren Zeilen: key=value
         (while (setq line (read-line file))
           (if (setq pos (vl-string-search "=" line))
@@ -68,7 +165,7 @@
               (setq key (substr line 1 pos))
               ;; Pfad (nach =)
               (setq value (substr line (+ pos 2)))
-              
+
               ;; Context-Filterung
               (if context-prefix
                 ;; MIT Context: Nur "Context:BlockName" Einträge (NICHT *STANDARD*)
@@ -91,6 +188,8 @@
           )
         )
         (close file)
+        (BLI:log-write "DEBUG" (strcat "Config gelesen: " (itoa (length result)) " Einträge"
+          (if context-prefix (strcat " (Context: " *block-import-context* ")") "")))
         result
       )
     )
@@ -108,10 +207,10 @@
       "*STANDARD*"
     )
   )
-  
+
   (setq found nil)
   (setq value nil)
-  
+
   ;; Lese DIREKT aus Config-Datei (ungefiltert!)
   (if (not (findfile *block-config-file*))
     nil
@@ -134,6 +233,7 @@
           )
         )
         (close file)  ;; Schließe Datei NUR HIER
+        (BLI:log-write "DEBUG" (strcat "Standard-Block: " (if value value "keiner")))
         value  ;; Rückgabe
       )
       nil
@@ -152,6 +252,8 @@
       "*STANDARD*"
     )
   )
+  (BLI:log-write "INFO" (strcat "Standard-Block gesetzt: " blockname
+    (if *block-import-context* (strcat " (Context: " *block-import-context* ")") "")))
   (save-block-path standard-key blockname)
 )
 
@@ -173,13 +275,14 @@
     (if (vl-catch-all-error-p (vl-catch-all-apply 'vl-mkdir (list dir)))
       (progn
         (princ (strcat "\n*** Fehler beim Erstellen des Config-Verzeichnis: " dir " ***"))
+        (BLI:log-write "ERROR" (strcat "Config-Verzeichnis kann nicht erstellt werden: " dir))
         nil
       )
       ;; Verzeichnis erfolgreich erstellt
       T
     )
   )
-  
+
   ;; ALLE existierenden Pfade lesen (UNGEFILTERT - alle Contexts!)
   (setq all-paths '())
   (if (findfile *block-config-file*)
@@ -200,7 +303,7 @@
       )
     )
   )
-  
+
   ;; Key mit Context-Präfix (falls nicht schon *STANDARD*)
   (setq key-with-context
     (if (wcmatch blockname "*STANDARD*")
@@ -211,34 +314,36 @@
       )
     )
   )
-  
+
   ;; Blockname aktualisieren oder hinzufügen
   (if (assoc key-with-context all-paths)
     ;; Existiert bereits - aktualisieren
-    (setq all-paths (subst (cons key-with-context filepath) 
-                            (assoc key-with-context all-paths) 
+    (setq all-paths (subst (cons key-with-context filepath)
+                            (assoc key-with-context all-paths)
                             all-paths))
     ;; Neu hinzufügen
     (setq all-paths (cons (cons key-with-context filepath) all-paths))
   )
-  
+
   ;; Zurück in Datei schreiben mit Error-Handling
   (if (vl-catch-all-error-p
         (setq file (vl-catch-all-apply 'open (list *block-config-file* "w"))))
     (progn
       (princ (strcat "\n*** Fehler beim Schreiben der Config-Datei: " *block-config-file* " ***"))
+      (BLI:log-write "ERROR" (strcat "Config-Datei kann nicht geschrieben werden: " *block-config-file*))
       nil
     )
     (progn
       ;; Erste Zeile: Version
       (write-line "1.0" file)
-      
+
       ;; Alle Block-Pfade schreiben (ALLE Contexts!)
       (foreach pair all-paths
         (write-line (strcat (car pair) "=" (cdr pair)) file)
       )
-      
+
       (close file)
+      (BLI:log-write "INFO" (strcat "Config gespeichert: " key-with-context "=" filepath))
       T
     )
   )
@@ -249,34 +354,39 @@
 ;;; Rückgabe: Gewählter Pfad oder nil
 (defun select-block-file (blockname / filepath default-dir)
   (princ (strcat "\n*** Block-Datei für '" blockname "' nicht gefunden ***"))
-  
+  (BLI:log-write "WARN" (strcat "Block-Datei nicht gefunden: " blockname))
+
   ;; Versuche sinnvollen Start-Ordner zu finden
   (setq default-dir
     (cond
       ;; 1. Zeichnungs-Verzeichnis
       ((getvar "DWGPREFIX"))
-      
+
       ;; 2. Benutzer-Dokumente
       ((getenv "USERPROFILE"))
-      
+
       ;; 3. Fallback: Leer
       (T "")
     )
   )
-  
+
   (princ (strcat "\nBitte wählen Sie die DWG-Datei für Block '" blockname "' aus..."))
-  
+
   (if (setq filepath (getfiled "Block-Datei wählen" default-dir "dwg" 0))
     (progn
       (princ (strcat "\nGewählte Datei: " filepath))
-      
+      (BLI:log-write "INFO" (strcat "Block-Datei gewählt: " blockname " -> " filepath))
+
       ;; Speichere Pfad in Config (mit blockname)
       (save-block-path blockname filepath)
-      
+
       (princ "\nPfad wurde gespeichert für zukünftige Sitzungen.")
       filepath
     )
-    nil
+    (progn
+      (BLI:log-write "INFO" (strcat "Block-Datei Auswahl abgebrochen: " blockname))
+      nil
+    )
   )
 )
 
@@ -334,32 +444,36 @@
 ;;; ============================================================================
 
 ;;; Importiert Block aus DWG-Datei ohne Benutzerinteraktion
-;;; Parameter: 
+;;; Parameter:
 ;;;   filepath - Pfad zur DWG-Datei
 ;;;   blockname - Name des zu importierenden Blocks
 ;;; Rückgabe: importEnt (Entity zum späteren Löschen) oder nil bei Fehler
 (defun import-block-from-file (filepath blockname / dbx doc abc importEnt)
+  (BLI:log-write "INFO" (strcat "Block-Import gestartet: " blockname " aus " filepath))
   (if (not (setq filepath (findfile filepath)))
     (progn
       (princ (strcat "\n  ✗ Datei nicht gefunden: " filepath))
+      (BLI:log-write "ERROR" (strcat "Datei nicht gefunden: " filepath))
       nil
     )
     (progn
       (princ (strcat "\n  Importiere Block aus: " (vl-filename-base filepath)))
-      
+
       ;; ObjectDBX Objekt für externe Datei erstellen
       (if (not (setq dbx (LM:GetDocumentObject filepath)))
         (progn
           (princ "\n  ✗ Fehler beim Öffnen der Datei mit ObjectDBX")
+          (BLI:log-write "ERROR" (strcat "ObjectDBX kann Datei nicht öffnen: " filepath))
           nil
         )
         (progn
           (setq doc (vla-get-activedocument (vlax-get-acad-object)))
-          
+
           ;; Prüfen ob Block in externer Datei existiert
           (if (not (LM:getitem (vla-get-blocks dbx) blockname))
             (progn
               (princ (strcat "\n  ✗ Block '" blockname "' nicht in Datei gefunden"))
+              (BLI:log-write "ERROR" (strcat "Block nicht in Datei: " blockname))
               (vlax-release-object dbx)
               nil
             )
@@ -375,6 +489,7 @@
                   )
                 (progn
                   (princ "\n  ✗ Fehler beim Kopieren der Block-Definition")
+                  (BLI:log-write "ERROR" (strcat "Block-Kopie fehlgeschlagen: " blockname))
                   (vlax-release-object dbx)
                   nil
                 )
@@ -383,7 +498,7 @@
                   (if (LM:getitem abc blockname)
                     (progn
                       (princ "\n  ✓ Block-Definition erfolgreich importiert")
-                      
+
                       ;; Block einmal unsichtbar einfügen (nur um Entity zu haben)
                       (vla-insertblock
                         (vlax-get-property doc (if (= 1 (getvar 'cvport)) 'paperspace 'modelspace))
@@ -393,12 +508,14 @@
                         0.0
                       )
                       (setq importEnt (entlast))
-                      
+
                       (vlax-release-object dbx)
+                      (BLI:log-write "INFO" (strcat "Block erfolgreich importiert: " blockname))
                       importEnt  ;; Rückgabe: Entity des eingefügten Blocks (zum späteren Löschen)
                     )
                     (progn
                       (princ "\n  ✗ Block-Definition konnte nicht übertragen werden")
+                      (BLI:log-write "ERROR" (strcat "Block-Transfer fehlgeschlagen: " blockname))
                       (vlax-release-object dbx)
                       nil
                     )
@@ -424,12 +541,12 @@
     (setq actual-blockname (get-standard-block))
     (setq actual-blockname blockname)
   )
-  
+
   ;; Wenn immer noch kein Blockname: Prüfe ob genau 1 Block konfiguriert ist
   (if (null actual-blockname)
     (progn
       (setq all-paths (read-all-block-paths))
-      
+
       ;; Erstelle Liste ohne *STANDARD* Eintrag
       (setq block-list '())
       (foreach pair all-paths
@@ -437,7 +554,7 @@
           (setq block-list (cons (car pair) block-list))
         )
       )
-      
+
       ;; Wenn genau 1 Block: Automatisch als Standard setzen
       (if (= (length block-list) 1)
         (progn
@@ -448,36 +565,43 @@
       )
     )
   )
-  
+
   ;; Wenn immer noch kein Blockname: Fehler
   (if (null actual-blockname)
     (progn
       (princ "\n*** FEHLER: Kein Block-Name angegeben und kein Standard-Block konfiguriert ***")
       (princ "\nVerwenden Sie 'ManageBlockImport' um einen Standard-Block zu setzen.")
+      (BLI:log-write "ERROR" "Kein Blockname und kein Standard-Block konfiguriert")
       (list nil nil)
     )
     (progn
+      (BLI:log-write "INFO" (strcat "ensure-block-available: " actual-blockname))
       ;; Prüfen ob Block bereits in Zeichnung vorhanden
       (if (tblsearch "block" actual-blockname)
-        (list T nil)  ;; Bereits vorhanden: (Erfolg, kein importEnt)
+        (progn
+          (BLI:log-write "DEBUG" (strcat "Block bereits in Zeichnung: " actual-blockname))
+          (list T nil)  ;; Bereits vorhanden: (Erfolg, kein importEnt)
+        )
         (progn
           ;; Block muss geladen werden
           (princ (strcat "\nBlock '" actual-blockname "' wird geladen..."))
-          
+          (BLI:log-write "INFO" (strcat "Block wird geladen: " actual-blockname))
+
           ;; Hole konfigurierten Pfad für diesen Block
           (setq block-path (read-block-path actual-blockname))
-          
+
           ;; Prüfe ob Pfad existiert UND Datei erreichbar ist
-          (if (or (null block-path) 
+          (if (or (null block-path)
                   (not (findfile block-path)))
             ;; Kein gültiger Pfad - frage Benutzer
             (setq block-path (select-block-file actual-blockname))
           )
-          
+
           ;; Falls noch immer kein Pfad: Abbruch
           (if (null block-path)
             (progn
               (princ "\n  ✗ Keine Block-Datei ausgewählt")
+              (BLI:log-write "WARN" (strcat "Keine Block-Datei ausgewählt für: " actual-blockname))
               (list nil nil)  ;; Fehler: (kein Erfolg, kein importEnt)
             )
             ;; Versuche zu importieren
@@ -485,6 +609,7 @@
               (list T import-result)  ;; Erfolg: (Erfolg, importEnt zum späteren Löschen)
               (progn
                 (princ "\n  ✗ Block konnte nicht importiert werden")
+                (BLI:log-write "ERROR" (strcat "Block-Import fehlgeschlagen: " actual-blockname))
                 (list nil nil)  ;; Fehler beim Import
               )
             )
@@ -512,10 +637,10 @@
 (defun list-all-blocks ( / all-paths standard-block)
   (setq all-paths (read-all-block-paths))
   (setq standard-block (get-standard-block))
-  
+
   (princ "\n")
   (princ "\n=== Konfigurierte Blocks ===")
-  
+
   (if all-paths
     (progn
       (foreach pair all-paths
@@ -542,10 +667,10 @@
 )
 
 ;;; Wählt Standard-Block aus konfigurierten Blocks
-(defun select-standard-block ( / all-paths block-list choice standard-block)
+(defun select-standard-block ( / all-paths block-list choice standard-block counter selected-block)
   (setq all-paths (read-all-block-paths))
   (setq standard-block (get-standard-block))
-  
+
   ;; Erstelle Liste ohne *STANDARD* Eintrag
   (setq block-list '())
   (foreach pair all-paths
@@ -553,7 +678,7 @@
       (setq block-list (cons (car pair) block-list))
     )
   )
-  
+
   (if (null block-list)
     (progn
       (princ "\n*** Keine Blocks konfiguriert. Fügen Sie zuerst einen Block hinzu. ***")
@@ -564,17 +689,17 @@
       (princ "\n=== Standard-Block wählen ===")
       (princ (strcat "\nAktuell: " (if standard-block standard-block "Keiner")))
       (princ "\n")
-      
+
       ;; Zeige nummerierte Liste
       (setq counter 1)
       (foreach blockname block-list
         (princ (strcat "\n  " (itoa counter) ". " blockname))
         (setq counter (+ counter 1))
       )
-      
+
       (princ "\n")
       (setq choice (getint "\nNummer eingeben (0 = Abbrechen): "))
-      
+
       (if (and choice (> choice 0) (<= choice (length block-list)))
         (progn
           (setq selected-block (nth (- choice 1) block-list))
@@ -595,55 +720,59 @@
 (defun add-new-block ( / filepath blockname filename default-dir result)
   (princ "\n")
   (princ "\n=== Neuen Block hinzufügen ===")
-  
+  (BLI:log-write "INFO" "Neuen Block hinzufügen gestartet")
+
   ;; Bestimme sinnvollen Start-Ordner
   (setq default-dir
     (cond
       ;; 1. Zeichnungs-Verzeichnis
       ((getvar "DWGPREFIX"))
-      
+
       ;; 2. Benutzer-Dokumente
       ((getenv "USERPROFILE"))
-      
+
       ;; 3. Fallback: Leer
       (T "")
     )
   )
-  
+
   ;; Datei auswählen (ZUERST!)
   (princ "\nBitte wählen Sie die DWG-Datei aus...")
   (setq filepath (getfiled "Block-Datei wählen" default-dir "dwg" 0))
-  
+
   (if (null filepath)
     (progn
       (princ "\nAbgebrochen.")
+      (BLI:log-write "INFO" "Block hinzufügen abgebrochen")
       nil
     )
     (progn
       ;; Block-Name aus Dateinamen extrahieren (ohne .dwg)
       (setq blockname (vl-filename-base filepath))
-      
+
       (princ (strcat "\nGewählte Datei: " filepath))
       (princ (strcat "\nBlock-Name: " blockname))
-      
+
       ;; Speichere Pfad in Config
       (save-block-path blockname filepath)
-      
+
       ;; Setze als Standard-Block (automatisch!)
       (set-standard-block blockname)
       (princ (strcat "\n✓ Als Standard-Block gesetzt: " blockname))
-      
+
       ;; Block sofort importieren (wie beim ersten Mal!)
       (princ "\nImportiere Block...")
       (setq result (ensure-block-available blockname))
-      
+
       (if (car result)
         (progn
           (princ (strcat "\n✓ Block hinzugefügt und importiert: " blockname))
+          (BLI:log-write "INFO" (strcat "Block hinzugefügt und importiert: " blockname " -> " filepath))
           T
         )
         (progn
           (princ (strcat "\n*** FEHLER: Block konnte nicht importiert werden ***"))
+          (BLI:log-write "ERROR" (strcat "Block hinzufügen fehlgeschlagen: " blockname))
           nil
         )
       )
@@ -652,7 +781,7 @@
 )
 
 ;;; Entfernt Block aus Config
-(defun remove-block ( / all-paths block-list choice selected-block new-paths file dir standard-block was-standard remaining-blocks line pos key value version context-prefix selected-block-with-context)
+(defun remove-block ( / all-paths block-list choice selected-block new-paths file dir standard-block was-standard remaining-blocks line pos key value version context-prefix selected-block-with-context counter)
   ;; Lese ALLE Pfade UNGEFILTERT (wie in save-block-path)
   (setq all-paths '())
   (if (findfile *block-config-file*)
@@ -673,7 +802,7 @@
       )
     )
   )
-  
+
   (setq standard-block (get-standard-block))
   (setq context-prefix
     (if *block-import-context*
@@ -681,7 +810,7 @@
       nil
     )
   )
-  
+
   ;; Erstelle Anzeige-Liste (OHNE Context-Präfix und OHNE *STANDARD*)
   (setq block-list '())
   (foreach pair all-paths
@@ -703,7 +832,7 @@
       )
     )
   )
-  
+
   (if (null block-list)
     (progn
       (princ "\n*** Keine Blocks zum Entfernen vorhanden. ***")
@@ -713,7 +842,7 @@
       (princ "\n")
       (princ "\n=== Block entfernen ===")
       (princ "\n")
-      
+
       ;; Zeige nummerierte Liste (OHNE Context-Präfix)
       (setq counter 1)
       (foreach blockname block-list
@@ -724,15 +853,15 @@
         )
         (setq counter (+ counter 1))
       )
-      
+
       (princ "\n")
       (setq choice (getint "\nNummer eingeben (0 = Abbrechen): "))
-      
+
       (if (and choice (> choice 0) (<= choice (length block-list)))
         (progn
           ;; selected-block OHNE Context-Präfix
           (setq selected-block (nth (- choice 1) block-list))
-          
+
           ;; selected-block-with-context MIT Context-Präfix (für Löschen)
           (setq selected-block-with-context
             (if context-prefix
@@ -740,10 +869,10 @@
               selected-block
             )
           )
-          
+
           ;; Prüfe ob Standard-Block entfernt wird
           (setq was-standard (eq selected-block standard-block))
-          
+
           ;; Erstelle neue Liste ohne den gewählten Block
           (setq new-paths '())
           (foreach pair all-paths
@@ -751,14 +880,14 @@
               (setq new-paths (cons pair new-paths))
             )
           )
-          
+
           ;; Wenn Standard-Block entfernt: Entferne auch *STANDARD* Eintrag
           (if was-standard
             (progn
-              (setq new-paths 
-                (vl-remove-if 
-                  '(lambda (x) 
-                     (wcmatch (car x) 
+              (setq new-paths
+                (vl-remove-if
+                  '(lambda (x)
+                     (wcmatch (car x)
                        (if *block-import-context*
                          (strcat "*STANDARD:" *block-import-context* "*")
                          "*STANDARD*"
@@ -770,17 +899,18 @@
               )
             )
           )
-          
+
           ;; Schreibe Config neu
           (setq dir (vl-filename-directory *block-config-file*))
           (if (not (vl-file-directory-p dir))
             (vl-catch-all-apply 'vl-mkdir (list dir))
           )
-          
+
           (if (vl-catch-all-error-p
                 (setq file (vl-catch-all-apply 'open (list *block-config-file* "w"))))
             (progn
               (princ "\n*** Fehler beim Schreiben der Config ***")
+              (BLI:log-write "ERROR" "Config kann nicht geschrieben werden beim Entfernen")
               nil
             )
             (progn
@@ -790,13 +920,14 @@
               )
               (close file)
               (princ (strcat "\n✓ Block entfernt: " selected-block))
-              
+              (BLI:log-write "INFO" (strcat "Block entfernt: " selected-block))
+
               ;; Wenn Standard-Block entfernt wurde: Frage nach neuem Standard
               (if was-standard
                 (progn
                   (princ "\n")
                   (princ "\n*** Der Standard-Block wurde entfernt! ***")
-                  
+
                   ;; Prüfe ob noch andere Blocks vorhanden (im aktuellen Context!)
                   (setq remaining-blocks '())
                   (setq context-prefix
@@ -805,7 +936,7 @@
                       nil
                     )
                   )
-                  
+
                   (foreach pair new-paths
                     ;; Nur Blocks im aktuellen Context zählen
                     (if context-prefix
@@ -822,7 +953,7 @@
                       )
                     )
                   )
-                  
+
                   (if remaining-blocks
                     (progn
                       (princ "\nMöchten Sie einen neuen Standard-Block setzen?")
@@ -832,7 +963,7 @@
                   )
                 )
               )
-              
+
               T
             )
           )
@@ -852,18 +983,21 @@
 (defun manage-block-import (context / option continue standard-block all-blocks old-context)
   ;; Sichere alten Context falls vorhanden
   (setq old-context *block-import-context*)
-  
+
   ;; Setze Context für diese Session
   (if context
     (setq *block-import-context* context)
   )
-  
+
+  (BLI:log-write "INFO" (strcat "Block-Manager geöffnet"
+    (if *block-import-context* (strcat " (Context: " *block-import-context* ")") "")))
+
   (setq continue T)
-  
+
   ;; Prüfe beim Start: Blocks vorhanden aber kein Standard?
   (setq standard-block (get-standard-block))
   (setq all-blocks (read-all-block-paths))
-  
+
   (if (and all-blocks (not standard-block))
     (progn
       (princ "\n*** Blocks konfiguriert aber kein Standard-Block gesetzt! ***")
@@ -872,10 +1006,10 @@
       (princ "\n")
     )
   )
-  
+
   (while continue
     (setq standard-block (get-standard-block))
-    
+
     ;; Menü anzeigen
     (princ "\n")
     (princ "\n========================================")
@@ -889,13 +1023,13 @@
     (princ "\n[E]ntfernen  - Block löschen")
     (princ "\n[A]bbrechen  - Beenden")
     (princ "\n")
-    
+
     ;; Option abfragen mit Rechtsklick-Menü
     ;; WICHTIG: Rechtsklick-Menü liest Keywords aus eckigen Klammern!
     ;; Erste Buchstaben müssen GROß sein!
     (initget "Liste Standard Hinzufuegen Entfernen Abbrechen")
     (setq option (getkword "\nOption [Liste/Standard/Hinzufuegen/Entfernen/Abbrechen]: "))
-    
+
     (cond
       ((eq option "Liste")
        (textscr)  ;; Aktiviere Textfenster
@@ -903,31 +1037,32 @@
        (princ "\nDrücken Sie eine beliebige Taste zum Fortfahren...")
        (grread T)  ;; Wartet auf Tastendruck
        (setq continue nil))  ;; Beende Menü nach Liste!
-      
+
       ((eq option "Standard")
        (select-standard-block))
-      
+
       ((eq option "Hinzufuegen")
        (add-new-block))
-      
+
       ((eq option "Entfernen")
        (remove-block))
-      
+
       ((eq option "Abbrechen")
        (setq continue nil))
-      
+
       ;; ESC oder ungültige Eingabe
       ((null option)
        (setq continue nil))
-      
+
       (T
        (setq continue nil))
     )
   )
-  
+
   ;; Stelle alten Context wieder her
   (setq *block-import-context* old-context)
-  
+
+  (BLI:log-write "INFO" "Block-Manager geschlossen")
   (princ "\n")
   (princ)
 )
@@ -940,9 +1075,10 @@
 ;;; Kann als Befehl verwendet werden: (defun c:ShowBlockPath () (show-block-path))
 (defun show-block-path ( / all-paths)
   (setq all-paths (read-all-block-paths))
-  
+  (BLI:log-write "INFO" "ShowBlockPath aufgerufen")
+
   (princ "\n=== Konfigurierte Block-Pfade ===")
-  
+
   (if all-paths
     (progn
       (foreach pair all-paths
@@ -955,7 +1091,7 @@
     )
     (princ "\nKeine Block-Pfade konfiguriert.")
   )
-  
+
   (princ (strcat "\n\nConfig-Datei: " *block-config-file*))
   (princ "\n")
   (princ)
@@ -969,6 +1105,7 @@
       (vl-file-delete *block-config-file*)
       (princ "\nGespeicherte Block-Pfade wurden zurückgesetzt.")
       (princ "\nBeim nächsten Laden wird nach der Datei gefragt.")
+      (BLI:log-write "INFO" "Alle Block-Pfade zurückgesetzt (Config gelöscht)")
     )
     (princ "\nKeine gespeicherten Pfade vorhanden.")
   )
@@ -981,6 +1118,7 @@
 
 ;;; Block Import Manager - Hauptbefehl für User
 (defun c:ManageBlockImport ( / )
+  (BLI:log-write "INFO" "Befehl ManageBlockImport gestartet")
   (manage-block-import nil)  ;; nil = verwendet globale *block-import-context*
 )
 
@@ -991,7 +1129,18 @@
 
 ;;; Löscht alle gespeicherten Block-Pfade
 (defun c:ResetBlockPath ( / )
+  (BLI:log-write "INFO" "Befehl ResetBlockPath gestartet")
   (reset-block-path)
+)
+
+;;; Debug-Modus Toggle
+(defun c:BlockImportDebug ( / )
+  (setq *BLI:debug-mode* (not *BLI:debug-mode*))
+  (princ (strcat "\nBlockImport Debug-Modus: "
+    (if *BLI:debug-mode* "EIN" "AUS")))
+  (BLI:log-write "INFO"
+    (strcat "Debug-Modus: " (if *BLI:debug-mode* "EIN" "AUS")))
+  (princ)
 )
 
 ;;; ============================================================================
@@ -1002,10 +1151,12 @@
 (vl-load-com)
 
 ;; Lade-Meldung
-(princ "\nBlockImport.lsp v1.5.1 geladen.")
+(BLI:log-write "INFO" "=== BlockImport.lsp v1.6.0 geladen ===")
+(princ "\nBlockImport.lsp v1.6.0 geladen.")
 (princ "\nBefehle: ManageBlockImport - Block-Verwaltung")
 (princ "\n         ShowBlockPath - Zeigt konfigurierte Pfade")
 (princ "\n         ResetBlockPath - Löscht alle Pfade")
+(princ "\n         BlockImportDebug - Debug-Modus ein/aus")
 (princ "\nFunktionen: ensure-block-available")
 (princ)
 
