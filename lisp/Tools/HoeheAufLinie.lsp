@@ -388,7 +388,7 @@
 ;;; Kopiert via VLA: Farbe (ACI+TrueColor), Linientyp, Linienstaerke, Plot, Transparenz
 ;;; Rueckgabe: Name des Ziel-Layers (String) oder nil bei Fehler
 (defun HAL:ensure-hk-layer ( / cur-layer hk-layer-name suffix-with-sep suffix-len
-                                doc layers src-layer new-layer color-obj)
+                                doc layers src-layer new-layer color-obj transp-val)
   (setq cur-layer (getvar "CLAYER"))
   (setq suffix-with-sep (strcat "_" *HAL:layer-suffix*))
   (setq suffix-len (strlen suffix-with-sep))
@@ -442,8 +442,12 @@
                 (list new-layer (vla-get-lineweight src-layer)))
               (vl-catch-all-apply 'vla-put-plottable
                 (list new-layer (vla-get-plottable src-layer)))
-              (vl-catch-all-apply 'vla-put-transparency
-                (list new-layer (vla-get-transparency src-layer)))
+              ;; Transparency: Getter separat absichern (nicht alle Layer haben Transparency)
+              (setq transp-val
+                (vl-catch-all-apply 'vla-get-transparency (list src-layer)))
+              (if (and transp-val (not (vl-catch-all-error-p transp-val)))
+                (vl-catch-all-apply 'vla-put-transparency (list new-layer transp-val))
+              )
               
               (HAL:log-write "INFO"
                 (strcat "Layer erstellt: " hk-layer-name " (kopiert von " cur-layer ")"))
