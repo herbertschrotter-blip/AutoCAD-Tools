@@ -13,7 +13,7 @@
 ;;; - Beliebig viele Zwischenpunkte setzen mit automatisch interpolierter Hoehe
 ;;; - ESC zum Beenden
 ;;;
-;;; Version: 2.1.0
+;;; Version: 2.2.0
 ;;; Datum: 2026-03-19
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAL (HoeheAufLinie)
@@ -30,7 +30,7 @@
 ;;; KONSTANTEN (Top-Level erlaubt)
 ;;; ============================================================================
 
-(setq *HAL:version* "2.1.0")
+(setq *HAL:version* "2.2.0")
 (setq *HAL:appdata-folder* "HoeheAufLinie")
 (setq *HAL:blockname* "BLK_Hoehenkote")
 
@@ -272,6 +272,138 @@
     )
     nil
   )
+)
+
+;;; ============================================================================
+;;; DWG CUSTOM PROPERTIES (Skalierung pro Zeichnung)
+;;; ============================================================================
+
+;;; Sicheres Auslesen: String oder Variant
+;;; GetCustomByIndex gibt manchmal Strings direkt zurueck, manchmal Variants
+(defun HAL:safe-variant-value (val / )
+  (cond
+    ((= (type val) 'STR) val)
+    ((= (type val) 'VLA-OBJECT) val)
+    ((not (null val))
+      (vl-catch-all-apply 'vlax-variant-value (list val))
+    )
+    (T nil)
+  )
+)
+
+;;; Liest eine Custom Property aus der aktuellen DWG
+;;; Gibt den Wert als String zurueck oder nil wenn nicht gefunden
+(defun HAL:dwg-custom-read (prop-name / si num-props i key val found result)
+  (setq si (vl-catch-all-apply 'vla-get-SummaryInfo
+             (list (vla-get-ActiveDocument (vlax-get-acad-object)))))
+  (if (vl-catch-all-error-p si)
+    (progn
+      (HAL:log-write "ERROR" "SummaryInfo nicht verfuegbar")
+      nil
+    )
+    (progn
+      (setq found nil)
+      (setq result nil)
+      (setq num-props (vla-NumCustomInfo si))
+      
+      (if (> num-props 0)
+        (progn
+          (setq i 0)
+          (while (and (< i num-props) (null found))
+            (setq key "")
+            (setq val "")
+            (vl-catch-all-apply
+              '(lambda ()
+                (vla-GetCustomByIndex si i 'key 'val)
+                (setq key (HAL:safe-variant-value key))
+                (setq val (HAL:safe-variant-value val))
+                (if (= (strcase key) (strcase prop-name))
+                  (progn
+                    (setq result val)
+                    (setq found T)
+                  )
+                )
+              )
+            )
+            (setq i (1+ i))
+          )
+        )
+      )
+      
+      (HAL:debug (strcat "HAL:dwg-custom-read: " prop-name "=" (if result result "nil")))
+      result
+    )
+  )
+)
+
+;;; Schreibt eine Custom Property in die aktuelle DWG
+;;; Ueberschreibt vorhandene Property mit gleichem Namen
+(defun HAL:dwg-custom-write (prop-name prop-value / si num-props i key val found)
+  (setq si (vl-catch-all-apply 'vla-get-SummaryInfo
+             (list (vla-get-ActiveDocument (vlax-get-acad-object)))))
+  (if (vl-catch-all-error-p si)
+    (progn
+      (HAL:log-write "ERROR" "SummaryInfo nicht verfuegbar")
+      nil
+    )
+    (progn
+      ;; Pruefen ob Property schon existiert
+      (setq found nil)
+      (setq num-props (vla-NumCustomInfo si))
+      
+      (if (> num-props 0)
+        (progn
+          (setq i 0)
+          (while (and (< i num-props) (null found))
+            (setq key "")
+            (setq val "")
+            (vl-catch-all-apply
+              '(lambda ()
+                (vla-GetCustomByIndex si i 'key 'val)
+                (setq key (HAL:safe-variant-value key))
+                (if (= (strcase key) (strcase prop-name))
+                  (progn
+                    ;; Property existiert -> ueberschreiben
+                    (vla-SetCustomByIndex si i prop-name prop-value)
+                    (setq found T)
+                  )
+                )
+              )
+            )
+            (setq i (1+ i))
+          )
+        )
+      )
+      
+      ;; Wenn nicht gefunden -> neue Property anlegen
+      (if (not found)
+        (vl-catch-all-apply 'vla-AddCustomInfo (list si prop-name prop-value))
+      )
+      
+      (HAL:debug (strcat "HAL:dwg-custom-write: " prop-name "=" prop-value (if found " (updated)" " (created)")))
+      (HAL:log-write "INFO" (strcat "DWG Custom Property: " prop-name "=" prop-value))
+      T
+    )
+  )
+)
+
+;;; Liest Skalierung aus DWG Custom Property
+;;; Gibt Zahl zurueck oder nil wenn nicht gesetzt
+(defun HAL:read-dwg-scale ( / val)
+  (setq val (HAL:dwg-custom-read "HoehenkoteScale"))
+  (if (and val (/= val ""))
+    (progn
+      (HAL:debug (strcat "HAL:read-dwg-scale: " val))
+      (atof val)
+    )
+    nil
+  )
+)
+
+;;; Schreibt Skalierung als DWG Custom Property
+(defun HAL:write-dwg-scale (scale-value / )
+  (HAL:dwg-custom-write "HoehenkoteScale" (rtos scale-value 2 6))
+  (HAL:log-write "INFO" (strcat "Skalierung in DWG gespeichert: " (rtos scale-value 2 2)))
 )
 
 ;;; ============================================================================
@@ -671,9 +803,10 @@
 )
 
 ;;; Fragt Benutzer nach XY-Skalierung
-;;; Skalierung wird in RAM gemerkt (Custom Property in DWG kommt spaeter)
+;;; Liest Default aus DWG Custom Property, speichert neuen Wert zurueck
 (defun HAL:get-scale ( / scaleValue prompt current-scale)
-  (setq current-scale (if (and (boundp '*HAL:current-scale*) *HAL:current-scale*) *HAL:current-scale* nil))
+  ;; Aktuelle Skalierung aus DWG lesen
+  (setq current-scale (HAL:read-dwg-scale))
   
   (setq prompt (strcat "\nNeue XY-Skalierung" 
                        (if current-scale 
@@ -683,6 +816,7 @@
   
   (setq scaleValue (getreal prompt))
   
+  ;; Wenn ENTER gedrueckt: Default verwenden
   (if (null scaleValue)
     (if current-scale
       (setq scaleValue current-scale)
@@ -690,6 +824,7 @@
     )
   )
   
+  ;; Validierung
   (if (<= scaleValue 0.0)
     (progn
       (princ "\n*** Skalierung muss groesser als 0 sein! Verwende 1.0 ***")
@@ -697,9 +832,11 @@
     )
   )
   
-  (setq *HAL:current-scale* scaleValue)
+  ;; In DWG Custom Property speichern (geht mit der Zeichnung mit!)
+  (HAL:write-dwg-scale scaleValue)
   (HAL:log-write "INFO" (strcat "Skalierung gesetzt: " (rtos scaleValue 2 2)))
   (princ (strcat "\n Skalierung: " (rtos scaleValue 2 2)))
+  (princ "\n  (Gespeichert in Zeichnung - DWGPROPS > Benutzerdefiniert)")
   
   scaleValue
 )
@@ -857,9 +994,10 @@
   (princ "\nSetzen Sie zwei Fixpunkte mit bekannten Hoehen.")
   (princ "\nDann koennen Sie beliebig viele Zwischenpunkte setzen.")
   
-  ;; Skalierung aus Session oder Default
-  (setq scale (if (and (boundp '*HAL:current-scale*) *HAL:current-scale*) *HAL:current-scale* 1.0))
-  (HAL:debug (strcat "Scale: " (rtos scale 2 4)))
+  ;; Skalierung aus DWG Custom Property lesen (geht mit der Zeichnung mit)
+  (setq scale (HAL:read-dwg-scale))
+  (if (null scale) (setq scale 1.0))
+  (HAL:debug (strcat "Scale aus DWG: " (rtos scale 2 4)))
   
   ;; Fixpunkt 1
   (princ "\n")
