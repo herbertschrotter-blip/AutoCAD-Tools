@@ -1,0 +1,669 @@
+================================================================================
+ARBEITEN MIT CLAUDE AI - UNIVERSAL CODING BEST PRACTICES
+================================================================================
+Version: 2.0
+Erstellt: 2025-02-12
+Aktualisiert: 2026-03-17
+Autor: Herbert Schrotter
+Zweck: Optimale Zusammenarbeit mit Claude beim Coden
+Gueltig fuer: ALLE Programmiersprachen & Scripting-Umgebungen
+
+Sprachen: AutoLISP, PowerShell, Excel VBA, JavaScript, Python, C#, etc.
+
+
+================================================================================
+GRUNDPRINZIP
+================================================================================
+
+Claude ist ein ASSISTENT-TOOL, kein Autopilot!
+
+- Du bist der ARCHITEKT → Claude ist der BAUARBEITER
+- Verstehen > Kopieren
+- Test, Test, Test
+- Schrittweise arbeiten (KRITISCH!)
+
+
+================================================================================
+SCHRITTWEISE ARBEITSWEISE (WICHTIGSTE REGEL!)
+================================================================================
+
+NICHT SO:
+---------
+User: "Erstelle komplettes Feature mit:
+       - Funktion A
+       - Funktion B  
+       - Funktion C
+       - Integration
+       - Tests
+       - Dokumentation
+       - Error-Handling"
+
+→ Claude macht ALLES auf einmal (Ueberforderung!)
+→ Schwer zu testen
+→ Schwer zu debuggen
+→ Fehler werden spaet erkannt
+
+SO RICHTIG:
+-----------
+User: "Wir erstellen das Feature schrittweise.
+       Start mit: Funktion A
+       WARTE auf meine Bestaetigung bevor du weiter machst."
+
+→ Claude liefert NUR Funktion A
+→ Du testest
+→ Du sagst: "OK, naechster Schritt"
+→ Claude macht Funktion B
+→ Volle Kontrolle!
+
+WORKFLOW-BEISPIEL:
+------------------
+User: "Implementiere Daten-Import Feature schrittweise"
+
+Claude: 
+"Ich schlage folgende Schritte vor:
+1. Datei-Lese-Funktion
+2. Daten-Validierung
+3. Datenbank-Import
+4. Error-Handling
+5. Logging
+6. Tests
+
+Soll ich mit Schritt 1 beginnen?"
+
+User: "Ja"
+
+Claude: [Erstellt nur Funktion 1, dann STOPP und WARTEN]
+
+User: "Getestet, funktioniert. Naechster Schritt."
+
+Claude: [Erstellt nur Funktion 2, dann STOPP und WARTEN]
+
+SIGNAL-WOERTER:
+---------------
+"Schrittweise"
+"Schritt fuer Schritt"
+"Einer nach dem anderen"
+"Warte auf Bestaetigung"
+"Nicht alles auf einmal"
+"Erst X, dann auf Nachfrage Y"
+
+→ Claude MUSS dann nach jedem Schritt stoppen!
+
+
+================================================================================
+ITERATIVE VERBESSERUNG
+================================================================================
+
+PATTERN (Funktioniert ueberall):
+--------------------------------
+1. Claude erstellt Basis-Version
+2. Du testest in deiner Umgebung
+3. Du: "Fuege Error-Handling hinzu"
+4. Claude verbessert (nur Error-Handling!)
+5. Du testest
+6. Du: "Optimiere Performance"
+7. Claude optimiert (nur Performance!)
+8. Du testest
+9. Du: "Fuege Logging hinzu"
+10. Claude ergaenzt Logging
+11. Fertig!
+
+REGEL:
+------
+Jede Iteration = EINE Verbesserung
+Nicht mehrere Dinge gleichzeitig aendern!
+
+
+================================================================================
+CLAUDE'S STAERKEN NUTZEN
+================================================================================
+
+1. LANGE KONTEXT-FENSTER (ca. 200K Tokens)
+   ----------------------------------------
+   - Zeige ganze Dateien, nicht nur Snippets
+   - Lade Projekt-Standards hoch
+   - Zeige mehrere verwandte Files gleichzeitig
+   - Gib kompletten Error-Stack
+   - Screenshots von UI-Problemen
+
+2. ARTIFACTS (Code separat anzeigen)
+   ----------------------------------
+   - Verlange Artifacts fuer Code >20 Zeilen
+   - Direkt testbar mit Copy-Button
+   - Syntax-Highlighting
+   - Versionierung innerhalb Chat
+
+3. PROJEKT-ANWEISUNGEN (Custom Instructions)
+   ------------------------------------------
+   - Setze einmal in Settings → Project Instructions
+   - Claude wendet automatisch auf ALLES an
+   - Kein Wiederholen in jedem Chat noetig
+   
+   Beispiel AutoLISP:
+   "Verwende AutoLISP_BEST_PRACTICES.txt
+   - AutoCAD 2024
+   - DokaCAD Kompatibilitaet (Lazy-Init!)
+   - Context-Namespace verpflichtend
+   - Logging verpflichtend
+   - Commit-Format: [vX.Y.Z] Modul/Lib"
+
+4. FILE-UPLOADS
+   -------------
+   - Upload > Copy-Paste bei grossen Files
+   - Mehrere Files gleichzeitig hochladen
+   - Screenshots von Error-Dialogen
+   - Error Logs als Datei
+
+5. CONVERSATION HISTORY
+   ---------------------
+   - Claude erinnert sich an ALLES im Chat
+   - Fruehere Loesungen
+   - Projekt-Struktur
+   - Deine Praeferenzen
+
+
+================================================================================
+KOMMUNIKATIONS-REGELN
+================================================================================
+
+1. KONTEXT IST KOENIG
+   -------------------
+   SCHLECHT:
+   "Fix den Bug"
+
+   GUT (AutoLISP):
+   "In HoeheAufLinie.lsp v1.5.1, Funktion HAL:interpolate:
+   Falsche Diagonale wird gewaehlt bei Hoehen 318.40/318.22/318.40/318.40.
+   Hydrological Classification gibt 'flat' statt 'pit' zurueck.
+   Log-Ausgabe zeigt: classify-quad result=flat diagonal=13
+   Erwartet: result=pit diagonal=24"
+
+   GUT (PowerShell):
+   "In Get-VideoMetadata Funktion:
+   FFmpeg gibt 'mpeg4' zurueck, aber wird nicht erkannt.
+   Fuege 'mpeg4' zur Codec-Liste hinzu."
+
+2. SPEZIFISCHE CONSTRAINTS ANGEBEN
+   --------------------------------
+   SCHLECHT:
+   "Mach es schneller"
+
+   GUT:
+   "Optimiere fuer AutoCAD 2024 mit DokaCAD.
+   Aktuell: 3s fuer 65 Layer Export
+   Ziel: <1s
+   Lazy-Init ist bereits implementiert.
+   VLA-Calls sind in ensure-init."
+
+3. EXISTIERENDEN CODE ZEIGEN
+   --------------------------
+   - Zeige aktuelle Funktion KOMPLETT
+   - Zeige relevante Abhaengigkeiten
+   - Zeige Error Messages (vollstaendig!)
+   - Zeige Log-Ausgabe wenn vorhanden
+   - Screenshot bei UI-Problemen
+
+4. FEHLER REPRODUZIERBAR MACHEN
+   -----------------------------
+   TEMPLATE:
+   
+   Input:       [Was hast du eingegeben/gemacht]
+   Expected:    [Was sollte passieren]
+   Actual:      [Was passiert wirklich]
+   Error:       [Fehlermeldung komplett]
+   Log:         [Relevante Log-Zeilen]
+   Environment: [AutoCAD 2024 Deutsch, DokaCAD, etc.]
+
+5. EXPLIZITE FORMATE VERLANGEN
+   ----------------------------
+   "Gib mir als Copy-Paste ready Code"
+   
+   "Zeige als VORHER/NACHHER:
+   
+   VORHER (Alt):
+   [alter Code]
+   
+   NACHHER (Neu):
+   [neuer Code]"
+
+6. SCHRITTWEISE ANFRAGEN
+   ----------------------
+   "Zeig mir erst Schritt 1, dann warte"
+   "Nur die Funktion, keine Tests noch"
+   "Nach meiner Bestaetigung weiter"
+
+
+================================================================================
+GIT & VERSIONIERUNG
+================================================================================
+
+VERBINDLICHES COMMIT-FORMAT:
+----------------------------
+Claude verwendet IMMER das Format aus GIT-COMMIT-RULES.txt:
+
+[vX.Y.Z] Modul/Lib
+Typ: Kurztitel
+
+KEIN alternatives Format! Kein Datum-basiertes Format!
+
+SEMANTIC VERSIONING (STRIKT):
+-----------------------------
+- PATCH (v1.0.1): Bugfixes
+- MINOR (v1.1.0): Neue Features
+- MAJOR (v2.0.0): Breaking Changes
+
+Claude MUSS:
+- Version vorschlagen bei jeder Code-Aenderung
+- Pruefen ob Version im Code-Header aktualisiert wurde
+- Commit-Message im richtigen Format liefern
+- git add + git commit + git push Befehle bereitstellen
+- Erinnern an fehlende Log-Eintraege bei neuen Funktionen
+
+Claude darf NICHT:
+- Direkt auf GitHub committen (nur Lese-Zugriff!)
+- Ein alternatives Commit-Format vorschlagen
+- Versionen ueberspringen
+
+
+================================================================================
+VERPFLICHTENDE STANDARDS (AUTOLISP-SPEZIFISCH)
+================================================================================
+
+Bei JEDEM AutoLISP-Code den Claude erstellt oder aendert,
+MUESSEN folgende Standards eingehalten werden:
+
+1. CONTEXT-NAMESPACE
+   -----------------
+   Jede Funktion hat Prefix: MNS:funktionsname
+   Jede globale Variable: *MNS:variable*
+   Siehe: AutoLISP_BEST_PRACTICES.txt §1.4
+
+2. LAZY-INIT PATTERN
+   ------------------
+   Kein VLA/Reactor/Dialog auf Top-Level!
+   Alles in ensure-init verschieben.
+   Erste Zeile in jedem c:Befehl: (MNS:ensure-init)
+   Siehe: AutoLISP_BEST_PRACTICES.txt §4
+
+3. APPDATA-ORDNER
+   ---------------
+   %APPDATA%\AutoCAD\Lisp\<ScriptName>\
+   Unterordner: Log\, Config\, Backup\
+   Fuer: Log, Config, Backups, CSVs
+   NIEMALS in Zeichnungsordner oder Temp!
+   Siehe: AutoLISP_BEST_PRACTICES.txt §11.1
+
+4. AUSFUEHRLICHES LOGGING
+   -----------------------
+   Jede Funktion loggt Start, Ende, Ergebnisse, Fehler.
+   Session-basiert, max 5 Sessions, dann rotieren.
+   Log-Name: ScriptName_YYYYMMDD_HHMMSS.log
+   Siehe: AutoLISP_BEST_PRACTICES.txt §11.3
+
+5. CANCEL-DETECTION
+   -----------------
+   wcmatch mit DE+EN Pattern, NICHT member.
+   "*ABBRUCH*,*ABGEBROCHEN*,*CANCEL*,*QUIT*,*EXIT*"
+   Siehe: AutoLISP_BEST_PRACTICES.txt §2.2
+
+6. ERROR-HANDLER
+   --------------
+   Lokaler *error* in jedem c:Befehl.
+   Systemvariablen sichern + wiederherstellen.
+   Fehler ins Log schreiben.
+   Siehe: AutoLISP_BEST_PRACTICES.txt §2.1
+
+7. VLA VARIANT HANDLING
+   ---------------------
+   Getter: vlax-variant-change-type → vlax-vbLong → vlax-variant-value
+   Setter: plain Integer
+   BGR Farbreihenfolge (nicht RGB!)
+   Siehe: AutoLISP_BEST_PRACTICES.txt §3
+
+8. PERSISTENTE CONFIG
+   -------------------
+   Pattern: Lesen → Fallback → Dialog → Speichern
+   In %APPDATA%\AutoCAD\Lisp\<ScriptName>\Config\<ScriptName>.cfg
+   Siehe: AutoLISP_BEST_PRACTICES.txt §11.5
+
+9. README PFLICHT
+   ---------------
+   docs/ScriptName_README.md
+   Mit: Befehle, Config, Log, Namespace, Tech Details
+   Siehe: Lisp_Readme_Rules.txt
+
+10. SHARED LIBRARIES
+    ----------------
+    Gemeinsamer Code in eigene .lsp auslagern.
+    3-Fallback Pfadaufloesung.
+    Siehe: AutoLISP_BEST_PRACTICES.txt §7.2
+
+
+================================================================================
+TESTING & REVIEW (DU bist verantwortlich!)
+================================================================================
+
+IMMER MACHEN:
+-------------
+[ ] Code lesen und verstehen
+[ ] Lokal in AutoCAD testen
+[ ] Edge Cases pruefen:
+    - nil / leere Listen
+    - Leere Strings
+    - Punkt auf Fixpunkt (Division durch 0?)
+    - Sehr grosse Zeichnungen (Performance)
+    - Sonderzeichen in Pfaden/Layer-Namen
+    - Fehlerhafte User-Eingaben / ESC
+[ ] Log-Datei pruefen nach Test
+[ ] Performance messen
+[ ] DokaCAD-Kompatibilitaet testen (Lazy-Init!)
+
+SPRACH-SPEZIFISCH:
+------------------
+
+AutoLISP:
+[ ] Namespace-Prefix auf allen Funktionen?
+[ ] Lazy-Init implementiert?
+[ ] Logging in allen Funktionen?
+[ ] AppData-Ordner wird erstellt? (Lisp\<ScriptName>\Log\, Config\, Backup\)
+[ ] Log-Rotation funktioniert (max 5)?
+[ ] Cancel-Detection DE+EN?
+[ ] Error-Handler mit Sysvar-Restore?
+[ ] VLA Variant Handling korrekt?
+
+PowerShell:
+[ ] Measure-Command fuer Performance
+[ ] Try-Catch vorhanden
+[ ] -LiteralPath fuer User-Pfade
+[ ] Set-StrictMode aktiviert
+
+Excel VBA:
+[ ] Option Explicit gesetzt
+[ ] On Error GoTo vorhanden
+[ ] Objekte mit Set Nothing freigegeben
+
+JavaScript/Node:
+[ ] try-catch fuer async
+[ ] await fuer Promises
+[ ] ESLint clean
+
+NIE BLIND KOPIEREN:
+-------------------
+- Claude kann Fehler machen
+- Claude kennt deine Umgebung nicht 100%
+- Claude testet nicht auf deiner Hardware/AutoCAD
+
+REGEL:
+------
+"Wenn du den Code nicht verstehst → NICHT verwenden!"
+
+
+================================================================================
+VERSION CONTROL
+================================================================================
+
+MIT GIT:
+--------
+1. Code aendern
+2. In AutoCAD testen
+3. Log pruefen
+4. Version im Code-Header erhoehen
+5. git add + commit (Format: [vX.Y.Z] Modul/Lib)
+6. git push
+
+NIEMALS:
+--------
+- Ohne Test committen
+- Production-Code direkt aendern
+- Blind uebernehmen
+- Commit-Format ignorieren
+
+
+================================================================================
+DOKUMENTATION & TESTS VERLANGEN
+================================================================================
+
+AUTOLISP - IMMER FORDERN:
+--------------------------
+"Erstelle MIT:
+- Namespace-Prefix auf allen Funktionen
+- Lazy-Init Pattern (ensure-init)
+- AppData-Ordner + Log-Rotation (max 5 Sessions)
+- Ausfuehrliches Logging (Start, Ende, Werte, Fehler)
+- Lokaler *error* Handler mit wcmatch Cancel-Detection
+- Config in %APPDATA%\AutoCAD\Lisp\ScriptName\Config\
+- Inline-Kommentare fuer komplexe Logik"
+
+POWERSHELL:
+-----------
+"Erstelle MIT:
+- .SYNOPSIS, .DESCRIPTION, .EXAMPLE
+- Try-Catch Error-Handling
+- Inline-Kommentare"
+
+EXCEL VBA:
+----------
+"Erstelle MIT:
+- Function/Sub Kommentar-Header
+- On Error GoTo Error-Handler
+- Inline-Kommentare"
+
+NICHT NUR:
+----------
+"Schreib mir Code"
+→ Bekommst undokumentierten Code ohne Logging!
+
+
+================================================================================
+SICHERHEIT EXPLIZIT ANSPRECHEN
+================================================================================
+
+AUTOLISP SECURITY CHECKLIST:
+-----------------------------
+- Input-Validierung (Punkte, Zahlen, Strings)
+- VLA-Calls mit vl-catch-all-apply absichern
+- Selection Sets freigeben (Memory Leak!)
+- Keine gefaehrlichen Operationen (erase all, purge all)
+- Keine hardcodierten Pfade
+- Keine Passwoerter/API-Keys im Code
+- findfile vor jedem load
+
+UNIVERSAL:
+----------
+- Code-Injection Risiken pruefen
+- SQL-Injection (falls Datenbank)
+- Path-Traversal (../ Attacken)
+- Hardcoded Secrets vermeiden
+
+Claude denkt NICHT automatisch an Security!
+DU musst es explizit verlangen!
+
+
+================================================================================
+CLAUDE'S LIMITATIONEN
+================================================================================
+
+CLAUDE KANN NICHT:
+------------------
+- Auf deine lokale Festplatte zugreifen
+- Deine AutoCAD-Zeichnungen direkt oeffnen
+- Code auf deinem PC ausfuehren
+- DokaCAD-spezifische Befehle testen
+- Direkt auf GitHub committen (nur Lese-Zugriff!)
+
+NICHT PERFEKT IN:
+-----------------
+- Sehr neue Libraries/APIs
+- Proprietaere Systeme (DokaCAD-Interna)
+- Hardware-spezifische Probleme
+- Undokumentierte AutoCAD-Features
+
+KENNT NICHT:
+------------
+- Deine Zeichnungs-Struktur (musst du zeigen)
+- Deine Layer-Konfiguration
+- Deine DokaCAD-Version und Einstellungen
+- Deine Leica-Geraete-Konfiguration
+
+KONSEQUENZ:
+-----------
+Verlasse dich NICHT blind auf Claude!
+Pruefe IMMER selbst!
+
+
+================================================================================
+CLAUDE EXZELLIERT IN
+================================================================================
+
+- Code-Verstaendnis (alle Sprachen)
+- Refactoring (bessere Patterns)
+- Debugging (Fehler finden mit Log-Analyse)
+- Dokumentation (README, Kommentare)
+- Problem-Solving (mehrere Ansaetze)
+- Format-Conversion (JSON ↔ CSV ↔ XML)
+- Erklaerungen (Code vereinfachen)
+- Code-Review (Best Practices)
+- AutoLISP-Patterns (Lee Mac Stil)
+- VLA/COM Debugging
+- DXF-Code Analyse
+
+NUTZE DIESE STAERKEN!
+
+
+================================================================================
+PROFI-TRICKS
+================================================================================
+
+1. MEMORY REFRESH
+   Bei langem Chat (>50 Messages):
+   "Fasse zusammen was wir bisher erreicht haben"
+
+2. ALTERNATIVE ANSAETZE
+   "Zeige mir 3 Wege das zu loesen:
+   1. Einfachste
+   2. Performanteste  
+   3. Wartbarste
+   Mit Vor/Nachteilen"
+
+3. LOG-ANALYSE
+   "Hier ist mein Log. Was laeuft falsch?"
+   → Claude kann Session-Logs analysieren und Fehler finden
+
+4. CODE-VERGLEICH
+   "Vergleiche diese 2 Ansaetze:
+   ANSATZ A: [Code]
+   ANSATZ B: [Code]"
+
+5. RUBBER DUCK DEBUGGING
+   "Ich erklaere dir mein Problem Schritt fuer Schritt.
+   Unterbreche wenn du die Loesung siehst"
+
+6. CHAIN-OF-THOUGHT
+   "Loese Schritt fuer Schritt:
+   1. ANALYSIERE Problem
+   2. ZEIGE 2-3 Loesungen
+   3. EMPFEHLE beste
+   4. IMPLEMENTIERE"
+
+7. LEE MAC REFERENZ
+   "Wie wuerde Lee Mac das loesen?"
+   → Claude kennt Lee Mac Patterns und kann sie anwenden
+
+
+================================================================================
+CHECKLISTE VOR CLAUDE-ANFRAGE
+================================================================================
+
+[ ] Problem klar formuliert?
+[ ] Programmiersprache + Version genannt?
+    - AutoLISP: AutoCAD 2024, DokaCAD
+    - PowerShell: 5.1 / 7+
+    - Excel: 2016 / 2019 / 365
+    - Node.js: 18 / 20
+[ ] Relevante Files/Code gezeigt?
+[ ] Error Messages + Log-Zeilen komplett?
+[ ] Gewuenschtes Ergebnis beschrieben?
+[ ] Constraints angegeben?
+[ ] Schrittweise gewuenscht (bei komplexem Problem)?
+[ ] Standards-Dateien in Projekt hochgeladen?
+
+
+================================================================================
+CHECKLISTE NACH CLAUDE-ANTWORT
+================================================================================
+
+[ ] Code VERSTANDEN?
+[ ] In deiner Umgebung GETESTET?
+[ ] EDGE CASES geprueft?
+[ ] LOG-DATEI kontrolliert?
+[ ] PERFORMANCE gemessen?
+[ ] SICHERHEIT geprueft?
+[ ] DOKUMENTIERT (Kommentare)?
+[ ] NAMESPACE korrekt (alle Funktionen)?
+[ ] LOGGING vollstaendig (alle Funktionen)?
+[ ] VERSION erhoeht?
+[ ] COMMIT vorbereitet ([vX.Y.Z] Format)?
+
+
+================================================================================
+ZUSAMMENFASSUNG: UNIVERSAL BEST PRACTICES
+================================================================================
+
+KERN-PRINZIPIEN:
+----------------
+
+1. SCHRITTWEISE ARBEITEN
+   Einer nach dem anderen, warten auf Bestaetigung
+
+2. VERSTEHEN > KOPIEREN
+   Jede Zeile verstehen, bei Unklarheit fragen
+
+3. TEST, TEST, TEST
+   Nach jedem Schritt testen, Log pruefen
+
+4. KONTEXT GEBEN
+   Sprache + Version, Files/Code zeigen, Errors + Logs komplett
+
+5. SICHERHEIT PRUEFEN
+   Input-Validierung, VLA absichern, Memory Leaks
+
+6. DOKUMENTATION VERLANGEN
+   Kommentare, README, Logging
+
+7. STANDARDS EINHALTEN
+   Namespace, Lazy-Init, AppData, Logging, Commit-Format
+
+AUTOLISP-SPEZIFISCH (IMMER PRUEFEN):
+-------------------------------------
+- Namespace-Prefix?
+- Lazy-Init?
+- AppData-Ordner?
+- Ausfuehrliches Logging (max 5 Sessions)?
+- Cancel-Detection DE+EN?
+- VLA Variant Handling?
+- Config persistent?
+- README komplett?
+- Commit [vX.Y.Z]?
+
+
+DU BIST DER BOSS!
+------------------
+Claude = Werkzeug
+Du = Programmierer
+
+Ein gutes Werkzeug macht dich schneller,
+aber es ersetzt nicht dein Koennen!
+
+
+================================================================================
+VERWEIS AUF WEITERE STANDARDS
+================================================================================
+
+- AutoLISP_BEST_PRACTICES.txt  (AutoLISP Coding Standards)
+- GIT-COMMIT-RULES.txt         (Git Commit Format, verbindlich)
+- Lisp_Readme_Rules.txt        (README Struktur, verbindlich)
+
+
+================================================================================
+ENDE - Claude AI Universal Best Practices v2.0
+================================================================================

@@ -1,0 +1,464 @@
+================================================================================
+GIT COMMIT RULES - HERBERT SCHROTTER
+================================================================================
+Erstellt: 2026-02-12
+Aktualisiert: 2026-03-17
+Version: 2.0
+Fuer: Alle Projekte auf Github
+
+WICHTIG: Dieses Format ist VERBINDLICH fuer alle Projekte!
+         Kein alternatives Format verwenden!
+
+
+================================================================================
+1. COMMIT MESSAGE FORMAT (Hybrid)
+================================================================================
+
+EINFACH (< 5 Zeilen geaendert):
+------------------------------
+[vX.Y.Z] Modul/Lib
+Typ: Kurztitel
+
+
+KOMPLEX (Feature, Multi-File):
+------------------------------
+[vX.Y.Z] Modul/Lib
+Typ: Kurztitel
+
+2-4 Zeilen Kontext (WARUM, nicht WAS)
+
+Dateien:
+- Datei1.lsp
+- Datei2.lsp
+
+
+REGELN:
+-------
+- Version IMMER in [vX.Y.Z] Format
+- Modul/Lib-Name NACH Version
+- Typ (Feature/Fix/Change/Refactor/Perf/Docs) verwenden
+- Kurztitel: max. 50 Zeichen, Englisch
+- Body: max. 72 Zeichen pro Zeile
+- Leerzeile zwischen Kurztitel und Body
+- WARUM beschreiben, nicht WAS (Code zeigt WAS)
+- Bei Multi-File: "Dateien:"-Sektion mit Auflistung
+
+VERBINDLICH:
+------------
+Dieses Format gilt fuer ALLE Commits. Kein Datum-basiertes
+Format, kein alternatives Schema. Immer [vX.Y.Z] zuerst.
+
+
+================================================================================
+2. COMMIT-TYPEN
+================================================================================
+
+Feature:   Neue Funktionalitaet
+Fix:       Bugfix
+Change:    Verhaltensaenderung (bestehende Funktion anders)
+Refactor:  Code-Umstrukturierung (keine Verhaltensaenderung)
+Perf:      Performance-Verbesserung
+Docs:      Nur Dokumentation (README, Kommentare)
+
+
+================================================================================
+3. MODUL/LIB-NAMEN
+================================================================================
+
+AutoLISP:
+---------
+- LayerExportImport.lsp   # Layer-Sync Hauptscript
+- LayerPlansatz.lsp       # Plansatzmanager
+- SetHoehenkote.lsp       # Hoehenkote setzen
+- HoeheAufLinie.lsp       # Hoehen-Interpolation Linie
+- HoeheAufFlaeche.lsp     # Hoehen-Interpolation Flaeche
+- AutoLoadDimStyle.lsp    # DimStyle Auto-Laden
+- BgColor.lsp             # Hintergrundfarbe Toggle
+- ArcZ.lsp                # 3D-Boegen
+- BlockImport.lsp         # Shared Library
+
+PowerShell:
+-----------
+- PhotoFolder             # Hauptmodul
+- Lib_Http                # HTTP Lib
+- Lib_FileSystem          # FileSystem Lib
+- Lib_VideoThumbs         # Video Lib
+- UI                      # Frontend
+- start.ps1               # Launcher
+
+Bei Multi-File mit + verbinden:
+- SetHoehenkote + BlockImport
+- PhotoFolder + UI
+
+
+================================================================================
+4. BEISPIELE - AUTOLISP
+================================================================================
+
+SIMPLE FIX:
+-----------
+[v1.5.1] SetHoehenkote.lsp
+Fix: Error handler now restores OSMODE
+
+
+MEDIUM CHANGE:
+--------------
+[v1.2.0] HoeheAufLinie.lsp
+Feature: Automatic projection to direct line
+
+Projects query point to line between fixed points
+Eliminates manual axis selection
+
+Dateien:
+- lisp/HoeheAufLinie.lsp
+
+
+COMPLEX REFACTOR:
+-----------------
+[v1.1.0] SetHoehenkote + BlockImport
+Refactor: Extract block import to shared library
+
+Removes ~250 lines of duplicated code
+Uses lib/BlockImport.lsp for shared functionality
+Intelligent 3-fallback path search
+
+Dateien:
+- lisp/SetHoehenkote.lsp
+- lisp/lib/BlockImport.lsp
+
+
+BUGFIX MIT KONTEXT:
+-------------------
+[v2.3.1] LayerExportImport.lsp
+Fix: GUID read returns string not variant
+
+GetCustomByIndex returns strings directly in some contexts.
+LXI:safe-variant-value now checks type before reading.
+Prevents duplicate GUID creation on every LAYSYNC call.
+
+Dateien:
+- lisp/LayerExportImport.lsp
+
+
+LAZY-INIT REFACTOR:
+-------------------
+[v2.3.0] LayerExportImport.lsp
+Refactor: Lazy-Init pattern for DokaCAD compatibility
+
+All VLA calls, reactor setup, and dialogs deferred to
+first manual command via LXI:ensure-init.
+Prevents collision with DokaCAD initialization.
+
+Dateien:
+- lisp/LayerExportImport.lsp
+
+
+VLA BUG:
+--------
+[v1.6.0] BgColor.lsp
+Fix: VLA Variant type 19 extraction for color getter
+
+Uses vlax-variant-change-type + vlax-vbLong pattern.
+Writes use plain integers, reads need variant extraction.
+
+Dateien:
+- lisp/BgColor.lsp
+
+
+DOCS ONLY:
+----------
+[v1.6.3] HoeheAufLinie.lsp
+Docs: Updated README with new features
+
+Added XLINE construction line, log file section,
+comparison table SetHK vs HAL, debug command docs.
+
+Dateien:
+- docs/HoeheAufLinie_README.md
+
+
+LOGGING HINZUGEFUEGT:
+---------------------
+[v1.7.0] SetHoehenkote.lsp
+Feature: Add mandatory logging to AppData
+
+Session-based log rotation (max 5 sessions).
+Logs all commands, user inputs, calculations, errors.
+AppData path: %APPDATA%\AutoCAD\SetHoehenkote\
+
+Dateien:
+- lisp/SetHoehenkote.lsp
+
+
+================================================================================
+5. BEISPIELE - POWERSHELL
+================================================================================
+
+SIMPLE FIX:
+-----------
+[v1.10.1] Lib_VideoThumbs
+Fix: Add mpeg4 to conversion list
+
+
+MEDIUM CHANGE:
+--------------
+[v1.10.1] Lib_PhotoGallery_UI
+Fix: Video viewer min-size 720px
+
+Prevents tiny display for low-res videos.
+
+Dateien:
+- Lib/Lib_PhotoGallery_UI.ps1
+
+
+COMPLEX FEATURE:
+----------------
+[v1.10.1] Lib_FlattenAndMove
+Feature: Flatten & Move with number extraction
+
+Simplifies Root/L1/L2/L3/*.jpg → Target/Root/L3/*.jpg
+Extracts 2-digit numbers from all path levels
+Renames: 01_03_martina (underscore separator)
+
+Dateien:
+- Lib/Lib_FlattenAndMove.ps1
+
+
+MULTI-MODULE:
+-------------
+[v1.10.1] PhotoFolder + UI
+Feature: Flatten & Move integration
+
+Browser button triggers /flattenandmove endpoint
+Non-blocking: dialogs in PowerShell, browser stays open
+
+Dateien:
+- Module/PhotoFolder-ReviewAndDelete.ps1
+- Lib/Lib_PhotoGallery_UI.ps1
+
+
+================================================================================
+6. VERSIONIERUNG (Semantic Versioning - STRIKT!)
+================================================================================
+
+FORMAT:
+-------
+vMAJOR.MINOR.PATCH
+
+BEISPIEL:
+---------
+v2.3.1
+  |  |  └─ PATCH: Bugfixes
+  |  └──── MINOR: Neue Features
+  └─────── MAJOR: Breaking Changes
+
+
+WANN WELCHE VERSION:
+--------------------
+PATCH (v1.0.0 → v1.0.1):
+- Bugfixes
+- Kleine Korrekturen
+- Performance-Verbesserungen (ohne API-Aenderung)
+- Dokumentations-Fixes im Code
+
+MINOR (v1.0.0 → v1.1.0):
+- Neue Features
+- Neue Befehle
+- Neue Funktionen (backward compatible)
+- Erweiterte Funktionalitaet
+- Logging/Config hinzugefuegt
+
+MAJOR (v1.0.0 → v2.0.0):
+- Breaking Changes
+- API-Aenderungen
+- Entfernte Funktionen/Befehle
+- Grundlegende Umstrukturierung
+- Namespace-Aenderungen
+
+REGELN:
+-------
+- Version IMMER erhoehen bei Aenderungen
+- NIEMALS gleiche Version fuer verschiedenen Code
+- Patch fuer JEDEN Bugfix (auch kleine)
+- Minor fuer JEDES neue Feature
+- Major nur bei Breaking Changes
+- Kein Ueberspringen (v1.0.0 → v1.0.1, NICHT v1.0.0 → v1.0.5)
+
+
+================================================================================
+7. GIT TAG FORMAT
+================================================================================
+
+BEFEHL:
+-------
+git tag -a v2.3.1 -m "[v2.3.1] ProjectName
+Release: Kurztitel
+
+Fixes:
+- Fix 1
+- Fix 2
+
+Features:
+- Feature 1
+- Feature 2"
+
+
+BEISPIEL AUTOLISP:
+------------------
+git tag -a v2.3.1 -m "[v2.3.1] AutoCAD-Tools
+Release: Lazy-Init and GUID Fix
+
+Features:
+- Lazy-Init pattern for DokaCAD compatibility
+- GUID read-only function for startup context
+
+Fixes:
+- GUID read: safe-variant-value for string/variant
+- Cancel detection: wcmatch DE+EN pattern"
+
+
+BEISPIEL POWERSHELL:
+--------------------
+git tag -a v1.10.1 -m "[v1.10.1] PhotoFolder
+Release: Flatten & Move Integration
+
+Features:
+- Flatten & Move with number extraction
+- Browser integration
+- Non-blocking dialogs
+
+Fixes:
+- Video viewer min-size
+- MPEG4 conversion support"
+
+
+================================================================================
+8. COMMIT + PUSH SCRIPT (Copy-Paste)
+================================================================================
+
+AUTOLISP - EINFACHER FIX:
+-------------------------
+git add lisp/SetHoehenkote.lsp
+git commit -m "[v1.5.1] SetHoehenkote.lsp
+Fix: Error handler now restores OSMODE"
+git push origin main
+
+
+AUTOLISP - KOMPLEXES FEATURE:
+-----------------------------
+git add lisp/HoeheAufLinie.lsp
+git commit -m "[v1.2.0] HoeheAufLinie.lsp
+Feature: Automatic projection to direct line
+
+Projects query point to line between fixed points
+Eliminates manual axis selection
+
+Dateien:
+- lisp/HoeheAufLinie.lsp"
+git push origin main
+
+
+AUTOLISP - MULTI-FILE:
+----------------------
+git add lisp/SetHoehenkote.lsp lisp/lib/BlockImport.lsp
+git commit -m "[v1.1.0] SetHoehenkote + BlockImport
+Refactor: Extract block import to library
+
+Removes ~250 lines of duplicated code
+Uses lib/BlockImport.lsp for shared functionality
+
+Dateien:
+- lisp/SetHoehenkote.lsp
+- lisp/lib/BlockImport.lsp"
+git push origin main
+
+
+AUTOLISP - DOCS:
+----------------
+git add docs/HoeheAufLinie_README.md
+git commit -m "[v1.6.3] HoeheAufLinie.lsp
+Docs: Updated README with new features"
+git push origin main
+
+
+POWERSHELL - EINFACHER FIX:
+---------------------------
+git add Lib/Lib_VideoThumbs.ps1
+git commit -m "[v1.10.1] Lib_VideoThumbs
+Fix: Add mpeg4 to conversion list"
+git push origin main
+
+
+================================================================================
+9. COMMIT-CHECKLISTE
+================================================================================
+
+Vor jedem Commit pruefen:
+
+[ ] Version korrekt erhoeht? (PATCH/MINOR/MAJOR)
+[ ] Format: [vX.Y.Z] Modul/Lib? (NICHT Datum-Format!)
+[ ] Commit-Typ gewaehlt? (Feature/Fix/Change/Refactor/Perf/Docs)
+[ ] Kurztitel aussagekraeftig? (max 50 Zeichen, Englisch)
+[ ] WARUM beschrieben (bei komplexen Changes)?
+[ ] Dateien-Liste vollstaendig (bei Multi-File)?
+[ ] Code getestet?
+[ ] Keine Debug-Ausgaben im Code? (oder hinter *debug-mode*)
+[ ] Log-Meldungen aktuell? (neue Funktionen geloggt?)
+[ ] Version im Code-Header aktualisiert?
+[ ] Rechtschreibung geprueft?
+
+
+================================================================================
+10. BRANCH-STRATEGIE
+================================================================================
+
+MAIN:
+-----
+- Immer stabil
+- Nur getesteter Code
+- Alle Commits tagged
+
+DEVELOP (optional):
+-------------------
+- Entwicklungs-Branch
+- Features hier entwickeln
+- Merge zu main nach Test
+
+FEATURE-BRANCHES (optional):
+----------------------------
+- feature/plansatzmanager
+- feature/filter-sync
+- Merge zu develop nach Fertigstellung
+
+FUER SOLO-PROJEKTE:
+------------------
+→ Direkt auf main committen ist OK
+→ Branches nur fuer grosse Features (z.B. Plansatzmanager)
+
+
+================================================================================
+11. WICHTIGE REGELN - ZUSAMMENFASSUNG
+================================================================================
+
+VERBINDLICH:
+- Version IMMER in [vX.Y.Z] Format (KEIN alternatives Format!)
+- Modul/Lib-Name nach Version angeben
+- Typ (Feature/Fix/Change/Refactor/Perf/Docs) verwenden
+- WARUM beschreiben, nicht WAS (Code zeigt WAS)
+- Bei Multi-File: "Dateien:"-Sektion mit Auflistung
+- Kurztitel: max. 50 Zeichen, Englisch
+- Body: max. 72 Zeichen pro Zeile
+- Leerzeile zwischen Kurztitel und Body
+- Semantic Versioning strikt einhalten
+- Version im Code-Header UND im Commit muessen uebereinstimmen
+
+CLAUDE-SPEZIFISCH:
+- Claude verwendet IMMER das [vX.Y.Z] Format
+- Claude schlaegt NIEMALS ein Datum-basiertes Format vor
+- Claude prueft ob Version im Code und Commit uebereinstimmen
+- Claude erinnert an fehlende Log-Eintraege bei neuen Funktionen
+
+
+================================================================================
+ENDE - Git Commit Rules v2.0
+================================================================================

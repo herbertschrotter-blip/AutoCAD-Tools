@@ -1,0 +1,1428 @@
+================================================================================
+                   AutoLISP BEST PRACTICES - PROFI-RICHTLINIEN
+================================================================================
+
+Zusammengestellt aus: Autodesk Developer's Guide, Lee Mac Programming,
+CADnotes, AfraLISP, Community-Empfehlungen,
+Praxis-Erkenntnisse Herbert Schrotter (AutoCAD-Tools Projekt)
+
+Datum: 2026-03-17
+Version: 2.0
+
+
+================================================================================
+1. VARIABLEN-MANAGEMENT
+================================================================================
+
+1.1 LOKALISIERUNG (CRITICAL!)
+------------------------------
+
+SCHLECHT - Globale Variable:
+----------------------------
+(defun c:MyCommand ()
+  (setq pt1 (getpoint))
+  ...
+)
+
+GUT - Lokale Variable:
+---------------------
+(defun c:MyCommand ( / pt1 pt2 height)  ; Nach "/" = lokal
+  (setq pt1 (getpoint))
+  ...
+)
+
+WARUM WICHTIG:
+- Globale Variablen bleiben in AutoCAD aktiv
+- Koennen andere Scripts stoeren
+- Memory Leak vermeiden
+- Alle Variablen landen im "atom list" von AutoCAD
+
+
+1.2 MEMORY MANAGEMENT
+---------------------
+
+Variablen auf nil setzen wenn nicht mehr benoetigt:
+
+(setq big-list nil)  ; Gibt Speicher frei
+
+Jede Variable verbraucht Speicher. Gut fuer Performance bei grossen Datenmengen.
+
+
+1.3 NAMING CONVENTIONS
+----------------------
+
+GUT - Sprechende Namen:
+-----------------------
+(setq insertion-point ...)
+(setq scale-factor ...)
+(setq *config-file* ...)  ; Globale mit *...*
+(setq PT1 ...)            ; Grossbuchstaben fuer wichtige Werte
+
+SCHLECHT:
+--------
+(setq x ...)
+(setq temp ...)
+(setq a ...)
+
+NIEMALS VERWENDEN:
+-----------------
+- PI, T, PAUSE (vordefiniert)
+- Funktionsnamen wie ANGLE, DISTANCE
+- CAR, CDR, LIST, etc.
+
+KONVENTIONEN:
+- Symbole sind nicht case-sensitive
+- Kapitalisierung hilft Lesbarkeit
+- Verwende Bindestriche oder Unterstriche: my-var oder my_var
+
+
+1.4 CONTEXT-NAMESPACE (VERPFLICHTEND!)
+--------------------------------------
+
+Jedes Script MUSS einen eindeutigen Namespace-Prefix verwenden.
+Verhindert Kollisionen zwischen Scripts.
+
+FORMAT:
+-------
+Prefix:funktionsname     (fuer interne Funktionen)
+*Prefix:variable*        (fuer globale Variablen)
+
+BEISPIELE AUS DEM PROJEKT:
+--------------------------
+LXI:   = LayerExportImport     (LXI:ensure-init, LXI:read-master)
+LXP:   = LayerPlansatz         (LXP:ensure-assigned, LXP:get-sync-targets)
+BGC:   = BgColor               (BGC:toggle, *BGC:state-model*)
+HAL:   = HoeheAufLinie         (HAL:interpolate, HAL:log-write)
+HAF:   = HoeheAufFlaeche       (HAF:classify-quad)
+SetHK: = SetHoehenkote         (SetHK:place-block)
+ADS:   = AutoLoadDimStyle      (ADS:load-master, ADS:get-config)
+
+REGELN:
+- 2-5 Buchstaben, Grossbuchstaben
+- Doppelpunkt als Trenner
+- Alle internen Funktionen MUESSEN Prefix haben
+- Nur c:Befehle haben KEINEN Prefix
+- Globale Variablen: *PREFIX:name*
+
+
+================================================================================
+2. FEHLERBEHANDLUNG (von Lee Mac)
+================================================================================
+
+2.1 LOKALE ERROR-HANDLER
+------------------------
+
+(defun c:MyCommand ( / *error* old-osmode old-cmdecho)
+  
+  ;; Lokaler Error-Handler
+  (defun *error* (msg)
+    ;; ESC und Cancel unterdruecken (DE + EN)
+    (if (not (wcmatch (strcase msg) "*ABBRUCH*,*ABGEBROCHEN*,*CANCEL*,*QUIT*,*EXIT*"))
+      (princ (strcat "\nFehler: " msg))
+    )
+    ;; Systemvariablen wiederherstellen
+    (if old-osmode (setvar "OSMODE" old-osmode))
+    (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
+    ;; In Log schreiben
+    (MNS:log-write "ERROR" (strcat "Error-Handler: " msg))
+    (princ)
+  )
+  
+  ;; Systemvariablen sichern
+  (setq old-osmode (getvar "OSMODE"))
+  (setq old-cmdecho (getvar "CMDECHO"))
+  
+  ;; Setzen fuer Command
+  (setvar "OSMODE" 0)
+  (setvar "CMDECHO" 0)
+  
+  ; ... DEIN CODE ...
+  
+  ;; Cleanup (bei normalem Ende)
+  (setvar "OSMODE" old-osmode)
+  (setvar "CMDECHO" old-cmdecho)
+  (princ)
+)
+
+WICHTIG:
+--------
+- *error* lokalisieren (in defun-Parameter)
+- System-Variablen IMMER sichern & wiederherstellen
+- Cancel-Detection mit wcmatch (DE + EN), NICHT mit member
+- Cleanup sowohl bei Erfolg als auch bei Fehler
+- IMMER in Log schreiben (siehe Abschnitt 11)
+
+
+2.2 CANCEL-DETECTION (WCMATCH PATTERN)
+--------------------------------------
+
+SCHLECHT - Nur englisch, nur exakte Matches:
+--------------------------------------------
+(if (not (member msg '("Function cancelled" "quit / exit abort")))
+  (princ (strcat "\nFehler: " msg))
+)
+
+GUT - Deutsch + Englisch, Pattern-basiert (Lee Mac Stil):
+---------------------------------------------------------
+(defun MNS:cancel-p (msg)
+  ;; Prueft ob User abgebrochen hat (ESC, Cancel, etc.)
+  ;; Funktioniert in deutscher UND englischer AutoCAD-Version
+  (wcmatch (strcase msg) 
+    "*ABBRUCH*,*ABGEBROCHEN*,*CANCEL*,*QUIT*,*EXIT*"
+  )
+)
+
+;; Verwendung im Error-Handler:
+(defun *error* (msg)
+  (if (not (MNS:cancel-p msg))
+    (princ (strcat "\nFehler: " msg))
+  )
+  ;; ... Cleanup ...
+)
+
+
+2.3 VL-CATCH-ALL-APPLY FUER ROBUSTE CALLS
+------------------------------------------
+
+Fuer Automation/COM Calls oder fehleranfaellige Operationen:
+
+(setq result 
+  (vl-catch-all-apply 'vla-copyobjects
+    (list dbx 'copyobjects (list block-obj) dest-collection)
+  )
+)
+
+(if (vl-catch-all-error-p result)
+  (progn
+    (MNS:log-write "ERROR" 
+      (strcat "VLA-Fehler: " (vl-catch-all-error-message result)))
+    nil
+  )
+  result  ; Erfolg
+)
+
+VORTEILE:
+- Programm laeuft weiter trotz Fehler
+- Fehler lokal behandeln
+- Besser als globaler *error* fuer spezifische Operationen
+
+
+================================================================================
+3. VLA / COM VARIANT HANDLING (CRITICAL!)
+================================================================================
+
+3.1 GETTER: VARIANT-EXTRAKTION
+------------------------------
+
+PROBLEM:
+VLA-Getter wie vla-get-GraphicsWinModelBackgrndColor geben
+COM Variants (Typ 19) zurueck, NICHT plain Numbers!
+
+FEHLER:
+-------
+(setq color (vla-get-GraphicsWinModelBackgrndColor display))
+(if (= color 16777215) ...)  ; CRASH: numberp: #<variant 19 16777215>
+
+LOESUNG:
+--------
+(setq color 
+  (vlax-variant-value
+    (vlax-variant-change-type 
+      (vla-get-GraphicsWinModelBackgrndColor display)
+      vlax-vbLong
+    )
+  )
+)
+
+PATTERN (Wiederverwendbar):
+--------------------------
+(defun MNS:vla-get-color (vla-getter-result / )
+  ;; Extrahiert Integer aus VLA COM Variant (Typ 19)
+  ;; Getter geben Variants, Setter akzeptieren plain Integers
+  (vlax-variant-value
+    (vlax-variant-change-type vla-getter-result vlax-vbLong)
+  )
+)
+
+MERKE:
+- VLA GETTER → Variant → muss extrahiert werden
+- VLA SETTER → akzeptiert plain Integer direkt
+- VLA Farbwerte sind BGR (B*65536 + G*256 + R), NICHT RGB!
+
+
+3.2 GetCustomByIndex QUIRK
+--------------------------
+
+PROBLEM:
+vla-GetCustomByIndex gibt manchmal Strings DIREKT zurueck,
+manchmal Variants. Abhaengig vom Kontext.
+
+LOESUNG - Safe Variant Value Pattern:
+-------------------------------------
+(defun MNS:safe-variant-value (val / )
+  ;; Sicheres Auslesen: String oder Variant
+  ;; Verwendet in: LayerExportImport.lsp (GUID-Lesen)
+  (cond
+    ((= (type val) 'STR) val)                    ; Bereits String
+    ((= (type val) 'VLA-OBJECT) val)             ; VLA Objekt
+    ((not (null val))                             ; Variant
+      (vl-catch-all-apply 'vlax-variant-value (list val))
+    )
+    (T nil)
+  )
+)
+
+
+3.3 NICHT SETZBARE EIGENSCHAFTEN (AutoCAD 2024)
+-----------------------------------------------
+
+BEKANNTE EINSCHRAENKUNGEN:
+- setvar "BKGDCOLOR" → READ-ONLY in AutoCAD 2024
+  → Verwende VLA Preferences Object stattdessen
+- vla-put-BlockEditorBackgrndColor → EXISTIERT NICHT
+  → Block Editor Background kann NICHT per AutoLISP gesetzt werden
+- Immer vl-catch-all-apply bei VLA-Setter verwenden
+  → Faengt unbekannte Read-Only Faelle ab
+
+
+================================================================================
+4. LAZY-INIT PATTERN (CRITICAL bei DokaCAD!)
+================================================================================
+
+4.1 DAS PROBLEM
+---------------
+
+Bei Verwendung von DokaCAD (oder anderen Plugins die beim Start
+initialisieren) fuehren VLA-Calls, Reactor-Setup oder Dialoge
+zur LADEZEIT zu Kollisionen:
+
+SYMPTOME:
+- "Ungueltiger Optionstitel" beim Oeffnen
+- "Kann nicht zu LISP zurueckkehren"
+- Unerwartete Speichern-Dialoge
+- AutoCAD-Absturz beim Zeichnungsstart
+
+URSACHE:
+- Plugin initialisiert sich
+- Dein Script macht gleichzeitig VLA-Calls
+- → Konflikt, undefined behavior
+
+
+4.2 DIE LOESUNG: LAZY-INIT
+---------------------------
+
+ALLE VLA-Calls, Reactor-Setup und Dialoge auf den ERSTEN
+manuellen Befehlsaufruf verschieben.
+
+PATTERN:
+--------
+;; Globaler Init-Status
+(setq *MNS:initialized* nil)
+
+;; Init-Funktion (wird nur 1x ausgefuehrt)
+(defun MNS:ensure-init ( / )
+  (if (not *MNS:initialized*)
+    (progn
+      ;; VLA laden
+      (vl-load-com)
+      
+      ;; Reactor Setup
+      (MNS:setup-reactor)
+      
+      ;; Config laden
+      (MNS:load-config)
+      
+      ;; Notification pruefen
+      (MNS:check-notifications)
+      
+      ;; Fertig
+      (setq *MNS:initialized* T)
+      (MNS:log-write "INFO" "Initialisierung abgeschlossen")
+    )
+  )
+)
+
+;; In JEDEM c:Befehl als erste Zeile:
+(defun c:MyCommand ( / *error* ...)
+  (MNS:ensure-init)  ; ← IMMER ERSTE ZEILE!
+  ...
+)
+
+REGELN:
+-------
+- KEIN vl-load-com auf Top-Level
+- KEIN Reactor-Setup auf Top-Level
+- KEINE Dialoge auf Top-Level
+- KEIN vla-get-... auf Top-Level
+- NUR (princ) auf Top-Level erlaubt
+- ALLES andere in ensure-init verschieben
+
+GUID-LESEN BEI STARTUP (Spezialfall):
+--------------------------------------
+Fuer automatische Checks beim Zeichnungsstart eine
+READ-ONLY Variante verwenden die nil zurueckgibt statt
+neue Daten zu erzeugen:
+
+(defun MNS:dwg-guid-read ( / )
+  ;; Liest GUID, erzeugt KEINE neue wenn nicht vorhanden
+  ;; Sicher fuer Startup-Kontext
+  ...
+  ;; Returns: GUID-String oder nil
+)
+
+
+================================================================================
+5. CODE-STRUKTUR & LESBARKEIT
+================================================================================
+
+5.1 FORMATIERUNG
+----------------
+
+GUT - Einrueckung, Kommentare:
+-----------------------------
+(defun calculate-height (p1 h1 p2 h2 pg / vpf vpg scalar)
+  ;; Vektor von p1 zu p2
+  (setq vpf (list (- (car p2) (car p1)) 
+                  (- (cadr p2) (cadr p1))))
+  
+  ;; Skalarprojektion
+  (setq scalar (/ (+ (* (car vpg) (car vpf)) 
+                     (* (cadr vpg) (cadr vpf))) 
+                  (expt (distance p1 p2) 2)))
+  
+  scalar
+)
+
+REGELN:
+-------
+- Einrueckung fuer Struktur (2-4 Leerzeichen)
+- Kommentare fuer WARUM, nicht WAS
+- Leerzeilen fuer logische Bloecke
+- Schliessende Klammern kommentieren bei langen Funktionen:
+  ) ;end setq
+  ) ;end defun
+- AutoLISP ignoriert Leerzeichen und Zeilenumbrueche - nutze sie!
+
+
+5.2 KOMMENTARE
+--------------
+
+;;; Datei-Header - Drei Semikolons
+;;; Was macht die Datei, Version, Autor, Installation
+
+;; Funktions-Header - Zwei Semikolons
+;; Beschreibung, Parameter, Rueckgabe
+
+; Inline-Kommentar - Ein Semikolon
+(setq x 10)  ; Temporaerer Wert
+
+;| 
+  Mehrzeilige Kommentare
+  fuer ausfuehrliche Erklaerungen
+  oder temporaeres Auskommentieren
+|;
+
+BEISPIEL GUTER HEADER:
+----------------------
+;;; CalculateHeight.lsp
+;;; Berechnet interpolierte Hoehen zwischen zwei Fixpunkten
+;;; 
+;;; Version: 1.0.0
+;;; Datum: 2026-03-17
+;;; Autor: Herbert Schrotter
+;;; Namespace: CHT (CalculateHeight)
+;;;
+;;; AppData: %APPDATA%\AutoCAD\Lisp\CalculateHeight\
+;;;   - Log:    Log\CHT_YYYYMMDD_HHMMSS.log
+;;;   - Config: Config\CalculateHeight.cfg
+;;;
+;;; Installation:
+;;; 1. APPLOAD ausfuehren
+;;; 2. CalculateHeight.lsp laden
+;;;
+;;; Befehle:
+;;; CHT - Hoehe berechnen
+
+
+================================================================================
+6. PERFORMANCE
+================================================================================
+
+6.1 REDUNDANTE OPERATIONEN VERMEIDEN
+------------------------------------
+
+SCHLECHT - Mehrfach berechnen:
+------------------------------
+(repeat 100
+  (setq dist (distance pt1 pt2))
+  (setq angle (angle pt1 pt2))
+)
+
+GUT - Einmal berechnen:
+----------------------
+(setq dist (distance pt1 pt2))
+(setq angle (angle pt1 pt2))
+(repeat 100
+  ; ... verwendet dist und angle ...
+)
+
+
+6.2 COMMAND VS. VLA VS. ENTMAKEX
+---------------------------------
+
+LANGSAM - Command function:
+--------------------------
+(repeat 1000
+  (command "line" pt1 pt2 "")
+)
+
+SCHNELLER - VLA/ActiveX:
+-----------------------
+(setq modelspace (vla-get-modelspace 
+                   (vla-get-activedocument (vlax-get-acad-object))))
+(repeat 1000
+  (vla-addline modelspace 
+    (vlax-3d-point pt1) 
+    (vlax-3d-point pt2))
+)
+
+DIREKT - entmakex (fuer 3D und komplexe Entities):
+--------------------------------------------------
+(entmakex 
+  (list '(0 . "ARC")
+        '(100 . "AcDbEntity")
+        (cons 8 layer-name)
+        '(100 . "AcDbCircle")
+        (cons 10 center-ocs)
+        (cons 40 radius)
+        '(100 . "AcDbArc")
+        (cons 50 start-angle)
+        (cons 51 end-angle)
+        (cons 210 normal)
+  )
+)
+
+FAUSTREGEL:
+-----------
+- Einzelne Operationen: command ist OK
+- Schleifen/viele Objekte: VLA ist deutlich schneller
+- 3D mit OCS-Transformation: entmakex (command ist unzuverlaessig!)
+- command ist einfacher zu lesen/debuggen
+- VLA braucht (vl-load-com) → nur in ensure-init!
+- entmakex braucht DXF-Codes (siehe DXF Reference)
+
+
+6.3 SELECTION SETS EFFIZIENT
+----------------------------
+
+GUT - Mit Filter (schneller):
+-----------------------------
+(ssget "X" '((0 . "LINE")(8 . "0")))  ; Nur Lines auf Layer 0
+
+SCHLECHT - Alles holen, dann filtern:
+-------------------------------------
+(setq all (ssget "X"))
+; ... dann manuell filtern ...
+
+Filter-Codes direkt in ssget nutzen!
+
+
+6.4 VERMEIDE REDUNDANTE ENTGET CALLS
+------------------------------------
+
+SCHLECHT:
+--------
+(setq layer (cdr (assoc 8 (entget ent))))
+(setq color (cdr (assoc 62 (entget ent))))
+(setq ltype (cdr (assoc 6 (entget ent))))
+
+GUT:
+----
+(setq ent-data (entget ent))
+(setq layer (cdr (assoc 8 ent-data)))
+(setq color (cdr (assoc 62 ent-data)))
+(setq ltype (cdr (assoc 6 ent-data)))
+
+
+6.5 LEE MAC PERFORMANCE-PATTERNS
+---------------------------------
+
+DEKREMENTIERENDE INDEX-SCHLEIFE (schneller als inkrementierende):
+----------------------------------------------------------------
+(setq i (sslength ss))
+(while (> (setq i (1- i)) -1)
+  (setq ent (ssname ss i))
+  ; ... verarbeiten ...
+)
+
+IF-CHECK VOR SETVAR (vermeidet unnoetige Aufrufe):
+-------------------------------------------------
+(if (/= (getvar "CMDECHO") 0)
+  (setvar "CMDECHO" 0)
+)
+
+
+================================================================================
+7. DATEI-ORGANISATION
+================================================================================
+
+7.1 STRUKTUR EINER .LSP DATEI
+-----------------------------
+
+;;; ========== HEADER ==========
+;;; Name, Version, Namespace, Beschreibung
+;;; AppData-Pfade (Log, Config)
+;;; Installation, Befehle
+
+;;; ========== BIBLIOTHEKEN LADEN ==========
+;;; NUR mit findfile + Fehlerbehandlung, KEINE VLA-Calls!
+(if (not (findfile "lib/BlockImport.lsp"))
+  (princ "\nWARNUNG: BlockImport.lsp nicht gefunden!")
+  (load (findfile "lib/BlockImport.lsp"))
+)
+
+;;; ========== KONFIGURATION (KONSTANTEN) ==========
+(setq *MNS:version* "1.0.0")
+(setq *MNS:namespace* "MNS")
+(setq *MNS:appdata-folder* "MeinScript")  ; Ordnername in %APPDATA%
+
+;;; ========== GLOBALE VARIABLEN ==========
+(setq *MNS:initialized* nil)
+(setq *MNS:log-session-id* nil)
+
+;;; ========== APPDATA & LOGGING (frueh definieren!) ==========
+(defun MNS:get-appdata-path ( / ) ...)
+(defun MNS:ensure-appdata ( / ) ...)
+(defun MNS:log-write (level message / ) ...)
+(defun MNS:log-rotate ( / ) ...)
+
+;;; ========== HILFSFUNKTIONEN ==========
+(defun MNS:helper-function (arg1 arg2 / local1 local2) ...)
+
+;;; ========== CONFIG-MANAGEMENT ==========
+(defun MNS:load-config ( / ) ...)
+(defun MNS:save-config ( / ) ...)
+
+;;; ========== LAZY-INIT ==========
+(defun MNS:ensure-init ( / ) ...)
+
+;;; ========== HAUPTFUNKTIONEN ==========
+(defun c:MainCommand ( / *error* var1 var2)
+  (MNS:ensure-init)
+  (defun *error* (msg) ...)
+  ...
+)
+
+;;; ========== INITIALISIERUNG (NUR PRINC!) ==========
+(princ (strcat "\nMeinScript.lsp v" *MNS:version* " geladen."))
+(princ "\nBefehle: MainCommand")
+(princ)
+
+
+7.2 SHARED LIBRARY ARCHITECTURE
+--------------------------------
+
+Gemeinsam genutzte Funktionen in eigene Library auslagern.
+Verhindert Code-Duplikation ueber Scripts hinweg.
+
+BEISPIEL: BlockImport.lsp
+--------------------------
+- ObjectDBX Utilities
+- Config Management
+- Block Import Funktionen
+- Verwendet von: SetHoehenkote.lsp, HoeheAufLinie.lsp
+
+LADEN MIT 3-FALLBACK PFADAUFLOESUNG:
+-------------------------------------
+(defun MNS:load-library (lib-name / path)
+  ;; Fallback 1: findfile (AutoCAD Support-Pfade)
+  (setq path (findfile lib-name))
+  
+  ;; Fallback 2: Gleicher Ordner wie Hauptscript
+  (if (not path)
+    (setq path (findfile 
+      (strcat (vl-filename-directory (findfile (strcat *MNS:namespace* ".lsp")))
+              "/" lib-name)))
+  )
+  
+  ;; Fallback 3: lib/ Unterordner
+  (if (not path)
+    (setq path (findfile (strcat "lib/" lib-name)))
+  )
+  
+  ;; Laden oder Fehler
+  (if path
+    (progn (load path) (MNS:log-write "INFO" (strcat "Library geladen: " lib-name)))
+    (progn
+      (MNS:log-write "ERROR" (strcat "Library nicht gefunden: " lib-name))
+      (alert (strcat "FEHLER: " lib-name " nicht gefunden!"))
+    )
+  )
+)
+
+
+7.3 AUTO-LOADING (ACADDOC.LSP)
+------------------------------
+
+NICHT jede Datei sofort laden - demand-load verwenden:
+
+;; In ACADDOC.lsp:
+(autoload "BigScript.lsp" '("c:BigCommand"))
+(autoload "OtherScript.lsp" '("c:OtherCommand"))
+
+STATT:
+(load "BigScript.lsp")    ; Laedt sofort - langsamer Start!
+
+VORTEILE:
+- Schnellerer AutoCAD-Start
+- Weniger Memory-Verbrauch
+- Script wird nur geladen wenn Befehl aufgerufen wird
+
+
+7.4 LOAD MIT ERROR-HANDLING
+---------------------------
+
+(or (load "MyLib.lsp" nil)
+    (alert "MyLib.lsp konnte nicht geladen werden")
+)
+
+
+================================================================================
+8. STABILITAET & WARTBARKEIT
+================================================================================
+
+8.1 INPUT-VALIDIERUNG
+---------------------
+
+(defun get-valid-number ( / num)
+  (while (null (setq num (getreal "\nZahl eingeben: ")))
+    (princ "\n*** Bitte gueltige Zahl eingeben ***")
+  )
+  num
+)
+
+(defun get-valid-point ( / pt)
+  (while (null (setq pt (getpoint "\nPunkt waehlen: ")))
+    (princ "\n*** Bitte Punkt waehlen ***")
+  )
+  pt
+)
+
+
+8.2 DEFENSIVE PROGRAMMIERUNG
+----------------------------
+
+;; Pruefe Parameter BEVOR verwenden
+(defun safe-distance (pt1 pt2 / )
+  (if (and pt1 pt2 
+           (listp pt1) 
+           (listp pt2)
+           (= (length pt1) 3)
+           (= (length pt2) 3))
+    (distance pt1 pt2)
+    (progn
+      (princ "\n*** Ungueltige Punkte fuer Distanzberechnung ***")
+      nil
+    )
+  )
+)
+
+
+8.3 DOKUMENTATION IM CODE
+-------------------------
+
+;;; Berechnet interpolierte Hoehe zwischen zwei Fixpunkten
+;;; 
+;;; Parameter:
+;;;   p1 - Fixpunkt 1 (Liste x y z)
+;;;   h1 - Hoehe Punkt 1 (Real)
+;;;   p2 - Fixpunkt 2 (Liste x y z)
+;;;   h2 - Hoehe Punkt 2 (Real)
+;;;   pg - Gesuchter Punkt (Liste x y z)
+;;; 
+;;; Rueckgabe:
+;;;   Interpolierte Hoehe (Real) oder nil bei Fehler
+;;;
+;;; Beispiel:
+;;;   (calculate-height '(0 0 0) 100.0 '(10 0 0) 110.0 '(5 0 0))
+;;;   => 105.0
+;;;
+(defun calculate-height (p1 h1 p2 h2 pg / vpf vpg scalar)
+  ...
+)
+
+
+8.4 VERSIONIERUNG
+-----------------
+
+Schema (Semantic Versioning - STRIKT!):
+- 1.0.0 = Major (Breaking Changes, API-Aenderungen)
+- 1.1.0 = Minor (Neue Features, backward compatible)
+- 1.1.1 = Patch (Bugfixes, kleine Korrekturen)
+
+In Datei-Header:
+;;; Version: 1.2.3
+;;; Datum: 2026-03-17
+
+In Code:
+(setq *MNS:version* "1.2.3")
+
+Beim Laden ausgeben:
+(princ (strcat "\nMeinScript.lsp v" *MNS:version* " geladen."))
+
+REGELN:
+- Version IMMER erhoehen bei Aenderungen
+- NIEMALS gleiche Version fuer verschiedenen Code
+- Patch fuer jeden Bugfix
+- Minor fuer jedes neue Feature
+- Major nur bei Breaking Changes
+
+
+================================================================================
+9. AUTOCAD KEYWORD-MENUES
+================================================================================
+
+9.1 DIE 3 KRITISCHEN REGELN
+----------------------------
+
+REGEL 1: Keywords MUESSEN in eckigen Klammern im Prompt stehen
+REGEL 2: Erster Buchstabe MUSS Grossbuchstabe sein
+REGEL 3: initget-Parameter MUESSEN exakt den Klammer-Keywords entsprechen
+
+BEISPIEL RICHTIG:
+-----------------
+(initget "Skalierung Konstruktion")
+(setq input (getpoint 
+  "\nPunkt waehlen [Skalierung/Konstruktion]: "))
+
+(cond
+  ((= input "Skalierung") (MNS:set-scale))
+  ((= input "Konstruktion") (MNS:show-construction))
+  ((listp input) (MNS:process-point input))
+)
+
+BEISPIEL FALSCH:
+----------------
+(initget "skalierung Konstruktion")    ; ← 's' klein = FEHLER!
+(getpoint "\nPunkt [Skal/Konst]: ")    ; ← Mismatch mit initget!
+
+MERKE:
+- User kann Grossbuchstaben-Prefix tippen (S, K)
+- AutoCAD matched automatisch
+- Funktioniert auch mit Rechtsklick-Menue
+
+
+================================================================================
+10. DCL DIALOGE
+================================================================================
+
+10.1 EMBEDDED DCL PATTERN
+-------------------------
+
+Keine separate .dcl Datei noetig. DCL wird als Temp-Datei
+zur Laufzeit geschrieben und nach dem Dialog geloescht.
+
+PATTERN:
+--------
+(defun MNS:write-dcl ( / dcl-file fp)
+  (setq dcl-file (vl-filename-mktemp "mns" nil ".dcl"))
+  (setq fp (open dcl-file "w"))
+  (write-line "mns_dialog : dialog {" fp)
+  (write-line "  label = \"Mein Dialog\";" fp)
+  ;; ... DCL Definition ...
+  (write-line "}" fp)
+  (close fp)
+  dcl-file  ; Pfad zurueckgeben
+)
+
+;; Verwendung:
+(setq dcl-file (MNS:write-dcl))
+(setq dcl-id (load_dialog dcl-file))
+(new_dialog "mns_dialog" dcl-id)
+;; ... action_tile, start_dialog ...
+(unload_dialog dcl-id)
+(vl-file-delete dcl-file)  ; Aufraeumen!
+
+
+10.2 SUB-DIALOG BUG (CRITICAL!)
+-------------------------------
+
+PROBLEM:
+get_tile NACH unload_dialog gibt KEINE Werte zurueck!
+Bei verschachtelten Dialogen (Sub-Dialoge) ist der innere
+Dialog nach done_dialog WEG.
+
+FALSCH:
+-------
+(action_tile "ok" "(done_dialog)")
+(start_dialog)
+(setq name (get_tile "edit_name"))  ; ← ZU SPAET! Dialog ist weg!
+
+RICHTIG:
+--------
+;; Wert in globale Variable BEVOR Dialog schliesst
+(action_tile "ok" 
+  "(setq *MNS:temp-name* (get_tile \"edit_name\")) (done_dialog)")
+(start_dialog)
+;; Jetzt aus globaler Variable lesen
+(setq name *MNS:temp-name*)
+
+REGEL:
+- action_tile speichert Werte in globale Variablen
+- DANN done_dialog
+- NACH start_dialog aus globalen Variablen lesen
+- Gilt besonders fuer Sub-Dialoge!
+
+
+================================================================================
+11. APPDATA-STRUKTUR & LOGGING (VERPFLICHTEND!)
+================================================================================
+
+11.1 ORDNERSTRUKTUR (VERPFLICHTEND FUER JEDES SCRIPT!)
+------------------------------------------------------
+
+Jedes Script MUSS seinen eigenen Ordner unter %APPDATA% anlegen.
+Dort liegen ALLE Daten: Logs, Config, Backups, CSVs, etc.
+
+STRUKTUR:
+---------
+%APPDATA%\AutoCAD\Lisp\<ScriptName>\
+  ├── Log\
+  │   ├── <ScriptName>_20260317_143022.log    (aktuelle Session)
+  │   ├── <ScriptName>_20260316_091544.log    (vorherige Session)
+  │   ├── <ScriptName>_20260315_160830.log    (...)
+  │   ├── <ScriptName>_20260314_082011.log    (...)
+  │   └── <ScriptName>_20260313_134500.log    (aelteste Session)
+  ├── Config\
+  │   └── <ScriptName>.cfg                    (Konfiguration)
+  └── Backup\                                 (falls noetig)
+      └── ...
+
+KONKRETE BEISPIELE:
+-------------------
+%APPDATA%\AutoCAD\Lisp\LayerExportImport\
+  ├── Log\
+  │   └── LayerExportImport_20260317_143022.log
+  ├── Config\
+  │   └── LayerSync.cfg
+  ├── LayerMaster.csv
+  ├── LayerMapper.csv
+  └── Backup\
+
+%APPDATA%\AutoCAD\Lisp\SetHoehenkote\
+  ├── Log\
+  │   └── SetHoehenkote_20260317_091500.log
+  └── Config\
+      └── SetHoehenkote.cfg
+
+%APPDATA%\AutoCAD\Lisp\HoeheAufLinie\
+  ├── Log\
+  │   └── HoeheAufLinie_20260317_100000.log
+  └── Config\
+      └── HoeheAufLinie.cfg
+
+%APPDATA%\AutoCAD\Lisp\AutoLoadDimStyle\
+  ├── Log\
+  │   └── AutoLoadDimStyle_20260317_080000.log
+  └── Config\
+      └── DimStyleConfig.txt
+
+REGELN:
+- Basispfad = %APPDATA%\AutoCAD\Lisp\<ScriptName>\
+- Logs in Log\ Unterordner
+- Config in Config\ Unterordner
+- Backups in Backup\ Unterordner
+- Log-Name = ScriptName_YYYYMMDD_HHMMSS.log
+- Config-Name = ScriptName.cfg (oder spezifisch)
+- NIEMALS Daten in Zeichnungsordner oder Temp schreiben
+- NIEMALS hardcodierte Pfade
+
+
+11.2 APPDATA-PFAD ERMITTELN
+---------------------------
+
+(defun MNS:get-appdata-path ( / base)
+  ;; Gibt den AppData-Basisordner fuer dieses Script zurueck
+  ;; Erstellt Ordnerstruktur falls nicht vorhanden
+  (setq base (strcat (getenv "APPDATA") "\\AutoCAD\\Lisp\\" *MNS:appdata-folder*))
+  (if (not (vl-file-directory-p base))
+    (progn
+      (vl-mkdir (strcat (getenv "APPDATA") "\\AutoCAD"))
+      (vl-mkdir (strcat (getenv "APPDATA") "\\AutoCAD\\Lisp"))
+      (vl-mkdir base)
+      (vl-mkdir (strcat base "\\Log"))
+      (vl-mkdir (strcat base "\\Config"))
+      (vl-mkdir (strcat base "\\Backup"))
+    )
+  )
+  base
+)
+
+
+11.3 LOGGING (VERPFLICHTEND! AUSFUEHRLICH!)
+-------------------------------------------
+
+Jedes Script MUSS ein Log fuehren. Logs muessen AUSFUEHRLICH sein
+um Fehler zeitig zu erkennen.
+
+WAS LOGGEN (ALLES!):
+- Script-Start mit Version
+- Initialisierung (Lazy-Init)
+- Config geladen/gespeichert
+- Jeden Befehlsaufruf (Start + Ende)
+- Jeden wichtigen Schritt im Workflow
+- Alle User-Eingaben (Punkte, Werte, Keywords)
+- Alle berechneten Ergebnisse
+- Alle Datei-Operationen (CSV lesen/schreiben, etc.)
+- Warnungen (z.B. fehlende Dateien, Fallback-Pfade)
+- Fehler mit vollem Kontext
+- VLA-Operationen und deren Ergebnisse
+- Abbruch durch User (ESC/Cancel)
+
+LOG-FORMAT:
+-----------
+[YYYY-MM-DD HH:MM:SS] [LEVEL] Nachricht
+
+LEVEL:
+- INFO    = Normaler Ablauf
+- WARN    = Unerwartetes, aber nicht kritisch
+- ERROR   = Fehler, Funktion abgebrochen
+- DEBUG   = Detaillierte Debug-Infos (nur bei *debug-mode*)
+
+BEISPIEL LOG-OUTPUT:
+-------------------
+[2026-03-17 14:30:22] [INFO]  === HoeheAufLinie v1.6.3 gestartet ===
+[2026-03-17 14:30:22] [INFO]  Lazy-Init: Bereits initialisiert
+[2026-03-17 14:30:22] [INFO]  Befehl HAL gestartet
+[2026-03-17 14:30:25] [INFO]  Fixpunkt 1: (1234.567 890.123 0.000) Hoehe: 322.00
+[2026-03-17 14:30:28] [INFO]  Fixpunkt 2: (1240.100 895.500 0.000) Hoehe: 344.00
+[2026-03-17 14:30:30] [INFO]  Interpolation: Punkt (1237.000 892.500) → 333.12
+[2026-03-17 14:30:30] [INFO]  Block gesetzt: HK +333.12 bei (1237.000 892.500)
+[2026-03-17 14:30:35] [INFO]  User: ESC → Befehl beendet
+[2026-03-17 14:30:35] [INFO]  Befehl HAL beendet (3 Punkte gesetzt)
+[2026-03-17 14:30:35] [INFO]  Cleanup: Konstruktionslinien entfernt
+
+IMPLEMENTIERUNG:
+----------------
+(defun MNS:log-write (level message / appdata log-path fp timestamp)
+  ;; Schreibt eine Zeile ins Session-Log
+  ;; level: "INFO", "WARN", "ERROR", "DEBUG"
+  ;; message: Beliebiger String
+  
+  ;; Debug nur wenn aktiviert
+  (if (and (= level "DEBUG") (not *MNS:debug-mode*))
+    (progn) ; Skip
+    (progn
+      ;; Session-Log-Pfad ermitteln (einmal pro Session)
+      (if (not *MNS:log-session-id*)
+        (progn
+          (setq *MNS:log-session-id*
+            (strcat *MNS:appdata-folder* "_"
+              (menucmd "M=$(edtime,0,YYYYMMDD_HHMMSS)")
+            )
+          )
+          ;; Log-Rotation beim ersten Schreiben
+          (MNS:log-rotate)
+        )
+      )
+      
+      (setq appdata (MNS:get-appdata-path))
+      (setq log-path (strcat appdata "\\Log\\" *MNS:log-session-id* ".log"))
+      
+      ;; Timestamp erzeugen
+      (setq timestamp (menucmd "M=$(edtime,0,YYYY-MO-DD HH:MM:SS)"))
+      
+      ;; Schreiben
+      (setq fp (open log-path "a"))
+      (if fp
+        (progn
+          (write-line 
+            (strcat "[" timestamp "] [" 
+              (substr (strcat level "     ") 1 5) ; Padding auf 5 Zeichen
+              "] " message)
+            fp)
+          (close fp)
+        )
+      )
+    )
+  )
+)
+
+
+11.4 LOG-ROTATION (MAX 5 SESSIONS!)
+-----------------------------------
+
+Nur die letzten 5 Session-Logs behalten.
+Aeltere werden beim Start einer neuen Session geloescht.
+
+(defun MNS:log-rotate ( / appdata log-dir pattern files sorted-files delete-count i)
+  ;; Loescht alte Logs, behaelt nur die 5 neuesten
+  ;; Wird beim ersten log-write der Session aufgerufen
+  
+  (setq appdata (MNS:get-appdata-path))
+  (setq log-dir (strcat appdata "\\Log"))
+  (setq pattern (strcat *MNS:appdata-folder* "_*.log"))
+  
+  ;; Alle Log-Dateien im Log\ Unterordner finden
+  (setq files nil)
+  (setq f (vl-directory-files log-dir pattern 1))
+  (if f (setq files f))
+  
+  ;; Sortieren (Dateiname enthaelt Timestamp → alphabetisch = chronologisch)
+  (setq sorted-files (vl-sort files '<))
+  
+  ;; Wenn mehr als 4 vorhanden (5. ist die aktuelle, noch nicht erstellt)
+  ;; → die aeltesten loeschen
+  (setq delete-count (- (length sorted-files) 4))
+  (if (> delete-count 0)
+    (progn
+      (setq i 0)
+      (repeat delete-count
+        (vl-file-delete (strcat log-dir "\\" (nth i sorted-files)))
+        (setq i (1+ i))
+      )
+    )
+  )
+)
+
+
+11.5 CONFIG-MANAGEMENT PATTERN
+------------------------------
+
+Persistente Konfiguration ueber Sessions hinweg.
+Config-Datei liegt im Config\ Unterordner des AppData-Ordners.
+
+PATTERN: Lesen → Fallback → Dialog → Speichern
+----------------------------------------------
+
+(defun MNS:load-config ( / appdata cfg-path fp line)
+  ;; 1. Config-Pfad
+  (setq appdata (MNS:get-appdata-path))
+  (setq cfg-path (strcat appdata "\\Config\\" *MNS:appdata-folder* ".cfg"))
+  
+  ;; 2. Lesen (falls vorhanden)
+  (if (findfile cfg-path)
+    (progn
+      (setq fp (open cfg-path "r"))
+      ;; ... Zeilen lesen ...
+      (close fp)
+      (MNS:log-write "INFO" (strcat "Config geladen: " cfg-path))
+    )
+    ;; 3. Fallback: Defaults setzen
+    (progn
+      (MNS:log-write "WARN" "Keine Config gefunden, verwende Defaults")
+      ;; ... Defaults ...
+    )
+  )
+)
+
+(defun MNS:save-config ( / appdata cfg-path fp)
+  (setq appdata (MNS:get-appdata-path))
+  (setq cfg-path (strcat appdata "\\Config\\" *MNS:appdata-folder* ".cfg"))
+  (setq fp (open cfg-path "w"))
+  ;; ... Zeilen schreiben ...
+  (close fp)
+  (MNS:log-write "INFO" (strcat "Config gespeichert: " cfg-path))
+)
+
+
+================================================================================
+12. REACTOR-BASIERTER AUTOSYNC
+================================================================================
+
+12.1 VLR REACTOR AUF SAVE-EVENTS
+---------------------------------
+
+Automatische Aktionen beim Speichern einer Zeichnung.
+Togglebar via Config.
+
+PATTERN:
+--------
+(defun MNS:setup-reactor ( / )
+  ;; NUR in ensure-init aufrufen, NIE auf Top-Level!
+  (if *MNS:autosync-enabled*
+    (progn
+      (vlr-dwg-reactor nil
+        '((:vlr-beginSave . MNS:on-save))
+      )
+      (MNS:log-write "INFO" "AutoSync-Reactor aktiviert")
+    )
+  )
+)
+
+(defun MNS:on-save (reactor args / )
+  ;; Wird automatisch beim Speichern aufgerufen
+  (MNS:log-write "INFO" "AutoSync: Speichern erkannt")
+  ;; ... Sync-Logik ...
+)
+
+REGELN:
+- Reactor NUR in ensure-init einrichten (Lazy-Init!)
+- Reactor-Callback muss schnell sein (User wartet)
+- Immer togglebar via Config (User-Kontrolle)
+- Fehler im Callback duerfen Speichern NICHT blockieren
+
+
+================================================================================
+13. TESTING & DEBUGGING
+================================================================================
+
+13.1 DEBUG-MODUS
+---------------
+
+;; Am Anfang der Datei
+(setq *MNS:debug-mode* nil)  ; Auf T setzen fuer Debugging
+
+;; Eigener Debug-Befehl (optional)
+(defun c:MNSDEBUG ( / )
+  (setq *MNS:debug-mode* (not *MNS:debug-mode*))
+  (princ (strcat "\nDebug-Modus: " 
+    (if *MNS:debug-mode* "EIN" "AUS")))
+  (MNS:log-write "INFO" 
+    (strcat "Debug-Modus: " (if *MNS:debug-mode* "EIN" "AUS")))
+  (princ)
+)
+
+;; Im Code - wird nur geloggt wenn Debug aktiv
+(MNS:log-write "DEBUG" (strcat "pt1=" (vl-princ-to-string pt1)))
+
+
+13.2 TEST-FUNKTIONEN
+-------------------
+
+(defun test-calculate-height ( / result)
+  (princ "\n=== Testing calculate-height ===")
+  
+  (setq result (calculate-height '(0 0 0) 100.0 '(10 0 0) 110.0 '(5 0 0)))
+  (if (equal result 105.0 0.001)
+    (princ "\n  PASS: Mittelpunkt")
+    (princ (strcat "\n  FAIL: Expected 105.0, got " (rtos result)))
+  )
+  
+  (princ "\n=== Tests complete ===\n")
+  (princ)
+)
+
+
+13.3 AUTOCAD CRASH-ANALYSE
+--------------------------
+
+HAEUFIGE CRASH-URSACHEN DURCH LISP:
+- VLA/ActiveX Misuse (falscher Typ, nil-Objekt)
+- Endlosschleifen (while ohne Abbruchbedingung)
+- Nicht freigegebene Selection Sets
+- VLA-Calls zur Ladezeit (→ Lazy-Init verwenden!)
+
+CRASH-LOGS FINDEN:
+- acad.err: Im Zeichnungsordner oder %TEMP%
+- CER-Dateien: C:\ProgramData\Autodesk\CER\
+- Log-Pfad: OPTIONS → Files → Log File Location
+
+
+================================================================================
+14. SICHERHEIT
+================================================================================
+
+14.1 KEINE GEFAEHRLICHEN OPERATIONEN
+------------------------------------
+
+GEFAEHRLICH:
+(command "erase" "all" "")        ; Loescht ALLES!
+(command "purge" "a" "*" "n")     ; Purge ohne Kontrolle
+
+SICHER:
+(if (setq ss (ssget))
+  (command "erase" ss "")
+)
+
+
+14.2 EXTERNE SCRIPTS VALIDIEREN
+-------------------------------
+
+NIEMALS blindes Laden von unbekannten Scripts!
+
+
+14.3 SYSTEMVARIABLEN SICHERN
+---------------------------
+
+IMMER sichern bevor aendern:
+
+(setq old-cmdecho (getvar "CMDECHO"))
+(setvar "CMDECHO" 0)
+
+; ... Code ...
+
+;; Wiederherstellen (auch im Error-Handler!)
+(if old-cmdecho (setvar "CMDECHO" old-cmdecho))
+
+
+================================================================================
+15. ZUSAETZLICHE BEST PRACTICES
+================================================================================
+
+15.1 COMMAND-FUNKTION RICHTIG VERWENDEN
+--------------------------------------
+
+;; Befehle IMMER mit ._ Praefix fuer Sprachunabhaengigkeit
+(command "._line" pt1 pt2 "")      ; Statt (command "line" ...)
+(command "._circle" pt1 pause)     ; Funktioniert in allen Sprachen
+
+
+15.2 RUECKGABEWERTE
+------------------
+
+Funktionen sollten sinnvolle Werte zurueckgeben:
+
+(defun calculate-something (x y / result)
+  (setq result (+ x y))
+  result  ; Explizit zurueckgeben
+)
+
+ODER nil bei Fehler:
+
+(defun safe-operation (x / )
+  (if (> x 0)
+    (* x 2)
+    (progn
+      (MNS:log-write "WARN" (strcat "safe-operation: x=" (rtos x) " <= 0"))
+      nil
+    )
+  )
+)
+
+
+15.3 PRINC AM ENDE
+-----------------
+
+Jeder c:Command sollte mit (princ) enden:
+
+(defun c:MyCommand ( / )
+  ; ... Code ...
+  (princ)  ; Verhindert Rueckgabewert auf Command-Line
+)
+
+
+15.4 ENTMAKEX FUER 3D-ENTITIES
+------------------------------
+
+Bei 3D-Objekten mit OCS-Transformation ist command unzuverlaessig.
+entmakex schreibt direkt in die Datenbank.
+
+KOORDINATEN-TRANSFORMATION WCS → OCS:
+--------------------------------------
+;; Normal-Vektor berechnen (Kreuzprodukt)
+(setq v1 (mapcar '- p2 p1))
+(setq v2 (mapcar '- p3 p1))
+(setq normal (list
+  (- (* (cadr v1) (caddr v2)) (* (caddr v1) (cadr v2)))
+  (- (* (caddr v1) (car v2)) (* (car v1) (caddr v2)))
+  (- (* (car v1) (cadr v2)) (* (cadr v1) (car v2)))
+))
+
+;; Punkte von WCS nach OCS transformieren
+(setq pt-ocs (trans pt-wcs 0 normal))
+
+WANN ENTMAKEX STATT COMMAND:
+- 3D-Boegen (ARC) mit verschiedenen Z-Hoehen
+- Entities mit OCS-Normal ungleich (0 0 1)
+- Wenn exakte DXF-Kontrolle noetig ist
+- Wenn command unerwartete Ergebnisse liefert
+
+
+================================================================================
+16. ZUSAMMENFASSUNG - TOP 15 REGELN
+================================================================================
+
+ 1. VARIABLEN IMMER LOKALISIEREN
+    (defun c:Cmd ( / var1 var2) ...)
+
+ 2. CONTEXT-NAMESPACE VERWENDEN (VERPFLICHTEND!)
+    MNS:funktionsname, *MNS:variable*
+
+ 3. ERROR-HANDLER IN JEDEM COMMAND
+    (defun *error* (msg) ...) mit wcmatch Cancel-Detection
+
+ 4. LAZY-INIT PATTERN (VERPFLICHTEND bei Plugins!)
+    MNS:ensure-init als erste Zeile in jedem c:Befehl
+
+ 5. VLA VARIANT HANDLING BEACHTEN
+    Getter → vlax-variant-change-type, Setter → plain Integer
+
+ 6. SYSTEMVARIABLEN SICHERN & WIEDERHERSTELLEN
+    (setq old (getvar "VAR")) ... (setvar "VAR" old)
+
+ 7. APPDATA-ORDNER VERWENDEN (VERPFLICHTEND!)
+    %APPDATA%\AutoCAD\Lisp\<ScriptName>\ (mit Log\, Config\, Backup\)
+
+ 8. LOGGING IN JEDER FUNKTION (VERPFLICHTEND!)
+    Ausfuehrlich! Max 5 Sessions, dann rotieren
+
+ 9. CONFIG PERSISTENT SPEICHERN
+    Lesen → Fallback → Dialog → Speichern
+
+10. INPUT VALIDIEREN BEVOR VERWENDEN
+    (if (and pt (listp pt)) ...)
+
+11. SPRECHENDE VARIABLEN-NAMEN
+    insertion-point statt x
+
+12. KOMMENTARE FUER WARUM, NICHT WAS
+    ;; Berechnet Flaeche fuer Kostenanalyse
+
+13. PERFORMANCE BEACHTEN
+    Command vs. VLA vs. entmakex, Filter in ssget
+
+14. SHARED LIBRARIES VERWENDEN
+    Gemeinsamer Code in eigene .lsp auslagern
+
+15. TESTEN BEVOR DEPLOYEN
+    Test-Funktionen, Debug-Modus, Log pruefen
+
+
+================================================================================
+QUELLENANGABEN
+================================================================================
+
+- Autodesk AutoLISP Developer's Guide (2013)
+- Lee Mac Programming (www.lee-mac.com)
+  * Error Handling Tutorial
+  * Loading Programs Automatically
+  * Tutorials Section
+  * Performance Patterns (Dekrementierende Loops, etc.)
+- CADnotes (www.cad-notes.com)
+- AfraLISP (www.afralisp.net)
+- Autodesk Discussion Groups
+- TheSwamp.org Community
+- CADTutor.net Community
+- Herbert Schrotter AutoCAD-Tools Projekt (Praxis-Erkenntnisse 2026)
+
+
+================================================================================
+WEITERFUEHRENDE RESSOURCEN
+================================================================================
+
+Online Tutorials:
+- Lee Mac Tutorials: https://www.lee-mac.com/tutorials.html
+- AfraLISP: https://www.afralisp.net/
+- CADnotes: https://www.cad-notes.com/
+
+Referenzen:
+- AutoLISP Function Reference (Autodesk)
+- DXF Reference (Autodesk)
+- Lee Mac's ssget Reference
+- Visual LISP Developer's Bible
+
+Communities:
+- TheSwamp.org
+- CADTutor.net
+- AUGI.com (Autodesk User Group International)
+- Autodesk Discussion Groups
+
+
+================================================================================
+ENDE
+================================================================================
+
+Zusammengestellt: 2026-03-17
+Fuer: AutoCAD LISP Development
+Version: 2.0
