@@ -22,7 +22,7 @@
 ;;; ShowBlockPath     - Zeigt konfigurierte Pfade
 ;;; ResetBlockPath    - Löscht alle Pfade
 ;;;
-;;; Version: 1.7.0
+;;; Version: 1.8.0
 ;;; Datum: 2026-03-19
 ;;; Autor: Herbert Schrotter
 
@@ -1009,10 +1009,152 @@
   )
 )
 
-;;; Hauptmenü für Block-Import Management
+;;; ============================================================================
+;;; DCL DIALOG - BLOCK IMPORT MANAGER
+;;; ============================================================================
+
+;;; Schreibt die DCL-Datei als Temp-Datei
+(defun BLI:write-dcl ( / dcl-file fp)
+  (setq dcl-file (vl-filename-mktemp "bli" nil ".dcl"))
+  (setq fp (open dcl-file "w"))
+
+  (write-line "bli_manager : dialog {" fp)
+  (write-line "  label = \"Block Import Manager\";" fp)
+  (write-line "  spacer;" fp)
+
+  ;; --- Block-Liste ---
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Konfigurierte Bloecke\";" fp)
+  (write-line "    : list_box {" fp)
+  (write-line "      key = \"block_list\";" fp)
+  (write-line "      width = 50;" fp)
+  (write-line "      height = 8;" fp)
+  (write-line "      allow_accept = true;" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+
+  ;; --- Standard-Block Info ---
+  (write-line "  : text {" fp)
+  (write-line "    key = \"standard_info\";" fp)
+  (write-line "    label = \"\";" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+
+  ;; --- Buttons Zeile 1 ---
+  (write-line "  : row {" fp)
+  (write-line "    : button {" fp)
+  (write-line "      key = \"btn_standard\";" fp)
+  (write-line "      label = \"Als Standard\";" fp)
+  (write-line "      width = 16;" fp)
+  (write-line "    }" fp)
+  (write-line "    : button {" fp)
+  (write-line "      key = \"btn_path\";" fp)
+  (write-line "      label = \"Pfad aendern\";" fp)
+  (write-line "      width = 16;" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+
+  ;; --- Buttons Zeile 2 ---
+  (write-line "  : row {" fp)
+  (write-line "    : button {" fp)
+  (write-line "      key = \"btn_add\";" fp)
+  (write-line "      label = \"Hinzufuegen\";" fp)
+  (write-line "      width = 16;" fp)
+  (write-line "    }" fp)
+  (write-line "    : button {" fp)
+  (write-line "      key = \"btn_remove\";" fp)
+  (write-line "      label = \"Entfernen\";" fp)
+  (write-line "      width = 16;" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+
+  ;; --- Pfad-Anzeige ---
+  (write-line "  : text {" fp)
+  (write-line "    key = \"path_info\";" fp)
+  (write-line "    label = \"\";" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+
+  ;; --- Schliessen ---
+  (write-line "  : button {" fp)
+  (write-line "    key = \"btn_close\";" fp)
+  (write-line "    label = \"Schliessen\";" fp)
+  (write-line "    is_default = true;" fp)
+  (write-line "    width = 16;" fp)
+  (write-line "    fixed_width = true;" fp)
+  (write-line "    alignment = centered;" fp)
+  (write-line "  }" fp)
+
+  (write-line "}" fp)
+  (close fp)
+  dcl-file
+)
+
+;;; Erstellt die Listbox-Einträge für den DCL-Dialog
+;;; Rückgabe: Liste von Strings für list_box (oder nil)
+(defun BLI:build-block-list ( / all-paths standard-block entries)
+  (setq all-paths (read-all-block-paths))
+  (setq standard-block (get-standard-block))
+  (setq entries '())
+
+  (if all-paths
+    (foreach pair all-paths
+      (if (not (wcmatch (car pair) "*STANDARD*"))
+        (setq entries
+          (append entries
+            (list
+              (strcat (car pair)
+                (if (eq (car pair) standard-block) "  [STANDARD]" "")
+                (if (findfile (cdr pair)) "  OK" "  FEHLT!")
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+  entries
+)
+
+;;; Gibt den reinen Blocknamen aus einem Listbox-Eintrag zurück
+;;; Entfernt " [STANDARD]", " OK", " FEHLT!" Suffixe
+(defun BLI:extract-blockname (entry / pos)
+  (if entry
+    (progn
+      ;; Entferne alles ab erstem doppeltem Leerzeichen
+      (setq pos (vl-string-search "  " entry))
+      (if pos
+        (substr entry 1 pos)
+        entry
+      )
+    )
+    nil
+  )
+)
+
+;;; Gibt die reine Block-Liste zurück (nur Namen, ohne Suffixe)
+(defun BLI:get-block-names ( / all-paths names)
+  (setq all-paths (read-all-block-paths))
+  (setq names '())
+  (if all-paths
+    (foreach pair all-paths
+      (if (not (wcmatch (car pair) "*STANDARD*"))
+        (setq names (append names (list (car pair))))
+      )
+    )
+  )
+  names
+)
+
+;;; Hauptmenü für Block-Import Management (DCL-Dialog)
 ;;; Parameter: context - Context-ID für Namespace (z.B. "SetHK", "HoeheAufLinie")
 ;;;                      Wenn nil: Verwendet globale *block-import-context*
-(defun manage-block-import (context / option continue standard-block all-blocks old-context)
+(defun manage-block-import (context / dcl-file dcl-id result old-context
+                                      entries selected-idx selected-name
+                                      standard-block all-names filepath
+                                      block-path blockname)
   ;; Sichere alten Context falls vorhanden
   (setq old-context *block-import-context*)
 
@@ -1021,82 +1163,266 @@
     (setq *block-import-context* context)
   )
 
-  (BLI:log-write "INFO" (strcat "Block-Manager geöffnet"
+  (BLI:log-write "INFO" (strcat "Block-Manager DCL geöffnet"
     (if *block-import-context* (strcat " (Context: " *block-import-context* ")") "")))
 
-  (setq continue T)
+  ;; DCL schreiben
+  (setq dcl-file (BLI:write-dcl))
+  (setq dcl-id (load_dialog dcl-file))
 
-  ;; Prüfe beim Start: Blocks vorhanden aber kein Standard?
-  (setq standard-block (get-standard-block))
-  (setq all-blocks (read-all-block-paths))
+  ;; Dialog-Schleife (bleibt offen bis Schliessen)
+  (setq result 1)  ;; Start mit "Dialog neu aufbauen"
 
-  (if (and all-blocks (not standard-block))
-    (progn
-      (princ "\n*** Blocks konfiguriert aber kein Standard-Block gesetzt! ***")
-      (princ "\nMöchten Sie einen Standard-Block wählen?")
-      (select-standard-block)
-      (princ "\n")
+  (while (> result 0)
+    (if (not (new_dialog "bli_manager" dcl-id))
+      (progn
+        (BLI:log-write "ERROR" "DCL Dialog konnte nicht geöffnet werden")
+        (princ "\n*** Fehler: Dialog konnte nicht geöffnet werden ***")
+        (setq result 0)  ;; Abbruch
+      )
+      (progn
+        ;; --- Liste befüllen ---
+        (setq entries (BLI:build-block-list))
+        (if entries
+          (progn
+            (start_list "block_list")
+            (foreach entry entries (add_list entry))
+            (end_list)
+            ;; Erste Zeile selektieren
+            (set_tile "block_list" "0")
+            ;; Pfad der ersten Zeile anzeigen
+            (setq selected-name (BLI:extract-blockname (car entries)))
+            (setq block-path (read-block-path selected-name))
+            (set_tile "path_info"
+              (if block-path (strcat "Pfad: " block-path) "Pfad: -"))
+          )
+          (progn
+            (start_list "block_list")
+            (add_list "(keine Bloecke konfiguriert)")
+            (end_list)
+            (set_tile "path_info" "Pfad: -")
+          )
+        )
+
+        ;; Standard-Block Info
+        (setq standard-block (get-standard-block))
+        (set_tile "standard_info"
+          (strcat "Standard-Block: " (if standard-block standard-block "Nicht gesetzt")))
+
+        ;; --- Listbox Selection: Pfad-Anzeige aktualisieren ---
+        (action_tile "block_list"
+          (strcat
+            "(setq *BLI:tmp-sel-idx* (atoi (get_tile \"block_list\")))"
+            "(setq *BLI:tmp-sel-name* (BLI:extract-blockname (nth *BLI:tmp-sel-idx* (BLI:build-block-list))))"
+            "(if *BLI:tmp-sel-name*"
+            "  (set_tile \"path_info\" (strcat \"Pfad: \" (if (read-block-path *BLI:tmp-sel-name*) (read-block-path *BLI:tmp-sel-name*) \"-\")))"
+            "  (set_tile \"path_info\" \"Pfad: -\")"
+            ")"
+          )
+        )
+
+        ;; --- Button: Als Standard ---
+        (action_tile "btn_standard"
+          (strcat
+            "(setq *BLI:tmp-sel-idx* (atoi (get_tile \"block_list\")))"
+            "(setq *BLI:tmp-sel-name* (BLI:extract-blockname (nth *BLI:tmp-sel-idx* (BLI:build-block-list))))"
+            "(if *BLI:tmp-sel-name*"
+            "  (progn (set-standard-block *BLI:tmp-sel-name*) (done_dialog 1))"
+            "  (alert \"Bitte einen Block auswaehlen\")"
+            ")"
+          )
+        )
+
+        ;; --- Button: Pfad ändern ---
+        (action_tile "btn_path"
+          (strcat
+            "(setq *BLI:tmp-sel-idx* (atoi (get_tile \"block_list\")))"
+            "(setq *BLI:tmp-sel-name* (BLI:extract-blockname (nth *BLI:tmp-sel-idx* (BLI:build-block-list))))"
+            "(if *BLI:tmp-sel-name*"
+            "  (progn (done_dialog 3))"  ;; 3 = Pfad ändern
+            "  (alert \"Bitte einen Block auswaehlen\")"
+            ")"
+          )
+        )
+
+        ;; --- Button: Hinzufügen ---
+        (action_tile "btn_add" "(done_dialog 4)")  ;; 4 = Hinzufügen
+
+        ;; --- Button: Entfernen ---
+        (action_tile "btn_remove"
+          (strcat
+            "(setq *BLI:tmp-sel-idx* (atoi (get_tile \"block_list\")))"
+            "(setq *BLI:tmp-sel-name* (BLI:extract-blockname (nth *BLI:tmp-sel-idx* (BLI:build-block-list))))"
+            "(if *BLI:tmp-sel-name*"
+            "  (done_dialog 5)"  ;; 5 = Entfernen
+            "  (alert \"Bitte einen Block auswaehlen\")"
+            ")"
+          )
+        )
+
+        ;; --- Button: Schliessen ---
+        (action_tile "btn_close" "(done_dialog 0)")
+
+        ;; --- Dialog starten ---
+        (setq result (start_dialog))
+
+        ;; --- Auswerten ---
+        (cond
+          ;; result=1: Refresh (nach Standard setzen)
+          ((= result 1)
+            (BLI:log-write "INFO" (strcat "Standard-Block geändert: " (if *BLI:tmp-sel-name* *BLI:tmp-sel-name* "?")))
+          )
+
+          ;; result=3: Pfad ändern
+          ((= result 3)
+            (if *BLI:tmp-sel-name*
+              (progn
+                (setq filepath (getfiled "Neuen Pfad waehlen" "" "dwg" 0))
+                (if filepath
+                  (progn
+                    (save-block-path *BLI:tmp-sel-name* filepath)
+                    (BLI:log-write "INFO" (strcat "Pfad geändert: " *BLI:tmp-sel-name* " -> " filepath))
+                  )
+                )
+              )
+            )
+            (setq result 1)  ;; Dialog neu öffnen
+          )
+
+          ;; result=4: Hinzufügen
+          ((= result 4)
+            (setq filepath (getfiled "Block-Datei waehlen" "" "dwg" 0))
+            (if filepath
+              (progn
+                (setq blockname (vl-filename-base filepath))
+                (save-block-path blockname filepath)
+                ;; Wenn erster Block: automatisch als Standard
+                (if (not (get-standard-block))
+                  (set-standard-block blockname)
+                )
+                (BLI:log-write "INFO" (strcat "Block hinzugefügt: " blockname " -> " filepath))
+              )
+            )
+            (setq result 1)  ;; Dialog neu öffnen
+          )
+
+          ;; result=5: Entfernen
+          ((= result 5)
+            (if *BLI:tmp-sel-name*
+              (progn
+                ;; Block aus Config entfernen (vereinfacht: neu schreiben ohne den Block)
+                (BLI:remove-block-from-config *BLI:tmp-sel-name*)
+                (BLI:log-write "INFO" (strcat "Block entfernt: " *BLI:tmp-sel-name*))
+              )
+            )
+            (setq result 1)  ;; Dialog neu öffnen
+          )
+
+          ;; result=0: Schliessen
+          (T nil)
+        )
+      )
     )
   )
 
-  (while continue
-    (setq standard-block (get-standard-block))
+  ;; Aufräumen
+  (unload_dialog dcl-id)
+  (vl-file-delete dcl-file)
 
-    ;; Menü anzeigen
-    (princ "\n")
-    (princ "\n========================================")
-    (princ "\n     BLOCK IMPORT MANAGER")
-    (princ "\n========================================")
-    (princ (strcat "\nStandard-Block: " (if standard-block standard-block "Nicht gesetzt")))
-    (princ "\n")
-    (princ "\n[L]iste      - Alle Blocks anzeigen")
-    (princ "\n[S]tandard   - Standard-Block wählen")
-    (princ "\n[H]inzufügen - Neuen Block hinzufügen")
-    (princ "\n[E]ntfernen  - Block löschen")
-    (princ "\n[A]bbrechen  - Beenden")
-    (princ "\n")
-
-    ;; Option abfragen mit Rechtsklick-Menü
-    ;; WICHTIG: Rechtsklick-Menü liest Keywords aus eckigen Klammern!
-    ;; Erste Buchstaben müssen GROß sein!
-    (initget "Liste Standard Hinzufuegen Entfernen Abbrechen")
-    (setq option (getkword "\nOption [Liste/Standard/Hinzufuegen/Entfernen/Abbrechen]: "))
-
-    (cond
-      ((eq option "Liste")
-       (textscr)  ;; Aktiviere Textfenster
-       (list-all-blocks)
-       (princ "\nDrücken Sie eine beliebige Taste zum Fortfahren...")
-       (grread T)  ;; Wartet auf Tastendruck
-       (setq continue nil))  ;; Beende Menü nach Liste!
-
-      ((eq option "Standard")
-       (select-standard-block))
-
-      ((eq option "Hinzufuegen")
-       (add-new-block))
-
-      ((eq option "Entfernen")
-       (remove-block))
-
-      ((eq option "Abbrechen")
-       (setq continue nil))
-
-      ;; ESC oder ungültige Eingabe
-      ((null option)
-       (setq continue nil))
-
-      (T
-       (setq continue nil))
-    )
-  )
+  ;; Temp-Variablen aufräumen
+  (setq *BLI:tmp-sel-idx* nil)
+  (setq *BLI:tmp-sel-name* nil)
 
   ;; Stelle alten Context wieder her
   (setq *block-import-context* old-context)
 
-  (BLI:log-write "INFO" "Block-Manager geschlossen")
-  (princ "\n")
+  (BLI:log-write "INFO" "Block-Manager DCL geschlossen")
   (princ)
+)
+
+;;; Entfernt einen Block aus der Config-Datei
+;;; Berücksichtigt Context und entfernt ggf. auch *STANDARD* Eintrag
+(defun BLI:remove-block-from-config (blockname / all-paths file line pos key value version
+                                      key-with-context standard-block context-prefix new-paths)
+  ;; AppData sicherstellen
+  (BLI:get-appdata-path)
+
+  (setq context-prefix
+    (if *block-import-context*
+      (strcat *block-import-context* ":")
+      nil
+    )
+  )
+
+  ;; Key mit Context
+  (setq key-with-context
+    (if context-prefix
+      (strcat context-prefix blockname)
+      blockname
+    )
+  )
+
+  ;; Prüfe ob es der Standard-Block war
+  (setq standard-block (get-standard-block))
+
+  ;; ALLE Pfade ungefiltert lesen
+  (setq all-paths '())
+  (if (findfile *block-config-file*)
+    (if (not (vl-catch-all-error-p
+               (setq file (vl-catch-all-apply 'open (list *block-config-file* "r")))))
+      (progn
+        (setq version (read-line file))
+        (while (setq line (read-line file))
+          (if (setq pos (vl-string-search "=" line))
+            (progn
+              (setq key (substr line 1 pos))
+              (setq value (substr line (+ pos 2)))
+              (setq all-paths (cons (cons key value) all-paths))
+            )
+          )
+        )
+        (close file)
+      )
+    )
+  )
+
+  ;; Block entfernen
+  (setq new-paths
+    (vl-remove-if
+      '(lambda (x) (eq (car x) key-with-context))
+      all-paths
+    )
+  )
+
+  ;; Wenn es der Standard-Block war: auch *STANDARD* entfernen
+  (if (eq blockname standard-block)
+    (setq new-paths
+      (vl-remove-if
+        '(lambda (x)
+           (wcmatch (car x)
+             (if *block-import-context*
+               (strcat "*STANDARD:" *block-import-context* "*")
+               "*STANDARD*"
+             )
+           )
+         )
+        new-paths
+      )
+    )
+  )
+
+  ;; Config neu schreiben
+  (if (not (vl-catch-all-error-p
+             (setq file (vl-catch-all-apply 'open (list *block-config-file* "w")))))
+    (progn
+      (write-line "1.0" file)
+      (foreach pair new-paths
+        (write-line (strcat (car pair) "=" (cdr pair)) file)
+      )
+      (close file)
+    )
+    (BLI:log-write "ERROR" "Config schreiben fehlgeschlagen beim Entfernen")
+  )
 )
 
 ;;; ============================================================================
@@ -1186,8 +1512,8 @@
 (vl-load-com)
 
 ;; Lade-Meldung
-(BLI:log-write "INFO" "=== BlockImport.lsp v1.7.0 geladen ===")
-(princ "\nBlockImport.lsp v1.7.0 geladen.")
+(BLI:log-write "INFO" "=== BlockImport.lsp v1.8.0 geladen ===")
+(princ "\nBlockImport.lsp v1.8.0 geladen.")
 (princ "\nBefehle: ManageBlockImport - Block-Verwaltung")
 (princ "\n         ShowBlockPath - Zeigt konfigurierte Pfade")
 (princ "\n         ResetBlockPath - Löscht alle Pfade")
