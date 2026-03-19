@@ -2,7 +2,7 @@
 ;;; Hoeheninterpolation entlang einer Linie zwischen zwei Fixpunkten
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 2.3.0
+;;; Version: 2.3.1
 ;;; Datum: 2026-03-19
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAL (HoeheAufLinie)
@@ -24,7 +24,7 @@
 ;;; KONSTANTEN (Top-Level erlaubt)
 ;;; ============================================================================
 
-(setq *HAL:version* "2.3.0")
+(setq *HAL:version* "2.3.1")
 (setq *HAL:appdata-folder* "HoeheAufLinie")
 (setq *HAL:blockname* "BLK_Hoehenkote")
 
@@ -530,6 +530,20 @@
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
   
+  ;; --- Block-Verwaltung ---
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Hoehenkoten-Block\";" fp)
+  (write-line "    : text {" fp)
+  (write-line "      key = \"blockname_info\";" fp)
+  (write-line "      label = \"\";" fp)
+  (write-line "    }" fp)
+  (write-line "    : button {" fp)
+  (write-line "      key = \"btn_block\";" fp)
+  (write-line "      label = \"Block-Verwaltung oeffnen...\";" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  
   ;; --- Debug ---
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"Debug\";" fp)
@@ -590,11 +604,26 @@
       (set_tile "xline_keep" (if *HAL:xline-keep* "1" "0"))
       (set_tile "debug" (if *HAL:debug-mode* "1" "0"))
       (set_tile "logpath" (strcat "Log: " (HAL:get-appdata-path) "\\Log"))
+      (set_tile "blockname_info" (strcat "Block: " *HAL:blockname*))
       (set_tile "info" (strcat "HoeheAufLinie v" *HAL:version*))
       
       ;; Live-Vorschau Layer-Suffix
       (action_tile "layer_suffix"
         "(set_tile \"layer_preview\" (strcat \"Vorschau: \" (getvar \"CLAYER\") \"_\" (get_tile \"layer_suffix\")))"
+      )
+      
+      ;; Block-Verwaltung Button: Werte speichern VOR done_dialog (Sub-Dialog Bug!)
+      (action_tile "btn_block"
+        (strcat
+          "(setq *HAL:tmp-scale* (get_tile \"scale\"))"
+          "(setq *HAL:tmp-use-suffix* (get_tile \"use_suffix\"))"
+          "(setq *HAL:tmp-layer-suffix* (get_tile \"layer_suffix\"))"
+          "(setq *HAL:tmp-mode-line* (get_tile \"mode_line\"))"
+          "(setq *HAL:tmp-lineab-keep* (get_tile \"lineab_keep\"))"
+          "(setq *HAL:tmp-xline-keep* (get_tile \"xline_keep\"))"
+          "(setq *HAL:tmp-debug* (get_tile \"debug\"))"
+          "(done_dialog 2)"
+        )
       )
       
       ;; OK: Werte in globale Vars speichern VOR done_dialog (Sub-Dialog Bug!)
@@ -615,8 +644,9 @@
       (setq result (start_dialog))
       
       ;; Auswerten
-      (if (= result 1)
-        (progn
+      (cond
+        ;; OK gedrueckt (result = 1)
+        ((= result 1)
           ;; Skalierung
           (if (> (atof *HAL:tmp-scale*) 0.0)
             (progn
@@ -660,7 +690,16 @@
                                         " Debug=" (if *HAL:debug-mode* "ein" "aus")))
           (princ "\nEinstellungen gespeichert.")
         )
-        (progn
+        
+        ;; Block-Manager oeffnen (result = 2)
+        ((= result 2)
+          (HAL:log-write "INFO" "Block-Verwaltung geoeffnet aus Settings")
+          (manage-block-import "HoeheAufLinie")
+          (princ "\nBlock-Verwaltung abgeschlossen.")
+        )
+        
+        ;; Abbrechen (result = 0)
+        (T
           (HAL:log-write "INFO" "Settings abgebrochen")
           (princ "\nAbgebrochen.")
         )
