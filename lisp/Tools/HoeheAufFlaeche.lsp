@@ -2,7 +2,7 @@
 ;;; Hoeheninterpolation auf einer Flaeche definiert durch 3-4 Eckpunkte
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 2.1.1
+;;; Version: 2.2.0
 ;;; Datum: 2026-03-20
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAF (HoeheAufFlaeche)
@@ -27,7 +27,7 @@
 ;;; KONSTANTEN (Top-Level erlaubt)
 ;;; ============================================================================
 
-(setq *HAF:version* "2.1.1")
+(setq *HAF:version* "2.2.0")
 (setq *HAF:appdata-folder* "HoeheAufFlaeche")
 (setq *HAF:blockname* "BLK_Hoehenkote")
 
@@ -50,18 +50,21 @@
 (setq *HAF:outline-keep* nil)        ; Am Ende behalten?
 (setq *HAF:outline-color* 6)         ; ACI-Farbe (6=Magenta)
 (setq *HAF:outline-suffix* "UM")     ; Layer-Suffix
+(setq *HAF:outline-own-layer* nil)   ; Eigener Layer?
 (setq *HAF:outline-use-layer* nil)   ; ByLayer statt feste Farbe?
 
 ;; Linien-Settings: Bruchlinie (Gelb)
 (setq *HAF:breakline-keep* nil)
 (setq *HAF:breakline-color* 2)       ; ACI-Farbe (2=Gelb)
 (setq *HAF:breakline-suffix* "BL")
+(setq *HAF:breakline-own-layer* nil)
 (setq *HAF:breakline-use-layer* nil)
 
 ;; Linien-Settings: Hoehenlinie (Rot)
 (setq *HAF:contour-keep* nil)
 (setq *HAF:contour-color* 1)         ; ACI-Farbe (1=Rot)
 (setq *HAF:contour-suffix* "HL")
+(setq *HAF:contour-own-layer* nil)
 (setq *HAF:contour-use-layer* nil)
 
 ;;; ============================================================================
@@ -291,6 +294,8 @@
   (if (and val (/= val "")) (setq *HAF:outline-color* (atoi val)))
   (setq val (HAF:get-config-value "OUTLINE_SUFFIX"))
   (if (and val (/= val "")) (setq *HAF:outline-suffix* val))
+  (setq val (HAF:get-config-value "OUTLINE_OWN_LAYER"))
+  (if val (setq *HAF:outline-own-layer* (= val "1")))
   (setq val (HAF:get-config-value "OUTLINE_USE_LAYER"))
   (if val (setq *HAF:outline-use-layer* (= val "1")))
   ;; Bruchlinie
@@ -300,6 +305,8 @@
   (if (and val (/= val "")) (setq *HAF:breakline-color* (atoi val)))
   (setq val (HAF:get-config-value "BREAKLINE_SUFFIX"))
   (if (and val (/= val "")) (setq *HAF:breakline-suffix* val))
+  (setq val (HAF:get-config-value "BREAKLINE_OWN_LAYER"))
+  (if val (setq *HAF:breakline-own-layer* (= val "1")))
   (setq val (HAF:get-config-value "BREAKLINE_USE_LAYER"))
   (if val (setq *HAF:breakline-use-layer* (= val "1")))
   ;; Hoehenlinie
@@ -309,6 +316,8 @@
   (if (and val (/= val "")) (setq *HAF:contour-color* (atoi val)))
   (setq val (HAF:get-config-value "CONTOUR_SUFFIX"))
   (if (and val (/= val "")) (setq *HAF:contour-suffix* val))
+  (setq val (HAF:get-config-value "CONTOUR_OWN_LAYER"))
+  (if val (setq *HAF:contour-own-layer* (= val "1")))
   (setq val (HAF:get-config-value "CONTOUR_USE_LAYER"))
   (if val (setq *HAF:contour-use-layer* (= val "1")))
   ;; Log
@@ -833,11 +842,11 @@
 ;;; Finalisiert eine Linie: Layer zuweisen + ByLayer setzen wenn gewuenscht
 ;;; Parameter:
 ;;;   ent - Entity-Name
-;;;   keep - T = behalten, nil = wird spaeter geloescht (temporaer)
+;;;   own-layer - T = eigenen Layer erstellen und zuweisen
 ;;;   use-layer - T = ByLayer Farbe, nil = feste Farbe beibehalten
 ;;;   suffix - Layer-Suffix (z.B. "UM", "BL", "HL")
-(defun HAF:finalize-line (ent keep use-layer suffix / layer-name ent-data)
-  (if (and ent keep)
+(defun HAF:finalize-line (ent own-layer use-layer suffix / layer-name ent-data)
+  (if (and ent own-layer)
     (progn
       ;; Layer erstellen und zuweisen
       (setq layer-name (HAF:ensure-line-layer suffix))
@@ -1692,19 +1701,19 @@
     ;; Temporaere Entities aufraeumen (je nach Setting behalten oder loeschen)
     (if outline-ent
       (if *HAF:outline-keep*
-        (HAF:finalize-line outline-ent T *HAF:outline-use-layer* *HAF:outline-suffix*)
+        (HAF:finalize-line outline-ent *HAF:outline-own-layer* *HAF:outline-use-layer* *HAF:outline-suffix*)
         (if (entget outline-ent) (entdel outline-ent))
       )
     )
     (if diagonal-ent
       (if *HAF:breakline-keep*
-        (HAF:finalize-line diagonal-ent T *HAF:breakline-use-layer* *HAF:breakline-suffix*)
+        (HAF:finalize-line diagonal-ent *HAF:breakline-own-layer* *HAF:breakline-use-layer* *HAF:breakline-suffix*)
         (if (entget diagonal-ent) (entdel diagonal-ent))
       )
     )
     (if contour-entities
       (if *HAF:contour-keep*
-        (foreach e contour-entities (HAF:finalize-line e T *HAF:contour-use-layer* *HAF:contour-suffix*))
+        (foreach e contour-entities (HAF:finalize-line e *HAF:contour-own-layer* *HAF:contour-use-layer* *HAF:contour-suffix*))
         (HAF:delete-contours contour-entities)
       )
     )
@@ -1971,7 +1980,7 @@
       (if outline-ent
         (if *HAF:outline-keep*
           (progn
-            (HAF:finalize-line outline-ent T *HAF:outline-use-layer* *HAF:outline-suffix*)
+            (HAF:finalize-line outline-ent *HAF:outline-own-layer* *HAF:outline-use-layer* *HAF:outline-suffix*)
             (HAF:log-write "INFO" (strcat "Umrandung beibehalten (Layer _" *HAF:outline-suffix* ")"))
           )
           (progn
@@ -1986,7 +1995,7 @@
       (if diagonal-ent
         (if *HAF:breakline-keep*
           (progn
-            (HAF:finalize-line diagonal-ent T *HAF:breakline-use-layer* *HAF:breakline-suffix*)
+            (HAF:finalize-line diagonal-ent *HAF:breakline-own-layer* *HAF:breakline-use-layer* *HAF:breakline-suffix*)
             (HAF:log-write "INFO" (strcat "Bruchlinie beibehalten (Layer _" *HAF:breakline-suffix* ")"))
           )
           (progn
@@ -2002,7 +2011,7 @@
         (if *HAF:contour-keep*
           (progn
             (foreach e contour-entities
-              (HAF:finalize-line e T *HAF:contour-use-layer* *HAF:contour-suffix*)
+              (HAF:finalize-line e *HAF:contour-own-layer* *HAF:contour-use-layer* *HAF:contour-suffix*)
             )
             (HAF:log-write "INFO" (strcat "Hoehenlinien beibehalten (Layer _" *HAF:contour-suffix* ")"))
           )
@@ -2082,21 +2091,23 @@
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
   
-  ;; --- Layer ---
+  ;; --- Hoehenkote ---
   (write-line "  : boxed_column {" fp)
-  (write-line "    label = \"Layer\";" fp)
+  (write-line "    label = \"Hoehenkote\";" fp)
   (write-line "    : toggle {" fp)
   (write-line "      key = \"use_suffix\";" fp)
-  (write-line "      label = \"Eigener Layer fuer Hoehenkoten\";" fp)
+  (write-line "      label = \"Eigener Layer\";" fp)
   (write-line "    }" fp)
-  (write-line "    : edit_box {" fp)
-  (write-line "      key = \"layer_suffix\";" fp)
-  (write-line "      label = \"Suffix (nach _):\";" fp)
-  (write-line "      edit_width = 15;" fp)
-  (write-line "    }" fp)
-  (write-line "    : text {" fp)
-  (write-line "      key = \"layer_preview\";" fp)
-  (write-line "      label = \"\";" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : edit_box {" fp)
+  (write-line "        key = \"layer_suffix\";" fp)
+  (write-line "        label = \"Suffix (nach _):\";" fp)
+  (write-line "        edit_width = 10;" fp)
+  (write-line "      }" fp)
+  (write-line "      : text {" fp)
+  (write-line "        key = \"layer_preview\";" fp)
+  (write-line "        label = \"\";" fp)
+  (write-line "      }" fp)
   (write-line "    }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
@@ -2108,6 +2119,10 @@
   (write-line "      : toggle {" fp)
   (write-line "        key = \"outline_keep\";" fp)
   (write-line "        label = \"Behalten\";" fp)
+  (write-line "      }" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"outline_own_layer\";" fp)
+  (write-line "        label = \"Eigener Layer\";" fp)
   (write-line "      }" fp)
   (write-line "      : toggle {" fp)
   (write-line "        key = \"outline_bylayer\";" fp)
@@ -2139,6 +2154,10 @@
   (write-line "        label = \"Behalten\";" fp)
   (write-line "      }" fp)
   (write-line "      : toggle {" fp)
+  (write-line "        key = \"breakline_own_layer\";" fp)
+  (write-line "        label = \"Eigener Layer\";" fp)
+  (write-line "      }" fp)
+  (write-line "      : toggle {" fp)
   (write-line "        key = \"breakline_bylayer\";" fp)
   (write-line "        label = \"Layer-Farbe\";" fp)
   (write-line "      }" fp)
@@ -2166,6 +2185,10 @@
   (write-line "      : toggle {" fp)
   (write-line "        key = \"contour_keep\";" fp)
   (write-line "        label = \"Behalten\";" fp)
+  (write-line "      }" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"contour_own_layer\";" fp)
+  (write-line "        label = \"Eigener Layer\";" fp)
   (write-line "      }" fp)
   (write-line "      : toggle {" fp)
   (write-line "        key = \"contour_bylayer\";" fp)
@@ -2276,16 +2299,19 @@
       ;; Linien-Settings in Dialog setzen
       ;; Umrandung
       (set_tile "outline_keep" (if *HAF:outline-keep* "1" "0"))
+      (set_tile "outline_own_layer" (if *HAF:outline-own-layer* "1" "0"))
       (set_tile "outline_bylayer" (if *HAF:outline-use-layer* "1" "0"))
       (set_tile "outline_color" (itoa (1- *HAF:outline-color*)))  ;; ACI 1-7 -> Index 0-6
       (set_tile "outline_suffix" *HAF:outline-suffix*)
       ;; Bruchlinie
       (set_tile "breakline_keep" (if *HAF:breakline-keep* "1" "0"))
+      (set_tile "breakline_own_layer" (if *HAF:breakline-own-layer* "1" "0"))
       (set_tile "breakline_bylayer" (if *HAF:breakline-use-layer* "1" "0"))
       (set_tile "breakline_color" (itoa (1- *HAF:breakline-color*)))
       (set_tile "breakline_suffix" *HAF:breakline-suffix*)
       ;; Hoehenlinie
       (set_tile "contour_keep" (if *HAF:contour-keep* "1" "0"))
+      (set_tile "contour_own_layer" (if *HAF:contour-own-layer* "1" "0"))
       (set_tile "contour_bylayer" (if *HAF:contour-use-layer* "1" "0"))
       (set_tile "contour_color" (itoa (1- *HAF:contour-color*)))
       (set_tile "contour_suffix" *HAF:contour-suffix*)
@@ -2323,14 +2349,17 @@
           "(setq *HAF:tmp-libpath* (get_tile \"libpath\"))"
           "(setq *HAF:tmp-debug* (get_tile \"debug\"))"
           "(setq *HAF:tmp-outline-keep* (get_tile \"outline_keep\"))"
+          "(setq *HAF:tmp-outline-own-layer* (get_tile \"outline_own_layer\"))"
           "(setq *HAF:tmp-outline-bylayer* (get_tile \"outline_bylayer\"))"
           "(setq *HAF:tmp-outline-color* (get_tile \"outline_color\"))"
           "(setq *HAF:tmp-outline-suffix* (get_tile \"outline_suffix\"))"
           "(setq *HAF:tmp-breakline-keep* (get_tile \"breakline_keep\"))"
+          "(setq *HAF:tmp-breakline-own-layer* (get_tile \"breakline_own_layer\"))"
           "(setq *HAF:tmp-breakline-bylayer* (get_tile \"breakline_bylayer\"))"
           "(setq *HAF:tmp-breakline-color* (get_tile \"breakline_color\"))"
           "(setq *HAF:tmp-breakline-suffix* (get_tile \"breakline_suffix\"))"
           "(setq *HAF:tmp-contour-keep* (get_tile \"contour_keep\"))"
+          "(setq *HAF:tmp-contour-own-layer* (get_tile \"contour_own_layer\"))"
           "(setq *HAF:tmp-contour-bylayer* (get_tile \"contour_bylayer\"))"
           "(setq *HAF:tmp-contour-color* (get_tile \"contour_color\"))"
           "(setq *HAF:tmp-contour-suffix* (get_tile \"contour_suffix\"))"
@@ -2348,14 +2377,17 @@
           "(setq *HAF:tmp-libpath* (get_tile \"libpath\"))"
           "(setq *HAF:tmp-debug* (get_tile \"debug\"))"
           "(setq *HAF:tmp-outline-keep* (get_tile \"outline_keep\"))"
+          "(setq *HAF:tmp-outline-own-layer* (get_tile \"outline_own_layer\"))"
           "(setq *HAF:tmp-outline-bylayer* (get_tile \"outline_bylayer\"))"
           "(setq *HAF:tmp-outline-color* (get_tile \"outline_color\"))"
           "(setq *HAF:tmp-outline-suffix* (get_tile \"outline_suffix\"))"
           "(setq *HAF:tmp-breakline-keep* (get_tile \"breakline_keep\"))"
+          "(setq *HAF:tmp-breakline-own-layer* (get_tile \"breakline_own_layer\"))"
           "(setq *HAF:tmp-breakline-bylayer* (get_tile \"breakline_bylayer\"))"
           "(setq *HAF:tmp-breakline-color* (get_tile \"breakline_color\"))"
           "(setq *HAF:tmp-breakline-suffix* (get_tile \"breakline_suffix\"))"
           "(setq *HAF:tmp-contour-keep* (get_tile \"contour_keep\"))"
+          "(setq *HAF:tmp-contour-own-layer* (get_tile \"contour_own_layer\"))"
           "(setq *HAF:tmp-contour-bylayer* (get_tile \"contour_bylayer\"))"
           "(setq *HAF:tmp-contour-color* (get_tile \"contour_color\"))"
           "(setq *HAF:tmp-contour-suffix* (get_tile \"contour_suffix\"))"
@@ -2422,33 +2454,39 @@
           
           ;; Umrandung
           (setq *HAF:outline-keep* (= *HAF:tmp-outline-keep* "1"))
+          (setq *HAF:outline-own-layer* (= *HAF:tmp-outline-own-layer* "1"))
           (setq *HAF:outline-use-layer* (= *HAF:tmp-outline-bylayer* "1"))
           (setq *HAF:outline-color* (1+ (atoi *HAF:tmp-outline-color*))) ;; Index 0-6 -> ACI 1-7
           (if (and *HAF:tmp-outline-suffix* (/= *HAF:tmp-outline-suffix* ""))
             (setq *HAF:outline-suffix* *HAF:tmp-outline-suffix*))
           (HAF:set-config-value "OUTLINE_KEEP" (if *HAF:outline-keep* "1" "0"))
+          (HAF:set-config-value "OUTLINE_OWN_LAYER" (if *HAF:outline-own-layer* "1" "0"))
           (HAF:set-config-value "OUTLINE_USE_LAYER" (if *HAF:outline-use-layer* "1" "0"))
           (HAF:set-config-value "OUTLINE_COLOR" (itoa *HAF:outline-color*))
           (HAF:set-config-value "OUTLINE_SUFFIX" *HAF:outline-suffix*)
           
           ;; Bruchlinie
           (setq *HAF:breakline-keep* (= *HAF:tmp-breakline-keep* "1"))
+          (setq *HAF:breakline-own-layer* (= *HAF:tmp-breakline-own-layer* "1"))
           (setq *HAF:breakline-use-layer* (= *HAF:tmp-breakline-bylayer* "1"))
           (setq *HAF:breakline-color* (1+ (atoi *HAF:tmp-breakline-color*)))
           (if (and *HAF:tmp-breakline-suffix* (/= *HAF:tmp-breakline-suffix* ""))
             (setq *HAF:breakline-suffix* *HAF:tmp-breakline-suffix*))
           (HAF:set-config-value "BREAKLINE_KEEP" (if *HAF:breakline-keep* "1" "0"))
+          (HAF:set-config-value "BREAKLINE_OWN_LAYER" (if *HAF:breakline-own-layer* "1" "0"))
           (HAF:set-config-value "BREAKLINE_USE_LAYER" (if *HAF:breakline-use-layer* "1" "0"))
           (HAF:set-config-value "BREAKLINE_COLOR" (itoa *HAF:breakline-color*))
           (HAF:set-config-value "BREAKLINE_SUFFIX" *HAF:breakline-suffix*)
           
           ;; Hoehenlinie
           (setq *HAF:contour-keep* (= *HAF:tmp-contour-keep* "1"))
+          (setq *HAF:contour-own-layer* (= *HAF:tmp-contour-own-layer* "1"))
           (setq *HAF:contour-use-layer* (= *HAF:tmp-contour-bylayer* "1"))
           (setq *HAF:contour-color* (1+ (atoi *HAF:tmp-contour-color*)))
           (if (and *HAF:tmp-contour-suffix* (/= *HAF:tmp-contour-suffix* ""))
             (setq *HAF:contour-suffix* *HAF:tmp-contour-suffix*))
           (HAF:set-config-value "CONTOUR_KEEP" (if *HAF:contour-keep* "1" "0"))
+          (HAF:set-config-value "CONTOUR_OWN_LAYER" (if *HAF:contour-own-layer* "1" "0"))
           (HAF:set-config-value "CONTOUR_USE_LAYER" (if *HAF:contour-use-layer* "1" "0"))
           (HAF:set-config-value "CONTOUR_COLOR" (itoa *HAF:contour-color*))
           (HAF:set-config-value "CONTOUR_SUFFIX" *HAF:contour-suffix*)
@@ -2498,14 +2536,17 @@
   (setq *HAF:tmp-debug* nil)
   (setq *HAF:tmp-path* nil)
   (setq *HAF:tmp-outline-keep* nil)
+  (setq *HAF:tmp-outline-own-layer* nil)
   (setq *HAF:tmp-outline-bylayer* nil)
   (setq *HAF:tmp-outline-color* nil)
   (setq *HAF:tmp-outline-suffix* nil)
   (setq *HAF:tmp-breakline-keep* nil)
+  (setq *HAF:tmp-breakline-own-layer* nil)
   (setq *HAF:tmp-breakline-bylayer* nil)
   (setq *HAF:tmp-breakline-color* nil)
   (setq *HAF:tmp-breakline-suffix* nil)
   (setq *HAF:tmp-contour-keep* nil)
+  (setq *HAF:tmp-contour-own-layer* nil)
   (setq *HAF:tmp-contour-bylayer* nil)
   (setq *HAF:tmp-contour-color* nil)
   (setq *HAF:tmp-contour-suffix* nil)
