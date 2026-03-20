@@ -873,7 +873,9 @@
           (setvar "ATTDIA" 0)
           
           ;; Block einfuegen mit XY-Skalierung (Z bleibt 1.0)
-          (command "._-insert" blockName einfuegepunkt scale scale "" "")
+          ;; Rotation "" + alle Attribut-Prompts dynamisch bestaetigen
+          (command "._-insert" blockName einfuegepunkt scale scale "")
+          (while (> (getvar "CMDACTIVE") 0) (command ""))
           
           ;; ATTDIA-Variable wiederherstellen
           (setvar "ATTDIA" attdia)
