@@ -2,7 +2,7 @@
 ;;; Hoeheninterpolation auf einer Flaeche definiert durch 3-4 Eckpunkte
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 3.4.0
+;;; Version: 3.4.1
 ;;; Datum: 2026-03-20
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAF (HoeheAufFlaeche)
@@ -27,7 +27,7 @@
 ;;; KONSTANTEN (Top-Level erlaubt)
 ;;; ============================================================================
 
-(setq *HAF:version* "3.4.0")
+(setq *HAF:version* "3.4.1")
 (setq *HAF:appdata-folder* "HoeheAufFlaeche")
 (setq *HAF:blockname* "BLK_Hoehenkote")
 
@@ -1896,27 +1896,20 @@
 )
 
 ;;; Hoehenlinie ueber alle TIN-Dreiecke berechnen
-;;; Nur Dreiecke deren Schwerpunkt innerhalb der Umrandung liegt
+;;; Kein Polygon-Filter noetig: Constrained Delaunay hat bereits gefiltert
 ;;; Rueckgabe: Liste von Segmenten ((p1 p2) ...)
-(defun HAF:contour-tin (pts heights triangles target-h polygon
-                        / tri pa pb pc ha hb hc seg result cx cy)
+(defun HAF:contour-tin (pts heights triangles target-h
+                        / tri pa pb pc ha hb hc seg result)
   (setq result nil)
   (foreach tri triangles
     (setq pa (nth (car tri) pts))
     (setq pb (nth (cadr tri) pts))
     (setq pc (nth (caddr tri) pts))
-    ;; Schwerpunkt pruefen
-    (setq cx (/ (+ (car pa) (car pb) (car pc)) 3.0))
-    (setq cy (/ (+ (cadr pa) (cadr pb) (cadr pc)) 3.0))
-    (if (or (null polygon) (HAF:point-in-polygon (list cx cy) polygon))
-      (progn
-        (setq ha (nth (car tri) heights))
-        (setq hb (nth (cadr tri) heights))
-        (setq hc (nth (caddr tri) heights))
-        (setq seg (HAF:contour-in-triangle pa ha pb hb pc hc target-h))
-        (if seg (setq result (cons seg result)))
-      )
-    )
+    (setq ha (nth (car tri) heights))
+    (setq hb (nth (cadr tri) heights))
+    (setq hc (nth (caddr tri) heights))
+    (setq seg (HAF:contour-in-triangle pa ha pb hb pc hc target-h))
+    (if seg (setq result (cons seg result)))
   )
   (HAF:debug (strcat "contour-tin: " (itoa (length result)) " Segmente bei H=" (rtos target-h 2 2)))
   (if result (reverse result) nil)
@@ -2216,7 +2209,7 @@
 ;;;   diagonal - "13"/"24" (nur bei 4 Punkten)
 ;;;
 ;;; Rueckgabe: Liste von Liniensegmenten ((p1 p2) ...) oder nil
-(defun HAF:compute-contour (pts heights target-h diagonal polygon / num-pts)
+(defun HAF:compute-contour (pts heights target-h diagonal / num-pts)
   (setq num-pts (length pts))
   (HAF:debug (strcat "compute-contour: " (itoa num-pts) " Punkte, target=" (rtos target-h 2 2)))
   (cond
@@ -2224,7 +2217,7 @@
     ((= num-pts 4) (HAF:contour-4pt pts heights target-h diagonal))
     ((>= num-pts 5)
      (if *HAF:tin-triangles*
-       (HAF:contour-tin pts heights *HAF:tin-triangles* target-h polygon)
+       (HAF:contour-tin pts heights *HAF:tin-triangles* target-h)
        nil))
     (T nil)
   )
@@ -2283,7 +2276,7 @@
 ;;;   interval - Abstand N
 ;;;
 ;;; Rueckgabe: Liste aller Entity-Names (zum Loeschen/Finalisieren)
-(defun HAF:draw-grid (pts heights diagonal interval polygon
+(defun HAF:draw-grid (pts heights diagonal interval
                       / min-h max-h target-h segments entities all-entities)
   (setq min-h (apply 'min heights))
   (setq max-h (apply 'max heights))
@@ -2300,7 +2293,7 @@
                                 " start=" (rtos target-h 2 2)))
   ;; Schleife ueber alle Raster-Niveaus
   (while (<= target-h max-h)
-    (setq segments (HAF:compute-contour pts heights target-h diagonal polygon))
+    (setq segments (HAF:compute-contour pts heights target-h diagonal))
     (if segments
       (progn
         ;; Zeichne Segmente mit Grid-Farbe (nur innerhalb Polygon)
@@ -2811,10 +2804,10 @@
              (progn
                (HAF:log-write "INFO" (strcat "Hoehenlinie: H=" (rtos target-h 2 2)))
                (setq segments (HAF:compute-contour corner-points corner-heights
-                                                    target-h use-diagonal corner-points))
+                                                    target-h use-diagonal))
                (if segments
                  (progn
-                   (setq contour-entities (HAF:draw-contour segments corner-points))
+                   (setq contour-entities (HAF:draw-contour segments nil))
                    (princ (strcat "\n  Hoehenlinie bei " (rtos target-h 2 2)
                                   " (" (itoa (length segments)) " Segment(e))"))
                  )
@@ -2838,7 +2831,7 @@
                (setq *HAF:grid-interval* target-h)
                (HAF:log-write "INFO" (strcat "Raster: N=" (rtos target-h 2 2)))
                (setq grid-entities (HAF:draw-grid corner-points corner-heights
-                                                   use-diagonal target-h corner-points))
+                                                   use-diagonal target-h))
                (if (null grid-entities)
                  (princ "\n  Kein Raster moeglich (alle Hoehen gleich?)")
                )
