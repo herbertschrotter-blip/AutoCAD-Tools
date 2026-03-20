@@ -1079,7 +1079,9 @@
 ;;; ============================================================================
 
 (defun HAL:insert-block (einfuegepunkt hoehe scale skip-if-exists / blockName heightStr old-attdia block-available importEnt ent attribs insertionPoint hk-layer ent-data)
-  (setq blockName *HAL:blockname*)
+    ;; Blockname: DWG Custom Property → Globaler Standard → Fallback auf *HAL:blockname*
+  (setq blockName (BLI:resolve-blockname "HoeheAufLinie"))
+  (if (null blockName) (setq blockName *HAL:blockname*))
   
   (HAL:debug "=== HAL:insert-block ===")
   (HAL:debug (strcat "  einfuegepunkt=(" (rtos (car einfuegepunkt) 2 4) " " (rtos (cadr einfuegepunkt) 2 4) " " (rtos (caddr einfuegepunkt) 2 4) ")"))
