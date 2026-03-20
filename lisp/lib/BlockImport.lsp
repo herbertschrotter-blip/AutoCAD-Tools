@@ -424,6 +424,177 @@
 )
 
 ;;; ============================================================================
+;;; DWG CUSTOM PROPERTY - BLOCK-ZUORDNUNG PRO ZEICHNUNG
+;;; ============================================================================
+
+;;; Safe-Variant-Value Pattern (GetCustomByIndex Quirk)
+;;; Gibt manchmal Strings direkt, manchmal Variants zurueck
+;;; Rueckgabe: Wert als String oder nil
+(defun BLI:safe-variant-value (val / )
+  (cond
+    ((= (type val) 'STR) val)
+    ((= (type val) 'VLA-OBJECT) val)
+    ((not (null val))
+      (vl-catch-all-apply 'vlax-variant-value (list val))
+    )
+    (T nil)
+  )
+)
+
+;;; Liest Blockname aus DWG Custom Property
+;;; Property-Name: "BLI_Block:<context>" (z.B. "BLI_Block:SetHK")
+;;; Parameter: context - Context-String (z.B. "SetHK", "HoeheAufLinie")
+;;;            Wenn nil: verwendet *block-import-context*
+;;; Rueckgabe: Blockname (String) oder nil wenn nicht gesetzt
+(defun BLI:dwg-block-read (context / prop-name doc si num-props i key val found result)
+  ;; Context bestimmen
+  (if (null context) (setq context *block-import-context*))
+  (if (null context)
+    (progn
+      (BLI:log-write "WARN" "BLI:dwg-block-read: Kein Context")
+      nil
+    )
+    (progn
+      (setq prop-name (strcat "BLI_Block:" context))
+      (setq found nil result nil)
+
+      ;; SummaryInfo holen
+      (setq doc (vla-get-activedocument (vlax-get-acad-object)))
+      (setq si (vl-catch-all-apply 'vla-get-SummaryInfo (list doc)))
+      (if (vl-catch-all-error-p si)
+        (progn
+          (BLI:log-write "ERROR" "BLI:dwg-block-read: SummaryInfo nicht verfuegbar")
+          nil
+        )
+        (progn
+          (setq num-props (vla-NumCustomInfo si))
+          (setq i 0)
+          (while (and (< i num-props) (null found))
+            (setq key "" val "")
+            (vl-catch-all-apply
+              '(lambda ()
+                (vla-GetCustomByIndex si i 'key 'val)
+                (setq key (BLI:safe-variant-value key))
+                (setq val (BLI:safe-variant-value val))
+                (if (and key (= (strcase key) (strcase prop-name)))
+                  (progn (setq result val) (setq found T))
+                )
+              )
+            )
+            (setq i (1+ i))
+          )
+          (BLI:log-write "DEBUG"
+            (strcat "DWG-Block gelesen: " prop-name "=" (if result result "nil")))
+          (if (and result (/= result "")) result nil)
+        )
+      )
+    )
+  )
+)
+
+;;; Schreibt Blockname in DWG Custom Property
+;;; Property-Name: "BLI_Block:<context>" (z.B. "BLI_Block:SetHK")
+;;; Parameter: context - Context-String, blockname - Blockname
+;;; Rueckgabe: T bei Erfolg, nil bei Fehler
+(defun BLI:dwg-block-write (context blockname / prop-name doc si num-props i key val found)
+  ;; Context bestimmen
+  (if (null context) (setq context *block-import-context*))
+  (if (null context)
+    (progn
+      (BLI:log-write "WARN" "BLI:dwg-block-write: Kein Context")
+      nil
+    )
+    (progn
+      (setq prop-name (strcat "BLI_Block:" context))
+      (setq found nil)
+
+      ;; SummaryInfo holen
+      (setq doc (vla-get-activedocument (vlax-get-acad-object)))
+      (setq si (vl-catch-all-apply 'vla-get-SummaryInfo (list doc)))
+      (if (vl-catch-all-error-p si)
+        (progn
+          (BLI:log-write "ERROR" "BLI:dwg-block-write: SummaryInfo nicht verfuegbar")
+          nil
+        )
+        (progn
+          ;; Suche ob Property schon existiert
+          (setq num-props (vla-NumCustomInfo si))
+          (setq i 0)
+          (while (and (< i num-props) (not found))
+            (setq key "")
+            (vl-catch-all-apply
+              '(lambda ()
+                (vla-GetCustomByIndex si i 'key 'val)
+                (setq key (BLI:safe-variant-value key))
+                (if (and key (= (strcase key) (strcase prop-name)))
+                  (progn
+                    (vla-SetCustomByIndex si i prop-name blockname)
+                    (setq found T)
+                  )
+                )
+              )
+            )
+            (setq i (1+ i))
+          )
+
+          ;; Wenn nicht gefunden: Neu anlegen
+          (if (not found)
+            (vl-catch-all-apply 'vla-AddCustomInfo (list si prop-name blockname))
+          )
+
+          (BLI:log-write "INFO"
+            (strcat "DWG-Block gespeichert: " prop-name "=" blockname))
+          T
+        )
+      )
+    )
+  )
+)
+
+;;; Ermittelt den Blocknamen fuer die aktuelle Zeichnung
+;;; Lookup-Reihenfolge:
+;;;   1. DWG Custom Property (zeichnungsspezifisch)
+;;;   2. Globaler Standard aus Config (fuer alle Zeichnungen)
+;;;   3. nil (kein Block konfiguriert)
+;;; Bei erstem Aufruf: Globaler Standard wird in DWG gespeichert
+;;; Parameter: context - Context-String (optional, Fallback: *block-import-context*)
+;;; Rueckgabe: Blockname (String) oder nil
+(defun BLI:resolve-blockname (context / dwg-block global-block)
+  ;; Context bestimmen
+  (if (null context) (setq context *block-import-context*))
+
+  ;; 1. DWG Custom Property
+  (setq dwg-block (BLI:dwg-block-read context))
+  (if dwg-block
+    (progn
+      (BLI:log-write "DEBUG"
+        (strcat "Block aus DWG: " dwg-block " (Context: " context ")"))
+      dwg-block
+    )
+    ;; 2. Globaler Standard aus Config
+    (progn
+      (setq global-block (get-standard-block))
+      (if global-block
+        (progn
+          ;; Globalen Standard in DWG speichern (fuer naechstes Mal)
+          (BLI:dwg-block-write context global-block)
+          (BLI:log-write "INFO"
+            (strcat "Globaler Standard in DWG uebernommen: " global-block
+                    " (Context: " context ")"))
+          global-block
+        )
+        ;; 3. Kein Block konfiguriert
+        (progn
+          (BLI:log-write "DEBUG"
+            (strcat "Kein Block fuer Context: " context))
+          nil
+        )
+      )
+    )
+  )
+)
+
+;;; ============================================================================
 ;;; LEE MAC UTILITIES - ObjectDBX
 ;;; ============================================================================
 
