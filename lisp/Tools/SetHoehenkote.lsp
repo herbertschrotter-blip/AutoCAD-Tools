@@ -2,7 +2,7 @@
 ;;; Automatisches Setzen von Hoehenkoten-Bloecken in AutoCAD
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 2.3.3
+;;; Version: 2.3.4
 ;;; Datum: 2026-03-18
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SetHK (SetHoehenkote)
@@ -727,7 +727,7 @@
 ;;; Kopiert via VLA: Farbe (ACI+TrueColor), Linientyp, Linienstaerke, Plot, Transparenz
 ;;; Rueckgabe: Name des Ziel-Layers (String) oder nil bei Fehler
 (defun SetHK:ensure-hk-layer ( / cur-layer hk-layer-name suffix suffix-with-sep suffix-len
-                                  doc layers src-layer new-layer color-obj)
+                                  doc layers src-layer new-layer color-obj transp-val)
   ;; Aktuellen Layer lesen
   (setq cur-layer (getvar "CLAYER"))
   
@@ -801,9 +801,12 @@
               (vl-catch-all-apply 'vla-put-plottable
                 (list new-layer (vla-get-plottable src-layer)))
               
-              ;; Transparenz
-              (vl-catch-all-apply 'vla-put-transparency
-                (list new-layer (vla-get-transparency src-layer)))
+              ;; Transparenz (Getter separat absichern - nicht alle Layer haben Transparency)
+              (setq transp-val
+                (vl-catch-all-apply 'vla-get-transparency (list src-layer)))
+              (if (and transp-val (not (vl-catch-all-error-p transp-val)))
+                (vl-catch-all-apply 'vla-put-transparency (list new-layer transp-val))
+              )
               
               (SetHK:log-write "INFO"
                 (strcat "Layer erstellt: " hk-layer-name
