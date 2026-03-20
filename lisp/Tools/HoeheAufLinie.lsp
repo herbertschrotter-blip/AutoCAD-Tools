@@ -2,7 +2,7 @@
 ;;; Hoeheninterpolation entlang einer Linie zwischen zwei Fixpunkten
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 2.3.3
+;;; Version: 2.3.4
 ;;; Datum: 2026-03-19
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAL (HoeheAufLinie)
@@ -373,7 +373,6 @@
       (vl-load-com)
       (HAL:load-config)
       (HAL:load-library)
-      (setq *block-import-context* "HoeheAufLinie")
       (setq *HAL:initialized* T)
       (HAL:log-write "INFO" (strcat "=== HoeheAufLinie v" *HAL:version* " initialisiert ==="))
     )
@@ -1087,6 +1086,7 @@
         )
         (progn
           (HAL:debug "  Block wird eingefuegt...")
+          (setq *block-import-context* "HoeheAufLinie")
           (setq block-available (ensure-block-available blockName))
           (HAL:debug (strcat "  ensure-block-available: car=" (if (car block-available) "T" "nil")))
           
