@@ -27,7 +27,7 @@
 ;;; KONSTANTEN & GLOBALE VARIABLEN
 ;;; ============================================================================
 
-(setq *SetHK:version* "2.3.3")
+(setq *SetHK:version* "2.4.0")
 (setq *SetHK:appdata-folder* "SetHoehenkote")
 (setq *SetHK:log-session-id* nil)
 (setq *SetHK:debug-mode* nil)
@@ -391,14 +391,6 @@
         )
         (progn
                     (SetHK:log-write "INFO" (strcat "Block-Import Context: " *SetHK:block-context*))
-          
-          ;; Blockname aus Config laden (falls geaendert via HKSETTINGS)
-          (if (SetHK:get-config-value "BLOCKNAME")
-            (progn
-              (setq *SetHK:blockname* (SetHK:get-config-value "BLOCKNAME"))
-              (SetHK:log-write "INFO" (strcat "Blockname aus Config: " *SetHK:blockname*))
-            )
-          )
           
           ;; HK-Layer Setting aus Config laden
           (setq *SetHK:use-layer-suffix* (SetHK:read-layer-suffix-setting))
@@ -825,9 +817,16 @@
 
 ;;; Fuegt Hoehenkoten-Block an gegebenem Punkt mit Hoehe und Skalierung ein
 (defun SetHK:insert-block (einfuegepunkt hoehe scale / blockName heightStr intPart decPart height2DecStr attdia ent attribs insertionPoint block-available importEnt hk-layer ent-data)
-  ;; Blockname: DWG Custom Property → Globaler Standard → Fallback auf *SetHK:blockname*
+  ;; Blockname aus BlockImport (DWG Property → Globaler Standard)
+  (setq *block-import-context* *SetHK:block-context*)
   (setq blockName (BLI:resolve-blockname *SetHK:block-context*))
-  (if (null blockName) (setq blockName *SetHK:blockname*))
+  (if (null blockName)
+    (progn
+      (SetHK:log-write "ERROR" "Kein Block konfiguriert! Oeffne Block-Verwaltung.")
+      (princ "\n*** Kein Block konfiguriert! Verwende HKBLOCK um einen Block einzurichten. ***")
+      (princ)
+    )
+  )
   
   (SetHK:log-write "DEBUG" (strcat "insert-block: pt=("
     (rtos (car einfuegepunkt) 2 3) " " (rtos (cadr einfuegepunkt) 2 3)
@@ -837,7 +836,6 @@
   (if (and einfuegepunkt hoehe scale)
     (progn
       ;; Block verfuegbar machen (nutzt BlockImport.lsp Bibliothek)
-      (setq *block-import-context* *SetHK:block-context*)
       (setq block-available (ensure-block-available blockName))
       
       (if (car block-available)
@@ -1050,13 +1048,12 @@
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
   
-  ;; --- Block-Name ---
+  ;; --- Block-Name (read-only, gesteuert von BlockImport) ---
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"Hoehenkoten-Block\";" fp)
-  (write-line "    : edit_box {" fp)
+  (write-line "    : text {" fp)
   (write-line "      key = \"blockname\";" fp)
-  (write-line "      label = \"Block-Name:\";" fp)
-  (write-line "      edit_width = 25;" fp)
+  (write-line "      label = \"\";" fp)
   (write-line "    }" fp)
   (write-line "    : button {" fp)
   (write-line "      key = \"btn_block\";" fp)
@@ -1165,7 +1162,10 @@
   (setq cfg-val (SetHK:get-config-value "DEFAULT_SCALE"))
   (setq cur-default-scale (if (and cfg-val (/= cfg-val "")) (atof cfg-val) 1.0))
   
-  (setq cur-blockname *SetHK:blockname*)
+  ;; Blockname aus BlockImport (DWG → Global → Default)
+  (setq *block-import-context* *SetHK:block-context*)
+  (setq cur-blockname (BLI:resolve-blockname *SetHK:block-context*))
+  (if (null cur-blockname) (setq cur-blockname "(nicht konfiguriert)"))
   
   (setq cur-libpath (SetHK:get-config-value "BLOCKIMPORT_PATH"))
   (if (null cur-libpath) (setq cur-libpath "(nicht konfiguriert)"))
@@ -1189,7 +1189,7 @@
       ;; Werte in Dialog setzen
       (set_tile "scale" (if (> cur-scale 0.0) (rtos cur-scale 2 2) "(nicht gesetzt)"))
       (set_tile "default_scale" (rtos cur-default-scale 2 2))
-      (set_tile "blockname" cur-blockname)
+      (set_tile "blockname" (strcat "Aktueller Block: " cur-blockname))
       (set_tile "libpath" cur-libpath)
       (set_tile "debug" (if cur-debug "1" "0"))
       (set_tile "use_suffix" (if cur-use-suffix "1" "0"))
@@ -1291,14 +1291,7 @@
             )
           )
           
-          ;; Block-Name speichern
-          (if (and new-blockname (/= new-blockname ""))
-            (progn
-              (setq *SetHK:blockname* new-blockname)
-              (SetHK:set-config-value "BLOCKNAME" new-blockname)
-              (SetHK:log-write "INFO" (strcat "Blockname: " new-blockname))
-            )
-          )
+          ;; Block-Name wird von BlockImport verwaltet (nicht mehr in SetHK Config)
           
           ;; BlockImport Pfad speichern (nur wenn geaendert und gueltig)
           (if (and new-libpath
