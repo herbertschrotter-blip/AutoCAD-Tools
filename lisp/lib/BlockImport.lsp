@@ -22,7 +22,7 @@
 ;;; ShowBlockPath     - Zeigt konfigurierte Pfade
 ;;; ResetBlockPath    - Löscht alle Pfade
 ;;;
-;;; Version: 1.10.0
+;;; Version: 1.10.1
 ;;; Datum: 2026-03-19
 ;;; Autor: Herbert Schrotter
 
@@ -1232,23 +1232,19 @@
   ;; --- Buttons Zeile 2 ---
   (write-line "  : row {" fp)
   (write-line "    : button {" fp)
-  (write-line "      key = \"btn_path\";" fp)
-  (write-line "      label = \"Pfad aendern\";" fp)
-  (write-line "      width = 16;" fp)
-  (write-line "    }" fp)
-  (write-line "    : button {" fp)
-
-  ;; --- Buttons Zeile 3 ---
-  (write-line "  : row {" fp)
-  (write-line "    : button {" fp)
   (write-line "      key = \"btn_add\";" fp)
   (write-line "      label = \"Hinzufuegen\";" fp)
-  (write-line "      width = 16;" fp)
+  (write-line "      width = 13;" fp)
   (write-line "    }" fp)
   (write-line "    : button {" fp)
   (write-line "      key = \"btn_remove\";" fp)
   (write-line "      label = \"Entfernen\";" fp)
-  (write-line "      width = 16;" fp)
+  (write-line "      width = 13;" fp)
+  (write-line "    }" fp)
+  (write-line "    : button {" fp)
+  (write-line "      key = \"btn_path\";" fp)
+  (write-line "      label = \"Pfad\";" fp)
+  (write-line "      width = 13;" fp)
   (write-line "    }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
@@ -1720,8 +1716,8 @@
 ;; KEIN vl-load-com auf Top-Level! (Lazy-Init: wird von aufrufendem Script geladen)
 
 ;; Lade-Meldung
-(BLI:log-write "INFO" "=== BlockImport.lsp v1.10.0 geladen ===")
-(princ "\nBlockImport.lsp v1.10.0 geladen.")
+(BLI:log-write "INFO" "=== BlockImport.lsp v1.10.1 geladen ===")
+(princ "\nBlockImport.lsp v1.10.1 geladen.")
 (princ "\nBefehle: ManageBlockImport - Block-Verwaltung")
 (princ "\n         ShowBlockPath - Zeigt konfigurierte Pfade")
 (princ "\n         ResetBlockPath - Löscht alle Pfade")
