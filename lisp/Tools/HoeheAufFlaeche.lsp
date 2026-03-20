@@ -2,7 +2,7 @@
 ;;; Hoeheninterpolation auf einer Flaeche definiert durch 3-4 Eckpunkte
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 2.0.0
+;;; Version: 2.1.0
 ;;; Datum: 2026-03-20
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAF (HoeheAufFlaeche)
@@ -27,7 +27,7 @@
 ;;; KONSTANTEN (Top-Level erlaubt)
 ;;; ============================================================================
 
-(setq *HAF:version* "2.0.0")
+(setq *HAF:version* "2.1.0")
 (setq *HAF:appdata-folder* "HoeheAufFlaeche")
 (setq *HAF:blockname* "BLK_Hoehenkote")
 
@@ -45,6 +45,24 @@
 ;; Settings (Defaults, werden von Config ueberschrieben)
 (setq *HAF:use-layer-suffix* T)
 (setq *HAF:layer-suffix* "HK")
+
+;; Linien-Settings: Umrandung (Magenta)
+(setq *HAF:outline-keep* nil)        ; Am Ende behalten?
+(setq *HAF:outline-color* 6)         ; ACI-Farbe (6=Magenta)
+(setq *HAF:outline-suffix* "UM")     ; Layer-Suffix
+(setq *HAF:outline-use-layer* nil)   ; ByLayer statt feste Farbe?
+
+;; Linien-Settings: Bruchlinie (Gelb)
+(setq *HAF:breakline-keep* nil)
+(setq *HAF:breakline-color* 2)       ; ACI-Farbe (2=Gelb)
+(setq *HAF:breakline-suffix* "BL")
+(setq *HAF:breakline-use-layer* nil)
+
+;; Linien-Settings: Hoehenlinie (Rot)
+(setq *HAF:contour-keep* nil)
+(setq *HAF:contour-color* 1)         ; ACI-Farbe (1=Rot)
+(setq *HAF:contour-suffix* "HL")
+(setq *HAF:contour-use-layer* nil)
 
 ;;; ============================================================================
 ;;; APPDATA & LOGGING (frueh definieren!)
@@ -266,8 +284,39 @@
   ;; Layer-Suffix
   (setq val (HAF:get-config-value "LAYER_SUFFIX"))
   (if (and val (/= val "")) (setq *HAF:layer-suffix* val))
+  ;; Umrandung
+  (setq val (HAF:get-config-value "OUTLINE_KEEP"))
+  (if val (setq *HAF:outline-keep* (= val "1")))
+  (setq val (HAF:get-config-value "OUTLINE_COLOR"))
+  (if (and val (/= val "")) (setq *HAF:outline-color* (atoi val)))
+  (setq val (HAF:get-config-value "OUTLINE_SUFFIX"))
+  (if (and val (/= val "")) (setq *HAF:outline-suffix* val))
+  (setq val (HAF:get-config-value "OUTLINE_USE_LAYER"))
+  (if val (setq *HAF:outline-use-layer* (= val "1")))
+  ;; Bruchlinie
+  (setq val (HAF:get-config-value "BREAKLINE_KEEP"))
+  (if val (setq *HAF:breakline-keep* (= val "1")))
+  (setq val (HAF:get-config-value "BREAKLINE_COLOR"))
+  (if (and val (/= val "")) (setq *HAF:breakline-color* (atoi val)))
+  (setq val (HAF:get-config-value "BREAKLINE_SUFFIX"))
+  (if (and val (/= val "")) (setq *HAF:breakline-suffix* val))
+  (setq val (HAF:get-config-value "BREAKLINE_USE_LAYER"))
+  (if val (setq *HAF:breakline-use-layer* (= val "1")))
+  ;; Hoehenlinie
+  (setq val (HAF:get-config-value "CONTOUR_KEEP"))
+  (if val (setq *HAF:contour-keep* (= val "1")))
+  (setq val (HAF:get-config-value "CONTOUR_COLOR"))
+  (if (and val (/= val "")) (setq *HAF:contour-color* (atoi val)))
+  (setq val (HAF:get-config-value "CONTOUR_SUFFIX"))
+  (if (and val (/= val "")) (setq *HAF:contour-suffix* val))
+  (setq val (HAF:get-config-value "CONTOUR_USE_LAYER"))
+  (if val (setq *HAF:contour-use-layer* (= val "1")))
+  ;; Log
   (HAF:log-write "INFO" (strcat "Config angewendet: Debug=" (if *HAF:debug-mode* "EIN" "AUS")
-                                " LayerSuffix=" (if *HAF:use-layer-suffix* (strcat "aktiv (_" *HAF:layer-suffix* ")") "aus")))
+                                " HK=" (if *HAF:use-layer-suffix* (strcat "_" *HAF:layer-suffix*) "aus")
+                                " UM=" (if *HAF:outline-keep* "behalten" "temp")
+                                " BL=" (if *HAF:breakline-keep* "behalten" "temp")
+                                " HL=" (if *HAF:contour-keep* "behalten" "temp")))
 )
 
 ;;; ============================================================================
@@ -719,6 +768,152 @@
         )
       )
     )
+  )
+)
+
+;;; ============================================================================
+;;; LINIEN-MANAGEMENT (Umrandung, Bruchlinie, Hoehenlinie)
+;;; ============================================================================
+
+;;; ACI-Farbnamen fuer Anzeige
+(defun HAF:color-name (aci / )
+  (cond
+    ((= aci 1) "Rot")
+    ((= aci 2) "Gelb")
+    ((= aci 3) "Gruen")
+    ((= aci 4) "Cyan")
+    ((= aci 5) "Blau")
+    ((= aci 6) "Magenta")
+    ((= aci 7) "Weiss")
+    (T (strcat "Farbe " (itoa aci)))
+  )
+)
+
+;;; Erstellt einen Layer mit Suffix (wie HK-Layer, aber fuer Linien)
+;;; Kopiert Properties vom aktuellen Layer
+;;; Rueckgabe: Layer-Name oder nil
+(defun HAF:ensure-line-layer (suffix / cur-layer layer-name suffix-with-sep suffix-len
+                                       doc layers src-layer new-layer)
+  (setq cur-layer (getvar "CLAYER"))
+  (setq suffix-with-sep (strcat "_" suffix))
+  (setq suffix-len (strlen suffix-with-sep))
+  ;; Pruefen ob aktueller Layer schon auf _<suffix> endet
+  (if (and (>= (strlen cur-layer) suffix-len)
+           (= (strcase (substr cur-layer (- (strlen cur-layer) suffix-len -1)))
+              (strcase suffix-with-sep)))
+    cur-layer
+    (progn
+      (setq layer-name (strcat cur-layer suffix-with-sep))
+      (if (tblsearch "LAYER" layer-name)
+        layer-name
+        (progn
+          (setq doc (vla-get-activedocument (vlax-get-acad-object)))
+          (setq layers (vla-get-layers doc))
+          (setq src-layer (vla-item layers cur-layer))
+          (setq new-layer (vl-catch-all-apply 'vla-add (list layers layer-name)))
+          (if (vl-catch-all-error-p new-layer)
+            (progn
+              (HAF:log-write "ERROR" (strcat "Line-Layer fehlgeschlagen: " layer-name))
+              nil
+            )
+            (progn
+              (vl-catch-all-apply 'vla-put-color (list new-layer (vla-get-color src-layer)))
+              (vl-catch-all-apply 'vla-put-linetype (list new-layer (vla-get-linetype src-layer)))
+              (vl-catch-all-apply 'vla-put-lineweight (list new-layer (vla-get-lineweight src-layer)))
+              (HAF:log-write "INFO" (strcat "Line-Layer erstellt: " layer-name))
+              layer-name
+            )
+          )
+        )
+      )
+    )
+  )
+)
+
+;;; Finalisiert eine Linie: Layer zuweisen + ByLayer setzen wenn gewuenscht
+;;; Parameter:
+;;;   ent - Entity-Name
+;;;   keep - T = behalten, nil = wird spaeter geloescht (temporaer)
+;;;   use-layer - T = ByLayer Farbe, nil = feste Farbe beibehalten
+;;;   suffix - Layer-Suffix (z.B. "UM", "BL", "HL")
+(defun HAF:finalize-line (ent keep use-layer suffix / layer-name ent-data)
+  (if (and ent keep)
+    (progn
+      ;; Layer erstellen und zuweisen
+      (setq layer-name (HAF:ensure-line-layer suffix))
+      (if layer-name
+        (progn
+          (setq ent-data (entget ent))
+          (entmod (subst (cons 8 layer-name) (assoc 8 ent-data) ent-data))
+          ;; ByLayer: Farbe auf 256 setzen (= ByLayer)
+          (if use-layer
+            (progn
+              (setq ent-data (entget ent))
+              (if (assoc 62 ent-data)
+                (entmod (subst (cons 62 256) (assoc 62 ent-data) ent-data))
+              )
+            )
+          )
+          (HAF:debug (strcat "Linie finalisiert: Layer=" layer-name
+                             " ByLayer=" (if use-layer "ja" "nein")))
+        )
+      )
+    )
+  )
+)
+
+;;; Zeichnet Umrandung als geschlossene 3D-Polylinie
+;;; Parameter: corner-points - Liste von 3-4 Punkten, corner-heights - Hoehen
+;;; Rueckgabe: Entity-Name oder nil
+(defun HAF:draw-outline (corner-points corner-heights / i pt h ent)
+  (if (>= (length corner-points) 3)
+    (progn
+      (command "_3DPOLY")
+      (setq i 0)
+      (while (< i (length corner-points))
+        (setq pt (nth i corner-points))
+        (setq h (nth i corner-heights))
+        (command (list (car pt) (cadr pt) h))
+        (setq i (1+ i))
+      )
+      ;; Schliessen: zurueck zum ersten Punkt
+      (setq pt (nth 0 corner-points))
+      (setq h (nth 0 corner-heights))
+      (command (list (car pt) (cadr pt) h))
+      (command "")
+      (setq ent (entlast))
+      ;; Farbe setzen
+      (if ent
+        (progn
+          (setq ent (entget ent))
+          (if (assoc 62 ent)
+            (entmod (subst (cons 62 *HAF:outline-color*) (assoc 62 ent) ent))
+            (entmod (append ent (list (cons 62 *HAF:outline-color*))))
+          )
+          (setq ent (cdr (assoc -1 ent))) ;; Entity-Name zurueck
+          (HAF:debug (strcat "Umrandung gezeichnet: " (itoa (length corner-points))
+                             " Punkte, Farbe=" (itoa *HAF:outline-color*)))
+        )
+      )
+      ent
+    )
+    nil
+  )
+)
+
+;;; Loescht Umrandung und zeichnet neu (bei jedem neuen Eckpunkt)
+(defun HAF:update-outline (old-ent corner-points corner-heights / new-ent)
+  ;; Alte Umrandung loeschen
+  (if (and old-ent (entget old-ent))
+    (entdel old-ent)
+  )
+  ;; Neue zeichnen (nur wenn >= 2 Punkte, bei 2 nur eine Linie)
+  (if (>= (length corner-points) 2)
+    (progn
+      (setq new-ent (HAF:draw-outline corner-points corner-heights))
+      new-ent
+    )
+    nil
   )
 )
 
@@ -1288,8 +1483,9 @@
   )
 )
 
-;;; Zeichnet Hoehenlinie als temporaere 3D-Polylinie (rot, Layer 0)
-;;; Rueckgabe: Liste der Entity-Names (zum spaeteren Loeschen)
+;;; Zeichnet Hoehenlinie als Linien-Segmente
+;;; Farbe aus *HAF:contour-color* (konfigurierbar)
+;;; Rueckgabe: Liste der Entity-Names (zum spaeteren Loeschen/Finalisieren)
 (defun HAF:draw-contour (segments / entities ent p1 p2)
   (setq entities nil)
   (foreach seg segments
@@ -1298,22 +1494,25 @@
     (if (and p1 p2)
       (progn
         (setq ent (entmakex
-          (list '(0 . "LINE") '(100 . "AcDbEntity") '(8 . "0") '(62 . 1)
+          (list '(0 . "LINE") '(100 . "AcDbEntity") '(8 . "0")
+                (cons 62 *HAF:contour-color*)
                 '(100 . "AcDbLine")
                 (cons 10 (trans p1 1 0))
                 (cons 11 (trans p2 1 0)))))
         (if ent
           (progn
             (setq entities (cons ent entities))
-            (HAF:debug (strcat "  Contour-Linie gezeichnet: ("
+            (HAF:debug (strcat "  Contour-Linie: ("
                                (rtos (car p1) 2 2) "," (rtos (cadr p1) 2 2) ") -> ("
-                               (rtos (car p2) 2 2) "," (rtos (cadr p2) 2 2) ")"))
+                               (rtos (car p2) 2 2) "," (rtos (cadr p2) 2 2) ")"
+                               " Farbe=" (itoa *HAF:contour-color*)))
           )
         )
       )
     )
   )
-  (HAF:log-write "INFO" (strcat "Hoehenlinie gezeichnet: " (itoa (length entities)) " Segmente"))
+  (HAF:log-write "INFO" (strcat "Hoehenlinie gezeichnet: " (itoa (length entities))
+                                " Segmente, Farbe=" (HAF:color-name *HAF:contour-color*)))
   entities
 )
 
@@ -1327,13 +1526,25 @@
   (HAF:debug (strcat "Contours geloescht: " (itoa (length entities))))
 )
 
-;;; Zeichnet Diagonale als 3D-Polylinie (gelb, zur Visualisierung)
-(defun HAF:draw-diagonal (pt1 h1 pt2 h2 / p1-3d p2-3d)
+;;; Zeichnet Diagonale/Bruchlinie als 3D-Polylinie
+;;; Farbe aus *HAF:breakline-color* (konfigurierbar)
+(defun HAF:draw-diagonal (pt1 h1 pt2 h2 / p1-3d p2-3d ent ent-data)
   (setq p1-3d (list (car pt1) (cadr pt1) h1))
   (setq p2-3d (list (car pt2) (cadr pt2) h2))
   (command "_3DPOLY" p1-3d p2-3d "")
-  (HAF:log-write "INFO" "Diagonale gezeichnet (3D-Polylinie)")
-  (entlast)
+  (setq ent (entlast))
+  ;; Farbe setzen
+  (if ent
+    (progn
+      (setq ent-data (entget ent))
+      (if (assoc 62 ent-data)
+        (entmod (subst (cons 62 *HAF:breakline-color*) (assoc 62 ent-data) ent-data))
+        (entmod (append ent-data (list (cons 62 *HAF:breakline-color*))))
+      )
+    )
+  )
+  (HAF:log-write "INFO" (strcat "Bruchlinie gezeichnet, Farbe=" (HAF:color-name *HAF:breakline-color*)))
+  ent
 )
 
 ;;; ============================================================================
@@ -1415,7 +1626,7 @@
                              num-corners scale pg result interpolated-height tri-info
                              prompt-str pt ht block-ent last-ent
                              diagonal-choice use-diagonal diagonal-ent
-                             contour-entities target-h segments
+                             contour-entities target-h segments outline-ent
                              p1 h1 p2 h2 p3 h3 p4 h4)
   
   (HAF:ensure-init)
@@ -1429,9 +1640,25 @@
       )
       (HAF:log-write "INFO" (strcat "User-Abbruch: " msg))
     )
-    ;; Temporaere Entities aufraeumen
-    (if contour-entities (HAF:delete-contours contour-entities))
-    (if diagonal-ent (if (entget diagonal-ent) (entdel diagonal-ent)))
+    ;; Temporaere Entities aufraeumen (je nach Setting behalten oder loeschen)
+    (if outline-ent
+      (if *HAF:outline-keep*
+        (HAF:finalize-line outline-ent T *HAF:outline-use-layer* *HAF:outline-suffix*)
+        (if (entget outline-ent) (entdel outline-ent))
+      )
+    )
+    (if diagonal-ent
+      (if *HAF:breakline-keep*
+        (HAF:finalize-line diagonal-ent T *HAF:breakline-use-layer* *HAF:breakline-suffix*)
+        (if (entget diagonal-ent) (entdel diagonal-ent))
+      )
+    )
+    (if contour-entities
+      (if *HAF:contour-keep*
+        (foreach e contour-entities (HAF:finalize-line e T *HAF:contour-use-layer* *HAF:contour-suffix*))
+        (HAF:delete-contours contour-entities)
+      )
+    )
     ;; Systemvariablen wiederherstellen
     (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
     (if old-attdia (setvar "ATTDIA" old-attdia))
@@ -1461,7 +1688,7 @@
   
   (setq corner-points nil corner-heights nil corner-entities nil)
   (setq corner-number 1 done nil)
-  (setq contour-entities nil diagonal-ent nil)
+  (setq contour-entities nil diagonal-ent nil outline-ent nil)
   
   (while (and (not done) (< corner-number 5))
     ;; Keywords je nach Zustand
@@ -1500,6 +1727,8 @@
            (setq corner-heights (reverse (cdr (reverse corner-heights))))
            (setq corner-entities (reverse (cdr (reverse corner-entities))))
            (setq corner-number (1- corner-number))
+           ;; Umrandung aktualisieren (weniger Punkte)
+           (setq outline-ent (HAF:update-outline outline-ent corner-points corner-heights))
            (HAF:log-write "INFO" (strcat "Eckpunkt " (itoa corner-number) " entfernt (Zurueck)"))
            (princ (strcat "\n  Eckpunkt " (itoa corner-number) " entfernt"))
          )
@@ -1529,6 +1758,8 @@
                                          ": (" (rtos (car pt) 2 3) " " (rtos (cadr pt) 2 3)
                                          ") H=" (rtos ht 2 3)))
            (setq corner-number (1+ corner-number))
+           ;; Umrandung aktualisieren (nach jedem neuen Eckpunkt)
+           (setq outline-ent (HAF:update-outline outline-ent corner-points corner-heights))
            ;; Hinweis bei 3 Punkten
            (if (= corner-number 4)
              (princ "\n  (ENTER fuer 3 Punkte oder 4. Punkt setzen)")
@@ -1684,22 +1915,54 @@
       ) ;; end while Punkte
       
       ;; ====================================================================
-      ;; PHASE 4: AUFRAEUMEN
+      ;; PHASE 4: AUFRAEUMEN (je nach Settings behalten oder loeschen)
       ;; ====================================================================
       
-      ;; Hoehenlinien loeschen (temporaer)
-      (if contour-entities
-        (progn
-          (HAF:delete-contours contour-entities)
-          (setq contour-entities nil)
+      ;; Umrandung
+      (if outline-ent
+        (if *HAF:outline-keep*
+          (progn
+            (HAF:finalize-line outline-ent T *HAF:outline-use-layer* *HAF:outline-suffix*)
+            (HAF:log-write "INFO" (strcat "Umrandung beibehalten (Layer _" *HAF:outline-suffix* ")"))
+          )
+          (progn
+            (if (entget outline-ent) (entdel outline-ent))
+            (HAF:log-write "INFO" "Umrandung geloescht (temporaer)")
+          )
         )
+        (setq outline-ent nil)
       )
-      ;; Diagonale loeschen
+      
+      ;; Bruchlinie/Diagonale
       (if diagonal-ent
-        (progn
-          (if (entget diagonal-ent) (entdel diagonal-ent))
-          (setq diagonal-ent nil)
+        (if *HAF:breakline-keep*
+          (progn
+            (HAF:finalize-line diagonal-ent T *HAF:breakline-use-layer* *HAF:breakline-suffix*)
+            (HAF:log-write "INFO" (strcat "Bruchlinie beibehalten (Layer _" *HAF:breakline-suffix* ")"))
+          )
+          (progn
+            (if (entget diagonal-ent) (entdel diagonal-ent))
+            (HAF:log-write "INFO" "Bruchlinie geloescht (temporaer)")
+          )
         )
+        (setq diagonal-ent nil)
+      )
+      
+      ;; Hoehenlinien
+      (if contour-entities
+        (if *HAF:contour-keep*
+          (progn
+            (foreach e contour-entities
+              (HAF:finalize-line e T *HAF:contour-use-layer* *HAF:contour-suffix*)
+            )
+            (HAF:log-write "INFO" (strcat "Hoehenlinien beibehalten (Layer _" *HAF:contour-suffix* ")"))
+          )
+          (progn
+            (HAF:delete-contours contour-entities)
+            (HAF:log-write "INFO" "Hoehenlinien geloescht (temporaer)")
+          )
+        )
+        (setq contour-entities nil)
       )
       
       (HAF:log-write "INFO" "Befehl HoeheAufFlaeche beendet")
@@ -1789,6 +2052,93 @@
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
   
+  ;; --- Umrandung ---
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Umrandung\";" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"outline_keep\";" fp)
+  (write-line "        label = \"Behalten\";" fp)
+  (write-line "      }" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"outline_bylayer\";" fp)
+  (write-line "        label = \"Layer-Farbe\";" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : popup_list {" fp)
+  (write-line "        key = \"outline_color\";" fp)
+  (write-line "        label = \"Farbe:\";" fp)
+  (write-line "        list = \"Rot\\nGelb\\nGruen\\nCyan\\nBlau\\nMagenta\\nWeiss\";" fp)
+  (write-line "        width = 12;" fp)
+  (write-line "      }" fp)
+  (write-line "      : edit_box {" fp)
+  (write-line "        key = \"outline_suffix\";" fp)
+  (write-line "        label = \"Suffix:\";" fp)
+  (write-line "        edit_width = 8;" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  
+  ;; --- Bruchlinie ---
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Bruchlinie\";" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"breakline_keep\";" fp)
+  (write-line "        label = \"Behalten\";" fp)
+  (write-line "      }" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"breakline_bylayer\";" fp)
+  (write-line "        label = \"Layer-Farbe\";" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : popup_list {" fp)
+  (write-line "        key = \"breakline_color\";" fp)
+  (write-line "        label = \"Farbe:\";" fp)
+  (write-line "        list = \"Rot\\nGelb\\nGruen\\nCyan\\nBlau\\nMagenta\\nWeiss\";" fp)
+  (write-line "        width = 12;" fp)
+  (write-line "      }" fp)
+  (write-line "      : edit_box {" fp)
+  (write-line "        key = \"breakline_suffix\";" fp)
+  (write-line "        label = \"Suffix:\";" fp)
+  (write-line "        edit_width = 8;" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  
+  ;; --- Hoehenlinie ---
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Hoehenlinie\";" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"contour_keep\";" fp)
+  (write-line "        label = \"Behalten\";" fp)
+  (write-line "      }" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"contour_bylayer\";" fp)
+  (write-line "        label = \"Layer-Farbe\";" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : popup_list {" fp)
+  (write-line "        key = \"contour_color\";" fp)
+  (write-line "        label = \"Farbe:\";" fp)
+  (write-line "        list = \"Rot\\nGelb\\nGruen\\nCyan\\nBlau\\nMagenta\\nWeiss\";" fp)
+  (write-line "        width = 12;" fp)
+  (write-line "      }" fp)
+  (write-line "      : edit_box {" fp)
+  (write-line "        key = \"contour_suffix\";" fp)
+  (write-line "        label = \"Suffix:\";" fp)
+  (write-line "        edit_width = 8;" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  
   ;; --- BlockImport Pfad ---
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"BlockImport.lsp\";" fp)
@@ -1874,6 +2224,23 @@
             "(nicht konfiguriert)")))
       (set_tile "info" (strcat "HoeheAufFlaeche v" *HAF:version*))
       
+      ;; Linien-Settings in Dialog setzen
+      ;; Umrandung
+      (set_tile "outline_keep" (if *HAF:outline-keep* "1" "0"))
+      (set_tile "outline_bylayer" (if *HAF:outline-use-layer* "1" "0"))
+      (set_tile "outline_color" (itoa (1- *HAF:outline-color*)))  ;; ACI 1-7 -> Index 0-6
+      (set_tile "outline_suffix" *HAF:outline-suffix*)
+      ;; Bruchlinie
+      (set_tile "breakline_keep" (if *HAF:breakline-keep* "1" "0"))
+      (set_tile "breakline_bylayer" (if *HAF:breakline-use-layer* "1" "0"))
+      (set_tile "breakline_color" (itoa (1- *HAF:breakline-color*)))
+      (set_tile "breakline_suffix" *HAF:breakline-suffix*)
+      ;; Hoehenlinie
+      (set_tile "contour_keep" (if *HAF:contour-keep* "1" "0"))
+      (set_tile "contour_bylayer" (if *HAF:contour-use-layer* "1" "0"))
+      (set_tile "contour_color" (itoa (1- *HAF:contour-color*)))
+      (set_tile "contour_suffix" *HAF:contour-suffix*)
+      
       ;; Live-Vorschau Layer-Suffix
       (action_tile "layer_suffix"
         "(set_tile \"layer_preview\" (strcat \"Vorschau: \" (getvar \"CLAYER\") \"_\" (get_tile \"layer_suffix\")))"
@@ -1906,6 +2273,18 @@
           "(setq *HAF:tmp-layer-suffix* (get_tile \"layer_suffix\"))"
           "(setq *HAF:tmp-libpath* (get_tile \"libpath\"))"
           "(setq *HAF:tmp-debug* (get_tile \"debug\"))"
+          "(setq *HAF:tmp-outline-keep* (get_tile \"outline_keep\"))"
+          "(setq *HAF:tmp-outline-bylayer* (get_tile \"outline_bylayer\"))"
+          "(setq *HAF:tmp-outline-color* (get_tile \"outline_color\"))"
+          "(setq *HAF:tmp-outline-suffix* (get_tile \"outline_suffix\"))"
+          "(setq *HAF:tmp-breakline-keep* (get_tile \"breakline_keep\"))"
+          "(setq *HAF:tmp-breakline-bylayer* (get_tile \"breakline_bylayer\"))"
+          "(setq *HAF:tmp-breakline-color* (get_tile \"breakline_color\"))"
+          "(setq *HAF:tmp-breakline-suffix* (get_tile \"breakline_suffix\"))"
+          "(setq *HAF:tmp-contour-keep* (get_tile \"contour_keep\"))"
+          "(setq *HAF:tmp-contour-bylayer* (get_tile \"contour_bylayer\"))"
+          "(setq *HAF:tmp-contour-color* (get_tile \"contour_color\"))"
+          "(setq *HAF:tmp-contour-suffix* (get_tile \"contour_suffix\"))"
           "(done_dialog 2)"
         )
       )
@@ -1919,6 +2298,18 @@
           "(setq *HAF:tmp-layer-suffix* (get_tile \"layer_suffix\"))"
           "(setq *HAF:tmp-libpath* (get_tile \"libpath\"))"
           "(setq *HAF:tmp-debug* (get_tile \"debug\"))"
+          "(setq *HAF:tmp-outline-keep* (get_tile \"outline_keep\"))"
+          "(setq *HAF:tmp-outline-bylayer* (get_tile \"outline_bylayer\"))"
+          "(setq *HAF:tmp-outline-color* (get_tile \"outline_color\"))"
+          "(setq *HAF:tmp-outline-suffix* (get_tile \"outline_suffix\"))"
+          "(setq *HAF:tmp-breakline-keep* (get_tile \"breakline_keep\"))"
+          "(setq *HAF:tmp-breakline-bylayer* (get_tile \"breakline_bylayer\"))"
+          "(setq *HAF:tmp-breakline-color* (get_tile \"breakline_color\"))"
+          "(setq *HAF:tmp-breakline-suffix* (get_tile \"breakline_suffix\"))"
+          "(setq *HAF:tmp-contour-keep* (get_tile \"contour_keep\"))"
+          "(setq *HAF:tmp-contour-bylayer* (get_tile \"contour_bylayer\"))"
+          "(setq *HAF:tmp-contour-color* (get_tile \"contour_color\"))"
+          "(setq *HAF:tmp-contour-suffix* (get_tile \"contour_suffix\"))"
           "(done_dialog 1)"
         )
       )
@@ -1980,8 +2371,43 @@
           (setq *HAF:debug-mode* (= *HAF:tmp-debug* "1"))
           (HAF:set-config-value "DEBUG" (if *HAF:debug-mode* "1" "0"))
           
-          (HAF:log-write "INFO" (strcat "Settings: Layer=" (if *HAF:use-layer-suffix* "aktiv" "aus")
-                                        " Suffix=_" *HAF:layer-suffix*
+          ;; Umrandung
+          (setq *HAF:outline-keep* (= *HAF:tmp-outline-keep* "1"))
+          (setq *HAF:outline-use-layer* (= *HAF:tmp-outline-bylayer* "1"))
+          (setq *HAF:outline-color* (1+ (atoi *HAF:tmp-outline-color*))) ;; Index 0-6 -> ACI 1-7
+          (if (and *HAF:tmp-outline-suffix* (/= *HAF:tmp-outline-suffix* ""))
+            (setq *HAF:outline-suffix* *HAF:tmp-outline-suffix*))
+          (HAF:set-config-value "OUTLINE_KEEP" (if *HAF:outline-keep* "1" "0"))
+          (HAF:set-config-value "OUTLINE_USE_LAYER" (if *HAF:outline-use-layer* "1" "0"))
+          (HAF:set-config-value "OUTLINE_COLOR" (itoa *HAF:outline-color*))
+          (HAF:set-config-value "OUTLINE_SUFFIX" *HAF:outline-suffix*)
+          
+          ;; Bruchlinie
+          (setq *HAF:breakline-keep* (= *HAF:tmp-breakline-keep* "1"))
+          (setq *HAF:breakline-use-layer* (= *HAF:tmp-breakline-bylayer* "1"))
+          (setq *HAF:breakline-color* (1+ (atoi *HAF:tmp-breakline-color*)))
+          (if (and *HAF:tmp-breakline-suffix* (/= *HAF:tmp-breakline-suffix* ""))
+            (setq *HAF:breakline-suffix* *HAF:tmp-breakline-suffix*))
+          (HAF:set-config-value "BREAKLINE_KEEP" (if *HAF:breakline-keep* "1" "0"))
+          (HAF:set-config-value "BREAKLINE_USE_LAYER" (if *HAF:breakline-use-layer* "1" "0"))
+          (HAF:set-config-value "BREAKLINE_COLOR" (itoa *HAF:breakline-color*))
+          (HAF:set-config-value "BREAKLINE_SUFFIX" *HAF:breakline-suffix*)
+          
+          ;; Hoehenlinie
+          (setq *HAF:contour-keep* (= *HAF:tmp-contour-keep* "1"))
+          (setq *HAF:contour-use-layer* (= *HAF:tmp-contour-bylayer* "1"))
+          (setq *HAF:contour-color* (1+ (atoi *HAF:tmp-contour-color*)))
+          (if (and *HAF:tmp-contour-suffix* (/= *HAF:tmp-contour-suffix* ""))
+            (setq *HAF:contour-suffix* *HAF:tmp-contour-suffix*))
+          (HAF:set-config-value "CONTOUR_KEEP" (if *HAF:contour-keep* "1" "0"))
+          (HAF:set-config-value "CONTOUR_USE_LAYER" (if *HAF:contour-use-layer* "1" "0"))
+          (HAF:set-config-value "CONTOUR_COLOR" (itoa *HAF:contour-color*))
+          (HAF:set-config-value "CONTOUR_SUFFIX" *HAF:contour-suffix*)
+          
+          (HAF:log-write "INFO" (strcat "Settings: HK=" (if *HAF:use-layer-suffix* (strcat "_" *HAF:layer-suffix*) "aus")
+                                        " UM=" (if *HAF:outline-keep* "behalten" "temp") "/" (HAF:color-name *HAF:outline-color*)
+                                        " BL=" (if *HAF:breakline-keep* "behalten" "temp") "/" (HAF:color-name *HAF:breakline-color*)
+                                        " HL=" (if *HAF:contour-keep* "behalten" "temp") "/" (HAF:color-name *HAF:contour-color*)
                                         " Debug=" (if *HAF:debug-mode* "ein" "aus")))
           (princ "\nEinstellungen gespeichert.")
         )
@@ -2022,6 +2448,18 @@
   (setq *HAF:tmp-libpath* nil)
   (setq *HAF:tmp-debug* nil)
   (setq *HAF:tmp-path* nil)
+  (setq *HAF:tmp-outline-keep* nil)
+  (setq *HAF:tmp-outline-bylayer* nil)
+  (setq *HAF:tmp-outline-color* nil)
+  (setq *HAF:tmp-outline-suffix* nil)
+  (setq *HAF:tmp-breakline-keep* nil)
+  (setq *HAF:tmp-breakline-bylayer* nil)
+  (setq *HAF:tmp-breakline-color* nil)
+  (setq *HAF:tmp-breakline-suffix* nil)
+  (setq *HAF:tmp-contour-keep* nil)
+  (setq *HAF:tmp-contour-bylayer* nil)
+  (setq *HAF:tmp-contour-color* nil)
+  (setq *HAF:tmp-contour-suffix* nil)
 )
 
 ;;; Settings-Befehl
