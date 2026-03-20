@@ -22,7 +22,7 @@
 ;;; ShowBlockPath     - Zeigt konfigurierte Pfade
 ;;; ResetBlockPath    - Löscht alle Pfade
 ;;;
-;;; Version: 1.8.1
+;;; Version: 1.8.2
 ;;; Datum: 2026-03-19
 ;;; Autor: Herbert Schrotter
 
@@ -47,8 +47,12 @@
 
 ;; AppData-Ordner für BlockImport
 (setq *BLI:appdata-folder* "BlockImport")
-(setq *BLI:log-session-id* nil)
-(setq *BLI:debug-mode* nil)
+(if (not (boundp '*BLI:log-session-id*))
+  (setq *BLI:log-session-id* nil)
+)
+(if (not (boundp '*BLI:debug-mode*))
+  (setq *BLI:debug-mode* nil)
+)
 
 ;;; Gibt den AppData-Basispfad zurück, erstellt Ordnerstruktur falls nicht vorhanden
 ;;; Struktur: %APPDATA%\AutoCAD\Lisp\BlockImport\{Log,Config,Backup}
@@ -1505,8 +1509,8 @@
 (vl-load-com)
 
 ;; Lade-Meldung
-(BLI:log-write "INFO" "=== BlockImport.lsp v1.8.1 geladen ===")
-(princ "\nBlockImport.lsp v1.8.1 geladen.")
+(BLI:log-write "INFO" "=== BlockImport.lsp v1.8.2 geladen ===")
+(princ "\nBlockImport.lsp v1.8.2 geladen.")
 (princ "\nBefehle: ManageBlockImport - Block-Verwaltung")
 (princ "\n         ShowBlockPath - Zeigt konfigurierte Pfade")
 (princ "\n         ResetBlockPath - Löscht alle Pfade")
