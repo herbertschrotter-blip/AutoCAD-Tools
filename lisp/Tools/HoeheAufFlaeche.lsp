@@ -2,7 +2,7 @@
 ;;; Hoeheninterpolation auf einer Flaeche definiert durch 3-4 Eckpunkte
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 3.2.1
+;;; Version: 3.3.0
 ;;; Datum: 2026-03-20
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAF (HoeheAufFlaeche)
@@ -27,7 +27,7 @@
 ;;; KONSTANTEN (Top-Level erlaubt)
 ;;; ============================================================================
 
-(setq *HAF:version* "3.2.1")
+(setq *HAF:version* "3.3.0")
 (setq *HAF:appdata-folder* "HoeheAufFlaeche")
 (setq *HAF:blockname* "BLK_Hoehenkote")
 
@@ -1590,6 +1590,224 @@
 )
 
 ;;; ============================================================================
+;;; CONSTRAINED DELAUNAY (Boundary-Kanten erzwingen)
+;;; ============================================================================
+
+;;; Prueft ob zwei Liniensegmente sich kreuzen (2D, echte Kreuzung, nicht Beruehrung)
+;;; Parameter: p1,p2 - Endpunkte Segment 1; p3,p4 - Endpunkte Segment 2
+;;; Rueckgabe: T wenn Kreuzung, nil sonst
+(defun HAF:segments-cross (p1 p2 p3 p4
+                           / d ua ub eps
+                             x1 y1 x2 y2 x3 y3 x4 y4)
+  (setq eps 1e-10)
+  (setq x1 (car p1) y1 (cadr p1) x2 (car p2) y2 (cadr p2))
+  (setq x3 (car p3) y3 (cadr p3) x4 (car p4) y4 (cadr p4))
+  (setq d (- (* (- x2 x1) (- y4 y3)) (* (- y2 y1) (- x4 x3))))
+  (if (< (abs d) eps)
+    nil ;; parallel
+    (progn
+      (setq ua (/ (- (* (- x4 x3) (- y1 y3)) (* (- y4 y3) (- x1 x3))) d))
+      (setq ub (/ (- (* (- x2 x1) (- y1 y3)) (* (- y2 y1) (- x1 x3))) d))
+      ;; Echte Kreuzung: ua und ub strikt zwischen 0 und 1 (nicht an Endpunkten)
+      (and (> ua eps) (< ua (- 1.0 eps))
+           (> ub eps) (< ub (- 1.0 eps)))
+    )
+  )
+)
+
+;;; Prueft ob ein Dreieck eine bestimmte Kante (als Indizes) enthaelt
+;;; Rueckgabe: T wenn Dreieck die Kante i-j hat
+(defun HAF:triangle-has-edge (tri ei ej / )
+  (or (and (= (car tri) ei) (= (cadr tri) ej))
+      (and (= (cadr tri) ei) (= (car tri) ej))
+      (and (= (cadr tri) ei) (= (caddr tri) ej))
+      (and (= (caddr tri) ei) (= (cadr tri) ej))
+      (and (= (caddr tri) ei) (= (car tri) ej))
+      (and (= (car tri) ei) (= (caddr tri) ej)))
+)
+
+;;; Findet den dritten Punkt eines Dreiecks (nicht ei und nicht ej)
+(defun HAF:triangle-opposite (tri ei ej / )
+  (cond
+    ((and (/= (car tri) ei) (/= (car tri) ej)) (car tri))
+    ((and (/= (cadr tri) ei) (/= (cadr tri) ej)) (cadr tri))
+    ((and (/= (caddr tri) ei) (/= (caddr tri) ej)) (caddr tri))
+    (T nil)
+  )
+)
+
+;;; Findet die zwei Dreiecke die eine Kante teilen
+;;; Rueckgabe: Liste von 0, 1 oder 2 Dreiecken
+(defun HAF:find-adjacent (triangles ei ej / result)
+  (setq result nil)
+  (foreach tri triangles
+    (if (HAF:triangle-has-edge tri ei ej)
+      (setq result (cons tri result))
+    )
+  )
+  result
+)
+
+;;; Edge-Flip: Ersetzt Kante ei-ej durch die andere Diagonale des Vierecks
+;;; Parameter: triangles - aktuelle Dreiecksliste, ei/ej - zu flippende Kante
+;;; Rueckgabe: neue Dreiecksliste (oder unveraendert wenn Flip nicht moeglich)
+(defun HAF:edge-flip (triangles ei ej / adj t1 t2 op1 op2 new-tri1 new-tri2)
+  (setq adj (HAF:find-adjacent triangles ei ej))
+  (if (/= (length adj) 2)
+    triangles ;; Rand-Kante oder Fehler → kein Flip
+    (progn
+      (setq t1 (car adj) t2 (cadr adj))
+      (setq op1 (HAF:triangle-opposite t1 ei ej))
+      (setq op2 (HAF:triangle-opposite t2 ei ej))
+      (if (or (null op1) (null op2))
+        triangles
+        (progn
+          ;; Alte Dreiecke entfernen
+          (setq triangles (vl-remove t1 triangles))
+          (setq triangles (vl-remove t2 triangles))
+          ;; Neue Dreiecke mit geflippter Diagonale
+          (setq new-tri1 (list op1 op2 ei))
+          (setq new-tri2 (list op1 op2 ej))
+          (cons new-tri1 (cons new-tri2 triangles))
+        )
+      )
+    )
+  )
+)
+
+;;; Prueft ob eine Constraint-Kante bereits im TIN existiert
+(defun HAF:constraint-exists (triangles ci cj / found)
+  (setq found nil)
+  (foreach tri triangles
+    (if (and (not found) (HAF:triangle-has-edge tri ci cj))
+      (setq found T)
+    )
+  )
+  found
+)
+
+;;; Erzwingt eine einzelne Constraint-Kante im TIN durch Edge-Flips
+;;; Findet kreuzende Kanten und flippt sie bis die Constraint-Kante existiert
+;;; max-iter verhindert Endlosschleifen
+(defun HAF:enforce-edge (triangles pts ci cj
+                         / pi pj done iter max-iter
+                           tri edges-to-flip ei ej pa pb changed)
+  (setq pi (nth ci pts))
+  (setq pj (nth cj pts))
+  (setq done nil iter 0 max-iter 50)
+  
+  (while (and (not done) (< iter max-iter))
+    (setq iter (1+ iter))
+    ;; Pruefen ob Constraint schon existiert
+    (if (HAF:constraint-exists triangles ci cj)
+      (setq done T)
+      (progn
+        ;; Finde eine kreuzende Kante und flippe sie
+        (setq changed nil)
+        (foreach tri triangles
+          (if (not changed)
+            (progn
+              ;; 3 Kanten des Dreiecks pruefen
+              (setq edges-to-flip (list
+                (list (car tri) (cadr tri))
+                (list (cadr tri) (caddr tri))
+                (list (caddr tri) (car tri))))
+              (foreach edge edges-to-flip
+                (if (not changed)
+                  (progn
+                    (setq ei (car edge) ej (cadr edge))
+                    ;; Kante darf nicht Endpunkt der Constraint sein
+                    (if (and (/= ei ci) (/= ei cj) (/= ej ci) (/= ej cj))
+                      (progn
+                        (setq pa (nth ei pts) pb (nth ej pts))
+                        (if (HAF:segments-cross pi pj pa pb)
+                          (progn
+                            (setq triangles (HAF:edge-flip triangles ei ej))
+                            (setq changed T)
+                          )
+                        )
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+        ;; Keine kreuzende Kante mehr gefunden → fertig (oder Fehler)
+        (if (not changed) (setq done T))
+      )
+    )
+  )
+  (if (>= iter max-iter)
+    (HAF:log-write "WARN" (strcat "enforce-edge: max-iter erreicht fuer "
+                                   (itoa ci) "-" (itoa cj)))
+  )
+  triangles
+)
+
+;;; Constrained Delaunay: Normaler Delaunay + Boundary erzwingen + Aussen entfernen
+;;; Parameter:
+;;;   pts - Punkte ((x y h) ...)
+;;;   boundary-indices - Reihenfolge der Umrandungspunkte (0-basierte Indizes)
+;;;                      nil = Punkte in Eingabe-Reihenfolge = Umrandung
+;;;
+;;; Rueckgabe: Liste von Dreiecken (nur innerhalb der Umrandung)
+(defun HAF:constrained-delaunay (pts / triangles num-pts i ci cj
+                                       boundary result cx cy polygon)
+  (setq num-pts (length pts))
+  (HAF:log-write "INFO" (strcat "Constrained Delaunay: " (itoa num-pts) " Punkte"))
+  
+  ;; Schritt 1: Normaler Delaunay
+  (setq triangles (HAF:delaunay pts))
+  (if (null triangles)
+    (progn
+      (HAF:log-write "ERROR" "Constrained Delaunay: Basis-Delaunay fehlgeschlagen")
+      (setq triangles nil)
+    )
+    (progn
+      ;; Schritt 2: Boundary-Kanten erzwingen
+      ;; Boundary = Punkte in Eingabe-Reihenfolge (P0→P1, P1→P2, ..., PN-1→P0)
+      (HAF:log-write "INFO" (strcat "Constraints erzwingen: " (itoa num-pts) " Kanten"))
+      (setq i 0)
+      (while (< i num-pts)
+        (setq ci i)
+        (setq cj (rem (1+ i) num-pts))
+        (if (not (HAF:constraint-exists triangles ci cj))
+          (progn
+            (setq triangles (HAF:enforce-edge triangles pts ci cj))
+            (HAF:debug (strcat "Constraint erzwungen: " (itoa ci) "-" (itoa cj)))
+          )
+        )
+        (setq i (1+ i))
+      )
+      
+      ;; Schritt 3: Dreiecke ausserhalb der Umrandung entfernen
+      ;; Polygon fuer Point-in-Polygon Test
+      (setq polygon pts)
+      (setq result nil)
+      (foreach tri triangles
+        (setq cx (/ (+ (car (nth (car tri) pts))
+                       (car (nth (cadr tri) pts))
+                       (car (nth (caddr tri) pts))) 3.0))
+        (setq cy (/ (+ (cadr (nth (car tri) pts))
+                       (cadr (nth (cadr tri) pts))
+                       (cadr (nth (caddr tri) pts))) 3.0))
+        (if (HAF:point-in-polygon (list cx cy) polygon)
+          (setq result (cons tri result))
+        )
+      )
+      
+      (HAF:log-write "INFO" (strcat "Constrained Delaunay fertig: "
+                                     (itoa (length result)) " Dreiecke (von "
+                                     (itoa (length triangles)) " total)"))
+      (setq triangles result)
+    )
+  )
+  triangles
+)
+
+;;; ============================================================================
 ;;; TIN-INTERPOLATION (Punkt auf TIN-Oberflaeche)
 ;;; ============================================================================
 
@@ -2412,20 +2630,19 @@
          )
          (setq use-diagonal diagonal-choice)
         )
-        ;; 5+ Punkte: Delaunay TIN
+        ;; 5+ Punkte: Constrained Delaunay TIN
         (T
-         (princ (strcat "\n  Methode: Delaunay TIN (" (itoa num-corners) " Punkte)"))
-         (setq *HAF:tin-triangles* (HAF:delaunay corner-points))
+         (princ (strcat "\n  Methode: Constrained Delaunay TIN (" (itoa num-corners) " Punkte)"))
+         (setq *HAF:tin-triangles* (HAF:constrained-delaunay corner-points))
          (if *HAF:tin-triangles*
            (progn
-             (princ (strcat "\n  " (itoa (length *HAF:tin-triangles*)) " Dreiecke berechnet"))
-             ;; TIN visualisieren (temporaere 3DFaces)
+             (princ (strcat "\n  " (itoa (length *HAF:tin-triangles*)) " Dreiecke (nur innerhalb Umrandung)"))
              (setq tin-entities (HAF:draw-tin corner-points corner-heights *HAF:tin-triangles*))
-             (princ (strcat "\n  TIN gezeichnet (" (itoa (length tin-entities)) " 3DFaces)"))
+             (princ (strcat "\n  TIN gezeichnet (" (itoa (length tin-entities)) " Dreiecke)"))
            )
            (progn
-             (princ "\n*** FEHLER: Delaunay-Triangulation fehlgeschlagen ***")
-             (HAF:log-write "ERROR" "Delaunay fehlgeschlagen")
+             (princ "\n*** FEHLER: Triangulation fehlgeschlagen ***")
+             (HAF:log-write "ERROR" "Constrained Delaunay fehlgeschlagen")
            )
          )
          (setq use-diagonal nil)
