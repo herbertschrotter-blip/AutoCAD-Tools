@@ -442,7 +442,7 @@
 )
 
 ;;; Liest Blockname aus DWG Custom Property
-;;; Property-Name: "BLI_Block:<context>" (z.B. "BLI_Block:SetHK")
+;;; Property-Name: "BLI_Block_<context>" (z.B. "BLI_Block_SetHK")
 ;;; Parameter: context - Context-String (z.B. "SetHK", "HoeheAufLinie")
 ;;;            Wenn nil: verwendet *block-import-context*
 ;;; Rueckgabe: Blockname (String) oder nil wenn nicht gesetzt
@@ -455,45 +455,33 @@
       nil
     )
     (progn
-      (setq prop-name (strcat "BLI_Block:" context))
+      (setq prop-name (strcat "BLI_Block_" context))
       (setq found nil result nil)
 
-      ;; SummaryInfo holen
+      ;; SummaryInfo holen (direkt, wie in SetHK:read-dwg-scale)
       (setq doc (vla-get-activedocument (vlax-get-acad-object)))
-      (setq si (vl-catch-all-apply 'vla-get-SummaryInfo (list doc)))
-      (if (vl-catch-all-error-p si)
-        (progn
-          (BLI:log-write "ERROR" "BLI:dwg-block-read: SummaryInfo nicht verfuegbar")
-          nil
+      (setq si (vla-get-summaryinfo doc))
+      (setq num-props (vla-numcustominfo si))
+      (setq i 0)
+      (while (and (< i num-props) (null found))
+        ;; Direkt aufrufen - NICHT vl-catch-all-apply (Referenz-Problem!)
+        (vla-getcustombyindex si i 'key 'val)
+        (setq key (BLI:safe-variant-value key))
+        (setq val (BLI:safe-variant-value val))
+        (if (and key (= (strcase key) (strcase prop-name)))
+          (progn (setq result val) (setq found T))
         )
-        (progn
-          (setq num-props (vla-NumCustomInfo si))
-          (setq i 0)
-          (while (and (< i num-props) (null found))
-            (setq key "" val "")
-            (vl-catch-all-apply
-              '(lambda ()
-                (vla-GetCustomByIndex si i 'key 'val)
-                (setq key (BLI:safe-variant-value key))
-                (setq val (BLI:safe-variant-value val))
-                (if (and key (= (strcase key) (strcase prop-name)))
-                  (progn (setq result val) (setq found T))
-                )
-              )
-            )
-            (setq i (1+ i))
-          )
-          (BLI:log-write "DEBUG"
-            (strcat "DWG-Block gelesen: " prop-name "=" (if result result "nil")))
-          (if (and result (/= result "")) result nil)
-        )
+        (setq i (1+ i))
       )
+      (BLI:log-write "DEBUG"
+        (strcat "DWG-Block gelesen: " prop-name "=" (if result result "nil")))
+      (if (and result (/= result "")) result nil)
     )
   )
 )
 
 ;;; Schreibt Blockname in DWG Custom Property
-;;; Property-Name: "BLI_Block:<context>" (z.B. "BLI_Block:SetHK")
+;;; Property-Name: "BLI_Block_<context>" (z.B. "BLI_Block_SetHK")
 ;;; Parameter: context - Context-String, blockname - Blockname
 ;;; Rueckgabe: T bei Erfolg, nil bei Fehler
 (defun BLI:dwg-block-write (context blockname / prop-name doc si num-props i key val found)
@@ -505,51 +493,39 @@
       nil
     )
     (progn
-      (setq prop-name (strcat "BLI_Block:" context))
+      (setq prop-name (strcat "BLI_Block_" context))
       (setq found nil)
 
-      ;; SummaryInfo holen
+      ;; SummaryInfo holen (direkt, wie in SetHK:write-dwg-scale)
       (setq doc (vla-get-activedocument (vlax-get-acad-object)))
-      (setq si (vl-catch-all-apply 'vla-get-SummaryInfo (list doc)))
-      (if (vl-catch-all-error-p si)
-        (progn
-          (BLI:log-write "ERROR" "BLI:dwg-block-write: SummaryInfo nicht verfuegbar")
-          nil
-        )
-        (progn
-          ;; Suche ob Property schon existiert
-          (setq num-props (vla-NumCustomInfo si))
-          (setq i 0)
-          (while (and (< i num-props) (not found))
-            (setq key "")
-            (vl-catch-all-apply
-              '(lambda ()
-                (vla-GetCustomByIndex si i 'key 'val)
-                (setq key (BLI:safe-variant-value key))
-                (if (and key (= (strcase key) (strcase prop-name)))
-                  (progn
-                    (vla-SetCustomByIndex si i prop-name blockname)
-                    (setq found T)
-                  )
-                )
-              )
-            )
-            (setq i (1+ i))
+      (setq si (vla-get-summaryinfo doc))
+      (setq num-props (vla-numcustominfo si))
+      (setq i 0)
+      (while (and (< i num-props) (not found))
+        ;; Direkt aufrufen - NICHT vl-catch-all-apply (Referenz-Problem!)
+        (vla-getcustombyindex si i 'key 'val)
+        (setq key (BLI:safe-variant-value key))
+        (if (and key (= (strcase key) (strcase prop-name)))
+          (progn
+            (vla-setcustombyindex si i prop-name blockname)
+            (setq found T)
           )
-
-          ;; Wenn nicht gefunden: Neu anlegen
-          (if (not found)
-            (vl-catch-all-apply 'vla-AddCustomInfo (list si prop-name blockname))
-          )
-
-          (BLI:log-write "INFO"
-            (strcat "DWG-Block gespeichert: " prop-name "=" blockname))
-          T
         )
+        (setq i (1+ i))
       )
+
+      ;; Wenn nicht gefunden: Neu anlegen
+      (if (not found)
+        (vla-addcustominfo si prop-name blockname)
+      )
+
+      (BLI:log-write "INFO"
+        (strcat "DWG-Block gespeichert: " prop-name "=" blockname))
+      T
     )
   )
 )
+
 
 ;;; Ermittelt den Blocknamen fuer die aktuelle Zeichnung
 ;;; Lookup-Reihenfolge:
