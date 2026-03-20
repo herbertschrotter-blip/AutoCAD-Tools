@@ -864,6 +864,11 @@
                                 ((> hoehe 0.0) (strcat "+" height2DecStr))
                                 (T height2DecStr)))
           
+          ;; HK-Layer VOR dem Einfuegen erstellen (VLA-Calls duerfen nicht waehrend command laufen)
+          (if *SetHK:use-layer-suffix*
+            (setq hk-layer (SetHK:ensure-hk-layer))
+          )
+          
           ;; ATTDIA-Variable speichern und auf 0 setzen
           (setq attdia (getvar "ATTDIA"))
           (setvar "ATTDIA" 0)
@@ -899,18 +904,13 @@
           (setq insertionPoint (cdr (assoc 10 (entget ent))))
           (command "._move" ent "" "_non" insertionPoint "_non" (list (car insertionPoint) (cadr insertionPoint) hoehe))
           
-          ;; HK-Layer zuweisen (wenn aktiviert)
-          (if *SetHK:use-layer-suffix*
+          ;; HK-Layer zuweisen (Layer wurde VOR insert erstellt)
+          (if (and *SetHK:use-layer-suffix* hk-layer)
             (progn
-              (setq hk-layer (SetHK:ensure-hk-layer))
-              (if hk-layer
-                (progn
-                  ;; Block auf HK-Layer setzen via entmod
-                  (setq ent-data (entget ent))
-                  (entmod (subst (cons 8 hk-layer) (assoc 8 ent-data) ent-data))
-                  (SetHK:log-write "DEBUG" (strcat "Block auf Layer: " hk-layer))
-                )
-              )
+              ;; Block auf HK-Layer setzen via entmod
+              (setq ent-data (entget ent))
+              (entmod (subst (cons 8 hk-layer) (assoc 8 ent-data) ent-data))
+              (SetHK:log-write "DEBUG" (strcat "Block auf Layer: " hk-layer))
             )
           )
           
