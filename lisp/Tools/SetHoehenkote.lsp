@@ -820,11 +820,14 @@
   ;; Blockname aus BlockImport (DWG Property → Globaler Standard)
   (setq *block-import-context* *SetHK:block-context*)
   (setq blockName (BLI:resolve-blockname *SetHK:block-context*))
+  ;; Wenn kein Block konfiguriert: Block-Manager automatisch oeffnen
   (if (null blockName)
     (progn
-      (SetHK:log-write "ERROR" "Kein Block konfiguriert! Oeffne Block-Verwaltung.")
-      (princ "\n*** Kein Block konfiguriert! Verwende HKBLOCK um einen Block einzurichten. ***")
-      (princ)
+      (SetHK:log-write "WARN" "Kein Block konfiguriert - oeffne Block-Verwaltung")
+      (princ "\n*** Kein Block konfiguriert! Block-Verwaltung wird geoeffnet... ***")
+      (manage-block-import *SetHK:block-context*)
+      ;; Nochmal versuchen
+      (setq blockName (BLI:resolve-blockname *SetHK:block-context*))
     )
   )
   
