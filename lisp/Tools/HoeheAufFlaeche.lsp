@@ -2,7 +2,7 @@
 ;;; Hoeheninterpolation auf einer Flaeche definiert durch 3-4 Eckpunkte
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 3.3.0
+;;; Version: 3.4.0
 ;;; Datum: 2026-03-20
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAF (HoeheAufFlaeche)
@@ -27,7 +27,7 @@
 ;;; KONSTANTEN (Top-Level erlaubt)
 ;;; ============================================================================
 
-(setq *HAF:version* "3.3.0")
+(setq *HAF:version* "3.4.0")
 (setq *HAF:appdata-folder* "HoeheAufFlaeche")
 (setq *HAF:blockname* "BLK_Hoehenkote")
 
@@ -1748,17 +1748,23 @@
 
 ;;; Constrained Delaunay: Normaler Delaunay + Boundary erzwingen + Aussen entfernen
 ;;; Parameter:
-;;;   pts - Punkte ((x y h) ...)
-;;;   boundary-indices - Reihenfolge der Umrandungspunkte (0-basierte Indizes)
-;;;                      nil = Punkte in Eingabe-Reihenfolge = Umrandung
+;;;   pts - Alle Punkte ((x y h) ...) — erst Boundary, dann innere Punkte
+;;;   num-boundary - Anzahl Boundary-Punkte (erste N Punkte in pts)
+;;;                  nil = alle Punkte sind Boundary
+;;;   extra-constraints - Zusaetzliche Constraint-Kanten ((i j) (j k) ...)
+;;;                       z.B. Bruchkanten. nil = keine.
 ;;;
 ;;; Rueckgabe: Liste von Dreiecken (nur innerhalb der Umrandung)
-(defun HAF:constrained-delaunay (pts / triangles num-pts i ci cj
-                                       boundary result cx cy polygon)
+(defun HAF:constrained-delaunay (pts num-boundary extra-constraints
+                                 / triangles num-pts i ci cj
+                                   boundary-pts result cx cy polygon)
   (setq num-pts (length pts))
-  (HAF:log-write "INFO" (strcat "Constrained Delaunay: " (itoa num-pts) " Punkte"))
+  (if (null num-boundary) (setq num-boundary num-pts))
+  (HAF:log-write "INFO" (strcat "Constrained Delaunay: " (itoa num-pts) " Punkte ("
+                                (itoa num-boundary) " Boundary, "
+                                (itoa (- num-pts num-boundary)) " innere)"))
   
-  ;; Schritt 1: Normaler Delaunay
+  ;; Schritt 1: Normaler Delaunay (alle Punkte)
   (setq triangles (HAF:delaunay pts))
   (if (null triangles)
     (progn
@@ -1766,25 +1772,44 @@
       (setq triangles nil)
     )
     (progn
-      ;; Schritt 2: Boundary-Kanten erzwingen
-      ;; Boundary = Punkte in Eingabe-Reihenfolge (P0→P1, P1→P2, ..., PN-1→P0)
-      (HAF:log-write "INFO" (strcat "Constraints erzwingen: " (itoa num-pts) " Kanten"))
+      ;; Schritt 2: Boundary-Kanten erzwingen (nur die ersten num-boundary Punkte)
+      (HAF:log-write "INFO" (strcat "Boundary-Constraints: " (itoa num-boundary) " Kanten"))
       (setq i 0)
-      (while (< i num-pts)
+      (while (< i num-boundary)
         (setq ci i)
-        (setq cj (rem (1+ i) num-pts))
+        (setq cj (rem (1+ i) num-boundary)) ;; Schliessen: letzter → erster
         (if (not (HAF:constraint-exists triangles ci cj))
           (progn
             (setq triangles (HAF:enforce-edge triangles pts ci cj))
-            (HAF:debug (strcat "Constraint erzwungen: " (itoa ci) "-" (itoa cj)))
+            (HAF:debug (strcat "Boundary-Constraint erzwungen: " (itoa ci) "-" (itoa cj)))
           )
         )
         (setq i (1+ i))
       )
       
+      ;; Schritt 2b: Extra-Constraints erzwingen (Bruchkanten etc.)
+      (if extra-constraints
+        (progn
+          (HAF:log-write "INFO" (strcat "Extra-Constraints: " (itoa (length extra-constraints)) " Kanten"))
+          (foreach ec extra-constraints
+            (setq ci (car ec) cj (cadr ec))
+            (if (not (HAF:constraint-exists triangles ci cj))
+              (progn
+                (setq triangles (HAF:enforce-edge triangles pts ci cj))
+                (HAF:debug (strcat "Extra-Constraint erzwungen: " (itoa ci) "-" (itoa cj)))
+              )
+            )
+          )
+        )
+      )
+      
       ;; Schritt 3: Dreiecke ausserhalb der Umrandung entfernen
-      ;; Polygon fuer Point-in-Polygon Test
-      (setq polygon pts)
+      ;; Polygon = nur die Boundary-Punkte (erste num-boundary)
+      (setq boundary-pts nil i 0)
+      (while (< i num-boundary)
+        (setq boundary-pts (append boundary-pts (list (nth i pts))))
+        (setq i (1+ i))
+      )
       (setq result nil)
       (foreach tri triangles
         (setq cx (/ (+ (car (nth (car tri) pts))
@@ -1793,7 +1818,7 @@
         (setq cy (/ (+ (cadr (nth (car tri) pts))
                        (cadr (nth (cadr tri) pts))
                        (cadr (nth (caddr tri) pts))) 3.0))
-        (if (HAF:point-in-polygon (list cx cy) polygon)
+        (if (HAF:point-in-polygon (list cx cy) boundary-pts)
           (setq result (cons tri result))
         )
       )
@@ -2415,8 +2440,8 @@
 
 (defun c:HoeheAufFlaeche ( / *error* old-cmdecho old-attdia
                              corner-points corner-heights corner-entities corner-number done
-                             num-corners scale pg result interpolated-height tri-info
-                             prompt-str pt ht block-ent last-ent
+                             num-corners num-boundary scale pg result interpolated-height tri-info
+                             prompt-str pt ht block-ent last-ent inner-number
                              diagonal-choice use-diagonal diagonal-ent
                              contour-entities target-h segments outline-ent grid-entities tin-entities
                              p1 h1 p2 h2 p3 h3 p4 h4)
@@ -2595,28 +2620,115 @@
   ) ;; end while Eckpunkte
   
   ;; ====================================================================
+  ;; PHASE 1b: INNERE PUNKTE SAMMELN (optional, nur bei 5+ Eckpunkten)
+  ;; ====================================================================
+  
+  (setq num-boundary (length corner-points))
+  
+  (if (and corner-points (>= num-boundary 3))
+    (progn
+      (princ (strcat "\n\n--- Innere Punkte (optional, ENTER=ueberspringen) ---"))
+      (princ "\n  I=Punkt setzen, F=Fertig (weiter zur Berechnung)")
+      (setq inner-number 1 done nil)
+      
+      (while (not done)
+        (initget "Fertig Skalierung Zurueck Einstellungen")
+        (setq pt (getpoint (strcat "\nInnerer Punkt " (itoa inner-number)
+                                   " [Fertig/Zurueck/Skalierung/Einstellungen]: ")))
+        (cond
+          ;; Fertig
+          ((or (= pt "Fertig") (null pt))
+           (setq done T)
+           (HAF:log-write "INFO" (strcat "Innere Punkte: Fertig ("
+                                         (itoa (1- inner-number)) " Punkte)"))
+           (if (> inner-number 1)
+             (princ (strcat "\n  " (itoa (1- inner-number)) " innere Punkte definiert"))
+             (princ "\n  Keine inneren Punkte")
+           )
+          )
+          ;; Skalierung
+          ((= pt "Skalierung")
+           (setq scale (HAF:get-scale))
+          )
+          ;; Einstellungen
+          ((= pt "Einstellungen")
+           (HAF:show-settings)
+           (setq scale (HAF:read-scale))
+          )
+          ;; Zurueck (letzten inneren Punkt entfernen)
+          ((= pt "Zurueck")
+           (if (> inner-number 1)
+             (progn
+               ;; Letzten Block loeschen
+               (setq last-ent (last corner-entities))
+               (if last-ent (entdel last-ent))
+               ;; Listen kuerzen
+               (setq corner-points (reverse (cdr (reverse corner-points))))
+               (setq corner-heights (reverse (cdr (reverse corner-heights))))
+               (setq corner-entities (reverse (cdr (reverse corner-entities))))
+               (setq inner-number (1- inner-number))
+               (HAF:log-write "INFO" (strcat "Innerer Punkt entfernt (Zurueck), "
+                                             (itoa (1- inner-number)) " verbleibend"))
+               (princ (strcat "\n  Innerer Punkt entfernt"))
+             )
+             (princ "\n*** Kein innerer Punkt zum Entfernen ***")
+           )
+          )
+          ;; Gueltiger Punkt
+          ((HAF:valid-point-p pt)
+           (setq ht (HAF:get-validated-height
+                      (strcat "\nHoehe innerer Punkt " (itoa inner-number))
+                      *HAF:last-height*))
+           (if ht
+             (progn
+               (setq *HAF:last-height* ht)
+               (setq block-ent (HAF:insert-block pt ht scale nil))
+               (setq corner-points (append corner-points (list pt)))
+               (setq corner-heights (append corner-heights (list ht)))
+               (setq corner-entities (append corner-entities (list block-ent)))
+               (HAF:log-write "INFO" (strcat "Innerer Punkt " (itoa inner-number)
+                                             ": (" (rtos (car pt) 2 3) " " (rtos (cadr pt) 2 3)
+                                             ") H=" (rtos ht 2 3)))
+               (setq inner-number (1+ inner-number))
+             )
+             (princ "\n*** Ungueltige Hoehe ***")
+           )
+          )
+          ;; Sonstiges
+          (T (princ "\n*** Ungueltiger Punkt ***"))
+        )
+      ) ;; end while innere Punkte
+    )
+  )
+  
+  ;; ====================================================================
   ;; PHASE 2: TRIANGULATION (Diagonale bei 4, Delaunay bei 5+)
   ;; ====================================================================
   
   (if (>= (length corner-points) 3)
     (progn
       (setq num-corners (length corner-points))
-      (princ (strcat "\n\n" (itoa num-corners) " Eckpunkte definiert"))
+      (if (> num-corners num-boundary)
+        (princ (strcat "\n\n" (itoa num-boundary) " Eckpunkte + "
+                       (itoa (- num-corners num-boundary)) " innere Punkte = "
+                       (itoa num-corners) " Punkte gesamt"))
+        (princ (strcat "\n\n" (itoa num-corners) " Eckpunkte definiert"))
+      )
       (setq *HAF:tin-triangles* nil) ;; Reset
       
-      ;; Punkte fuer einfachen Zugriff (3 und 4 Punkte Modus)
+      ;; Punkte fuer einfachen Zugriff (3 und 4 Punkte Modus ohne innere)
       (setq p1 (nth 0 corner-points) h1 (nth 0 corner-heights))
       (setq p2 (nth 1 corner-points) h2 (nth 1 corner-heights))
       (setq p3 (nth 2 corner-points) h3 (nth 2 corner-heights))
       
       (cond
-        ;; 3 Punkte: Ebene
-        ((= num-corners 3)
+        ;; 3 Boundary, keine inneren → Ebene
+        ((and (= num-boundary 3) (= num-corners 3))
          (princ "\n  Methode: Ebenengleichung (1 Dreieck)")
          (setq use-diagonal nil)
         )
-        ;; 4 Punkte: Triangulation mit classify-quad
-        ((= num-corners 4)
+        ;; 4 Boundary, keine inneren → Triangulation mit classify-quad
+        ((and (= num-boundary 4) (= num-corners 4))
          (princ "\n  Methode: Triangulation (2 Dreiecke)")
          (setq p4 (nth 3 corner-points) h4 (nth 3 corner-heights))
          (setq diagonal-choice (HAF:determine-diagonal h1 h2 h3 h4))
@@ -2630,10 +2742,11 @@
          )
          (setq use-diagonal diagonal-choice)
         )
-        ;; 5+ Punkte: Constrained Delaunay TIN
+        ;; Alles andere (5+ Boundary ODER innere Punkte vorhanden) → Constrained Delaunay
         (T
-         (princ (strcat "\n  Methode: Constrained Delaunay TIN (" (itoa num-corners) " Punkte)"))
-         (setq *HAF:tin-triangles* (HAF:constrained-delaunay corner-points))
+         (princ (strcat "\n  Methode: Constrained Delaunay TIN ("
+                        (itoa num-corners) " Punkte, " (itoa num-boundary) " Boundary)"))
+         (setq *HAF:tin-triangles* (HAF:constrained-delaunay corner-points num-boundary nil))
          (if *HAF:tin-triangles*
            (progn
              (princ (strcat "\n  " (itoa (length *HAF:tin-triangles*)) " Dreiecke (nur innerhalb Umrandung)"))
