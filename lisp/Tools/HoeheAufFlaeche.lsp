@@ -2,7 +2,7 @@
 ;;; Hoeheninterpolation auf einer Flaeche definiert durch 3-4 Eckpunkte
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 3.1.2
+;;; Version: 3.2.0
 ;;; Datum: 2026-03-20
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAF (HoeheAufFlaeche)
@@ -27,7 +27,7 @@
 ;;; KONSTANTEN (Top-Level erlaubt)
 ;;; ============================================================================
 
-(setq *HAF:version* "3.1.2")
+(setq *HAF:version* "3.2.0")
 (setq *HAF:appdata-folder* "HoeheAufFlaeche")
 (setq *HAF:blockname* "BLK_Hoehenkote")
 
@@ -267,33 +267,56 @@
   )
 )
 
-;;; Liest einzelnen Wert aus Config
+;;; Config-Cache (globale Variable, wird einmal geladen)
+(setq *HAF:config-cache* nil)
+
+;;; Liest einzelnen Wert aus Config (aus Cache, NICHT von Datei)
 ;;; Parameter: search-key - Schluessel (String)
 ;;; Rueckgabe: Wert (String) oder nil
-(defun HAF:get-config-value (search-key / config)
-  (setq config (HAF:load-config))
-  (if config
-    (cdr (assoc search-key config))
+(defun HAF:get-config-value (search-key / )
+  ;; Cache laden wenn noch leer
+  (if (null *HAF:config-cache*)
+    (setq *HAF:config-cache* (HAF:load-config))
+  )
+  (if *HAF:config-cache*
+    (cdr (assoc search-key *HAF:config-cache*))
     nil
   )
 )
 
-;;; Setzt einzelnen Wert in Config (laedt, aendert, speichert)
+;;; Setzt einzelnen Wert in Config-Cache (schreibt NICHT sofort auf Datei!)
 ;;; Parameter: set-key - Schluessel, set-value - Wert (beides Strings)
-(defun HAF:set-config-value (set-key set-value / config)
-  (setq config (HAF:load-config))
-  (if (null config) (setq config '()))
-  ;; Existierenden Key ersetzen oder neuen hinzufuegen
-  (if (assoc set-key config)
-    (setq config (subst (cons set-key set-value) (assoc set-key config) config))
-    (setq config (cons (cons set-key set-value) config))
+(defun HAF:set-config-value (set-key set-value / )
+  ;; Cache laden wenn noch leer
+  (if (null *HAF:config-cache*)
+    (setq *HAF:config-cache* (HAF:load-config))
   )
-  (HAF:save-config config)
+  (if (null *HAF:config-cache*) (setq *HAF:config-cache* '()))
+  ;; Existierenden Key ersetzen oder neuen hinzufuegen
+  (if (assoc set-key *HAF:config-cache*)
+    (setq *HAF:config-cache* (subst (cons set-key set-value) (assoc set-key *HAF:config-cache*) *HAF:config-cache*))
+    (setq *HAF:config-cache* (cons (cons set-key set-value) *HAF:config-cache*))
+  )
+)
+
+;;; Schreibt Config-Cache auf Datei (expliziter Flush)
+;;; Aufrufen nach Batch-Aenderungen (z.B. am Ende von show-settings)
+(defun HAF:flush-config ( / )
+  (if *HAF:config-cache*
+    (HAF:save-config *HAF:config-cache*)
+  )
+)
+
+;;; Laedt Config von Datei neu in Cache (z.B. bei Init)
+(defun HAF:reload-config ( / )
+  (setq *HAF:config-cache* (HAF:load-config))
 )
 
 ;;; Wendet Config-Werte auf globale Variablen an
 ;;; Wird in Lazy-Init aufgerufen
 (defun HAF:apply-config ( / val)
+  ;; Config einmal von Datei laden (fuellt Cache)
+  (HAF:reload-config)
   ;; Debug-Modus
   (setq val (HAF:get-config-value "DEBUG"))
   (if val (setq *HAF:debug-mode* (= val "1")))
@@ -568,6 +591,7 @@
     (progn
       (load path)
       (HAF:set-config-value "BLOCKIMPORT_PATH" path)
+      (HAF:flush-config)
       (HAF:log-write "INFO" (strcat "Library geladen: " path))
       T
     )
@@ -1692,16 +1716,13 @@
   (HAF:point-in-polygon mid polygon)
 )
 
-;;; Visualisiert TIN als Linien (Dreieckskanten)
-;;; Kein Polygon-Clipping: Alle Endpunkte sind Eckpunkte, alle Kanten gueltig
-;;; Vermeidet Duplikate durch Kanten-Tracking
+;;; Visualisiert TIN als geschlossene 3D-Polylinien (1 pro Dreieck)
+;;; UCS→WCS Transformation fuer korrekte Platzierung im BKS
 ;;; Rueckgabe: Liste von Entity-Names
 (defun HAF:draw-tin (pts heights triangles
                      / tri pa pb pc ha hb hc entities ent
-                       p1-3d p2-3d p3-3d edges edge
-                       drawn-edges edge-key)
+                       p1-wcs p2-wcs p3-wcs last-ent ent-data)
   (setq entities nil)
-  (setq drawn-edges nil)
   (foreach tri triangles
     (setq pa (nth (car tri) pts))
     (setq pb (nth (cadr tri) pts))
@@ -1709,32 +1730,27 @@
     (setq ha (nth (car tri) heights))
     (setq hb (nth (cadr tri) heights))
     (setq hc (nth (caddr tri) heights))
-    (setq p1-3d (list (car pa) (cadr pa) ha))
-    (setq p2-3d (list (car pb) (cadr pb) hb))
-    (setq p3-3d (list (car pc) (cadr pc) hc))
-    ;; 3 Kanten pro Dreieck
-    (setq edges (list
-      (list (min (car tri) (cadr tri)) (max (car tri) (cadr tri)) p1-3d p2-3d)
-      (list (min (cadr tri) (caddr tri)) (max (cadr tri) (caddr tri)) p2-3d p3-3d)
-      (list (min (caddr tri) (car tri)) (max (caddr tri) (car tri)) p3-3d p1-3d)))
-    (foreach edge edges
-      ;; Kanten-Key fuer Duplikat-Check (sortierte Indizes)
-      (setq edge-key (strcat (itoa (car edge)) "-" (itoa (cadr edge))))
-      (if (not (member edge-key drawn-edges))
-        (progn
-          (setq drawn-edges (cons edge-key drawn-edges))
-          (setq ent (entmakex
-            (list '(0 . "LINE") '(100 . "AcDbEntity") '(8 . "0")
-                  (cons 62 *HAF:tin-color*)
-                  '(100 . "AcDbLine")
-                  (cons 10 (caddr edge))
-                  (cons 11 (cadddr edge)))))
-          (if ent (setq entities (cons ent entities)))
+    ;; UCS→WCS Transformation (getpoint gibt UCS-Koordinaten)
+    (setq p1-wcs (trans (list (car pa) (cadr pa) ha) 1 0))
+    (setq p2-wcs (trans (list (car pb) (cadr pb) hb) 1 0))
+    (setq p3-wcs (trans (list (car pc) (cadr pc) hc) 1 0))
+    ;; Geschlossene 3DPOLY: Dreieck mit 3 Punkten + Close
+    (setq last-ent (entlast))
+    (command "._3DPOLY" p1-wcs p2-wcs p3-wcs "._Close")
+    (setq ent (entlast))
+    (if (not (equal ent last-ent))
+      (progn
+        ;; Farbe setzen
+        (setq ent-data (entget ent))
+        (if (assoc 62 ent-data)
+          (entmod (subst (cons 62 *HAF:tin-color*) (assoc 62 ent-data) ent-data))
+          (entmod (append ent-data (list (cons 62 *HAF:tin-color*))))
         )
+        (setq entities (cons ent entities))
       )
     )
   )
-  (HAF:log-write "INFO" (strcat "TIN gezeichnet: " (itoa (length entities)) " Linien"))
+  (HAF:log-write "INFO" (strcat "TIN gezeichnet: " (itoa (length entities)) " Dreiecke"))
   entities
 )
 
@@ -3227,6 +3243,7 @@
                                         " TIN=" (if *HAF:tin-keep* "behalten" "temp") "/" (HAF:color-name *HAF:tin-color*)
                                         " N=" (rtos *HAF:grid-interval* 2 2)
                                         " Debug=" (if *HAF:debug-mode* "ein" "aus")))
+          (HAF:flush-config)
           (princ "\nEinstellungen gespeichert.")
         )
         
