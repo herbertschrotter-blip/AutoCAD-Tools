@@ -2,7 +2,7 @@
 ;;; Hoeheninterpolation auf einer Flaeche definiert durch 3-4 Eckpunkte
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 3.0.0
+;;; Version: 3.1.0
 ;;; Datum: 2026-03-20
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAF (HoeheAufFlaeche)
@@ -27,7 +27,7 @@
 ;;; KONSTANTEN (Top-Level erlaubt)
 ;;; ============================================================================
 
-(setq *HAF:version* "3.0.0")
+(setq *HAF:version* "3.1.0")
 (setq *HAF:appdata-folder* "HoeheAufFlaeche")
 (setq *HAF:blockname* "BLK_Hoehenkote")
 
@@ -75,6 +75,13 @@
 (setq *HAF:grid-own-layer* nil)
 (setq *HAF:grid-use-layer* nil)
 (setq *HAF:grid-interval* 1.0)       ; Abstand N in Einheiten
+
+;; Linien-Settings: TIN-Netz (Dunkelgrau)
+(setq *HAF:tin-keep* nil)
+(setq *HAF:tin-color* 8)             ; ACI-Farbe (8=Grau)
+(setq *HAF:tin-suffix* "TIN")
+(setq *HAF:tin-own-layer* nil)
+(setq *HAF:tin-use-layer* nil)
 
 ;;; ============================================================================
 ;;; APPDATA & LOGGING (frueh definieren!)
@@ -342,6 +349,17 @@
   (if val (setq *HAF:grid-use-layer* (= val "1")))
   (setq val (HAF:get-config-value "GRID_INTERVAL"))
   (if (and val (/= val "")) (setq *HAF:grid-interval* (atof val)))
+  ;; TIN-Netz
+  (setq val (HAF:get-config-value "TIN_KEEP"))
+  (if val (setq *HAF:tin-keep* (= val "1")))
+  (setq val (HAF:get-config-value "TIN_COLOR"))
+  (if (and val (/= val "")) (setq *HAF:tin-color* (atoi val)))
+  (setq val (HAF:get-config-value "TIN_SUFFIX"))
+  (if (and val (/= val "")) (setq *HAF:tin-suffix* val))
+  (setq val (HAF:get-config-value "TIN_OWN_LAYER"))
+  (if val (setq *HAF:tin-own-layer* (= val "1")))
+  (setq val (HAF:get-config-value "TIN_USE_LAYER"))
+  (if val (setq *HAF:tin-use-layer* (= val "1")))
   ;; Log
   (HAF:log-write "INFO" (strcat "Config angewendet: Debug=" (if *HAF:debug-mode* "EIN" "AUS")
                                 " HK=" (if *HAF:use-layer-suffix* (strcat "_" *HAF:layer-suffix*) "aus")
@@ -349,6 +367,7 @@
                                 " BL=" (if *HAF:breakline-keep* "behalten" "temp")
                                 " HL=" (if *HAF:contour-keep* "behalten" "temp")
                                 " HR=" (if *HAF:grid-keep* "behalten" "temp")
+                                " TIN=" (if *HAF:tin-keep* "behalten" "temp")
                                 " N=" (rtos *HAF:grid-interval* 2 2)))
 )
 
@@ -1628,10 +1647,49 @@
   (if result (reverse result) nil)
 )
 
+;;; Prueft ob ein Punkt innerhalb eines Polygons liegt (2D, Ray-Casting)
+;;; Parameter:
+;;;   pt - Punkt (x y)
+;;;   polygon - Liste von Punkten ((x y) (x y) ...) geschlossen
+;;;
+;;; Rueckgabe: T wenn innerhalb, nil wenn ausserhalb
+(defun HAF:point-in-polygon (pt polygon / n i j xi yi xj yj inside)
+  (setq n (length polygon))
+  (setq inside nil)
+  (setq j (1- n))
+  (setq i 0)
+  (while (< i n)
+    (setq xi (car (nth i polygon)) yi (cadr (nth i polygon)))
+    (setq xj (car (nth j polygon)) yj (cadr (nth j polygon)))
+    ;; Ray-Casting: zaehle Schnitte mit horizontalem Strahl nach rechts
+    (if (and (/= (> yi (cadr pt)) (> yj (cadr pt)))
+             (< (car pt)
+                (+ xi (/ (* (- xj xi) (- (cadr pt) yi)) (- yj yi)))))
+      (setq inside (not inside))
+    )
+    (setq j i)
+    (setq i (1+ i))
+  )
+  inside
+)
+
+;;; Prueft ob Mittelpunkt eines Segments innerhalb der Umrandung liegt
+;;; Parameter:
+;;;   seg - Segment ((x1 y1 z1) (x2 y2 z2))
+;;;   polygon - Umrandungs-Punkte
+;;; Rueckgabe: T wenn Mittelpunkt innerhalb
+(defun HAF:segment-in-polygon (seg polygon / mid)
+  (setq mid (list (/ (+ (car (car seg)) (car (cadr seg))) 2.0)
+                  (/ (+ (cadr (car seg)) (cadr (cadr seg))) 2.0)))
+  (HAF:point-in-polygon mid polygon)
+)
+
 ;;; Visualisiert TIN als Linien (Dreieckskanten)
+;;; Zeichnet nur Kanten deren Mittelpunkt innerhalb der Umrandung liegt
 ;;; Rueckgabe: Liste von Entity-Names
-(defun HAF:draw-tin (pts heights triangles
-                     / tri pa pb pc ha hb hc entities ent)
+(defun HAF:draw-tin (pts heights triangles polygon
+                     / tri pa pb pc ha hb hc entities ent
+                       p1-3d p2-3d p3-3d edges edge)
   (setq entities nil)
   (foreach tri triangles
     (setq pa (nth (car tri) pts))
@@ -1640,17 +1698,29 @@
     (setq ha (nth (car tri) heights))
     (setq hb (nth (cadr tri) heights))
     (setq hc (nth (caddr tri) heights))
-    ;; 3 Kanten pro Dreieck als 3DFACE
-    (setq ent (entmakex
-      (list '(0 . "3DFACE") '(100 . "AcDbEntity") '(8 . "0") '(62 . 8)
-            '(100 . "AcDb3dFace")
-            (cons 10 (list (car pa) (cadr pa) ha))
-            (cons 11 (list (car pb) (cadr pb) hb))
-            (cons 12 (list (car pc) (cadr pc) hc))
-            (cons 13 (list (car pc) (cadr pc) hc)))))
-    (if ent (setq entities (cons ent entities)))
+    (setq p1-3d (list (car pa) (cadr pa) ha))
+    (setq p2-3d (list (car pb) (cadr pb) hb))
+    (setq p3-3d (list (car pc) (cadr pc) hc))
+    ;; 3 Kanten pro Dreieck als LINE
+    (setq edges (list (list p1-3d p2-3d)
+                       (list p2-3d p3-3d)
+                       (list p3-3d p1-3d)))
+    (foreach edge edges
+      ;; Nur zeichnen wenn Mittelpunkt innerhalb Umrandung
+      (if (or (null polygon) (HAF:segment-in-polygon edge polygon))
+        (progn
+          (setq ent (entmakex
+            (list '(0 . "LINE") '(100 . "AcDbEntity") '(8 . "0")
+                  (cons 62 *HAF:tin-color*)
+                  '(100 . "AcDbLine")
+                  (cons 10 (car edge))
+                  (cons 11 (cadr edge)))))
+          (if ent (setq entities (cons ent entities)))
+        )
+      )
+    )
   )
-  (HAF:log-write "INFO" (strcat "TIN gezeichnet: " (itoa (length entities)) " 3DFaces"))
+  (HAF:log-write "INFO" (strcat "TIN gezeichnet: " (itoa (length entities)) " Linien"))
   entities
 )
 
@@ -1881,12 +1951,13 @@
 ;;; Zeichnet Hoehenlinie als Linien-Segmente
 ;;; Farbe aus *HAF:contour-color* (konfigurierbar)
 ;;; Rueckgabe: Liste der Entity-Names (zum spaeteren Loeschen/Finalisieren)
-(defun HAF:draw-contour (segments / entities ent p1 p2)
+(defun HAF:draw-contour (segments polygon / entities ent p1 p2)
   (setq entities nil)
   (foreach seg segments
     (setq p1 (car seg))
     (setq p2 (cadr seg))
-    (if (and p1 p2)
+    (if (and p1 p2
+             (or (null polygon) (HAF:segment-in-polygon seg polygon)))
       (progn
         (setq ent (entmakex
           (list '(0 . "LINE") '(100 . "AcDbEntity") '(8 . "0")
@@ -1931,7 +2002,7 @@
 ;;;   interval - Abstand N
 ;;;
 ;;; Rueckgabe: Liste aller Entity-Names (zum Loeschen/Finalisieren)
-(defun HAF:draw-grid (pts heights diagonal interval
+(defun HAF:draw-grid (pts heights diagonal interval polygon
                       / min-h max-h target-h segments entities all-entities)
   (setq min-h (apply 'min heights))
   (setq max-h (apply 'max heights))
@@ -1951,9 +2022,10 @@
     (setq segments (HAF:compute-contour pts heights target-h diagonal))
     (if segments
       (progn
-        ;; Zeichne Segmente mit Grid-Farbe
+        ;; Zeichne Segmente mit Grid-Farbe (nur innerhalb Polygon)
         (foreach seg segments
-          (if (and (car seg) (cadr seg))
+          (if (and (car seg) (cadr seg)
+                   (or (null polygon) (HAF:segment-in-polygon seg polygon)))
             (progn
               (setq entities (entmakex
                 (list '(0 . "LINE") '(100 . "AcDbEntity") '(8 . "0")
@@ -2130,7 +2202,12 @@
         (HAF:delete-grid grid-entities)
       )
     )
-    (if tin-entities (HAF:delete-tin tin-entities))
+    (if tin-entities
+      (if *HAF:tin-keep*
+        (foreach e tin-entities (HAF:finalize-line e *HAF:tin-own-layer* *HAF:tin-use-layer* *HAF:tin-suffix*))
+        (HAF:delete-tin tin-entities)
+      )
+    )
     (setq *HAF:tin-triangles* nil)
     ;; Systemvariablen wiederherstellen
     (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
@@ -2306,7 +2383,7 @@
            (progn
              (princ (strcat "\n  " (itoa (length *HAF:tin-triangles*)) " Dreiecke berechnet"))
              ;; TIN visualisieren (temporaere 3DFaces)
-             (setq tin-entities (HAF:draw-tin corner-points corner-heights *HAF:tin-triangles*))
+             (setq tin-entities (HAF:draw-tin corner-points corner-heights *HAF:tin-triangles* corner-points))
              (princ (strcat "\n  TIN gezeichnet (" (itoa (length tin-entities)) " 3DFaces)"))
            )
            (progn
@@ -2370,7 +2447,7 @@
                                                     target-h use-diagonal))
                (if segments
                  (progn
-                   (setq contour-entities (HAF:draw-contour segments))
+                   (setq contour-entities (HAF:draw-contour segments corner-points))
                    (princ (strcat "\n  Hoehenlinie bei " (rtos target-h 2 2)
                                   " (" (itoa (length segments)) " Segment(e))"))
                  )
@@ -2394,7 +2471,7 @@
                (setq *HAF:grid-interval* target-h)
                (HAF:log-write "INFO" (strcat "Raster: N=" (rtos target-h 2 2)))
                (setq grid-entities (HAF:draw-grid corner-points corner-heights
-                                                   use-diagonal target-h))
+                                                   use-diagonal target-h corner-points))
                (if (null grid-entities)
                  (princ "\n  Kein Raster moeglich (alle Hoehen gleich?)")
                )
@@ -2505,12 +2582,20 @@
         (setq grid-entities nil)
       )
       
-      ;; TIN (immer temporaer loeschen - 3DFaces sind nur Visualisierung)
+      ;; TIN-Netz
       (if tin-entities
-        (progn
-          (HAF:delete-tin tin-entities)
-          (setq tin-entities nil)
-          (HAF:log-write "INFO" "TIN 3DFaces geloescht (temporaer)")
+        (if *HAF:tin-keep*
+          (progn
+            (foreach e tin-entities
+              (HAF:finalize-line e *HAF:tin-own-layer* *HAF:tin-use-layer* *HAF:tin-suffix*)
+            )
+            (HAF:log-write "INFO" (strcat "TIN beibehalten (Layer _" *HAF:tin-suffix* ")"))
+          )
+          (progn
+            (HAF:delete-tin tin-entities)
+            (setq tin-entities nil)
+            (HAF:log-write "INFO" "TIN geloescht (temporaer)")
+          )
         )
       )
       (setq *HAF:tin-triangles* nil)
@@ -2741,6 +2826,39 @@
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
   
+  ;; --- TIN-Netz ---
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"TIN-Netz (5+ Punkte)\";" fp)
+  (write-line "    : toggle {" fp)
+  (write-line "      key = \"tin_keep\";" fp)
+  (write-line "      label = \"Behalten\";" fp)
+  (write-line "    }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"tin_own_layer\";" fp)
+  (write-line "        label = \"Eigener Layer\";" fp)
+  (write-line "      }" fp)
+  (write-line "      : edit_box {" fp)
+  (write-line "        key = \"tin_suffix\";" fp)
+  (write-line "        label = \"Suffix:\";" fp)
+  (write-line "        edit_width = 6;" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"tin_bylayer\";" fp)
+  (write-line "        label = \"Layer-Farbe\";" fp)
+  (write-line "      }" fp)
+  (write-line "      : popup_list {" fp)
+  (write-line "        key = \"tin_color\";" fp)
+  (write-line "        label = \"Farbe:\";" fp)
+  (write-line "        list = \"Rot\\nGelb\\nGruen\\nCyan\\nBlau\\nMagenta\\nWeiss\\nGrau\";" fp)
+  (write-line "        width = 12;" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  
   ;; --- BlockImport Pfad ---
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"BlockImport.lsp\";" fp)
@@ -2852,6 +2970,12 @@
       (set_tile "grid_color" (itoa (1- *HAF:grid-color*)))
       (set_tile "grid_suffix" *HAF:grid-suffix*)
       (set_tile "grid_interval" (rtos *HAF:grid-interval* 2 2))
+      ;; TIN-Netz
+      (set_tile "tin_keep" (if *HAF:tin-keep* "1" "0"))
+      (set_tile "tin_own_layer" (if *HAF:tin-own-layer* "1" "0"))
+      (set_tile "tin_bylayer" (if *HAF:tin-use-layer* "1" "0"))
+      (set_tile "tin_color" (itoa (1- *HAF:tin-color*)))
+      (set_tile "tin_suffix" *HAF:tin-suffix*)
       
       ;; Live-Vorschau Layer-Suffix
       (action_tile "layer_suffix"
@@ -2906,6 +3030,11 @@
           "(setq *HAF:tmp-grid-color* (get_tile \"grid_color\"))"
           "(setq *HAF:tmp-grid-suffix* (get_tile \"grid_suffix\"))"
           "(setq *HAF:tmp-grid-interval* (get_tile \"grid_interval\"))"
+          "(setq *HAF:tmp-tin-keep* (get_tile \"tin_keep\"))"
+          "(setq *HAF:tmp-tin-own-layer* (get_tile \"tin_own_layer\"))"
+          "(setq *HAF:tmp-tin-bylayer* (get_tile \"tin_bylayer\"))"
+          "(setq *HAF:tmp-tin-color* (get_tile \"tin_color\"))"
+          "(setq *HAF:tmp-tin-suffix* (get_tile \"tin_suffix\"))"
           "(done_dialog 2)"
         )
       )
@@ -2940,6 +3069,11 @@
           "(setq *HAF:tmp-grid-color* (get_tile \"grid_color\"))"
           "(setq *HAF:tmp-grid-suffix* (get_tile \"grid_suffix\"))"
           "(setq *HAF:tmp-grid-interval* (get_tile \"grid_interval\"))"
+          "(setq *HAF:tmp-tin-keep* (get_tile \"tin_keep\"))"
+          "(setq *HAF:tmp-tin-own-layer* (get_tile \"tin_own_layer\"))"
+          "(setq *HAF:tmp-tin-bylayer* (get_tile \"tin_bylayer\"))"
+          "(setq *HAF:tmp-tin-color* (get_tile \"tin_color\"))"
+          "(setq *HAF:tmp-tin-suffix* (get_tile \"tin_suffix\"))"
           "(done_dialog 1)"
         )
       )
@@ -3060,11 +3194,25 @@
           (HAF:set-config-value "GRID_SUFFIX" *HAF:grid-suffix*)
           (HAF:set-config-value "GRID_INTERVAL" (rtos *HAF:grid-interval* 2 2))
           
+          ;; TIN-Netz
+          (setq *HAF:tin-keep* (= *HAF:tmp-tin-keep* "1"))
+          (setq *HAF:tin-own-layer* (= *HAF:tmp-tin-own-layer* "1"))
+          (setq *HAF:tin-use-layer* (= *HAF:tmp-tin-bylayer* "1"))
+          (setq *HAF:tin-color* (1+ (atoi *HAF:tmp-tin-color*)))
+          (if (and *HAF:tmp-tin-suffix* (/= *HAF:tmp-tin-suffix* ""))
+            (setq *HAF:tin-suffix* *HAF:tmp-tin-suffix*))
+          (HAF:set-config-value "TIN_KEEP" (if *HAF:tin-keep* "1" "0"))
+          (HAF:set-config-value "TIN_OWN_LAYER" (if *HAF:tin-own-layer* "1" "0"))
+          (HAF:set-config-value "TIN_USE_LAYER" (if *HAF:tin-use-layer* "1" "0"))
+          (HAF:set-config-value "TIN_COLOR" (itoa *HAF:tin-color*))
+          (HAF:set-config-value "TIN_SUFFIX" *HAF:tin-suffix*)
+          
           (HAF:log-write "INFO" (strcat "Settings: HK=" (if *HAF:use-layer-suffix* (strcat "_" *HAF:layer-suffix*) "aus")
                                         " UM=" (if *HAF:outline-keep* "behalten" "temp") "/" (HAF:color-name *HAF:outline-color*)
                                         " BL=" (if *HAF:breakline-keep* "behalten" "temp") "/" (HAF:color-name *HAF:breakline-color*)
                                         " HL=" (if *HAF:contour-keep* "behalten" "temp") "/" (HAF:color-name *HAF:contour-color*)
                                         " HR=" (if *HAF:grid-keep* "behalten" "temp") "/" (HAF:color-name *HAF:grid-color*)
+                                        " TIN=" (if *HAF:tin-keep* "behalten" "temp") "/" (HAF:color-name *HAF:tin-color*)
                                         " N=" (rtos *HAF:grid-interval* 2 2)
                                         " Debug=" (if *HAF:debug-mode* "ein" "aus")))
           (princ "\nEinstellungen gespeichert.")
@@ -3127,6 +3275,11 @@
   (setq *HAF:tmp-grid-color* nil)
   (setq *HAF:tmp-grid-suffix* nil)
   (setq *HAF:tmp-grid-interval* nil)
+  (setq *HAF:tmp-tin-keep* nil)
+  (setq *HAF:tmp-tin-own-layer* nil)
+  (setq *HAF:tmp-tin-bylayer* nil)
+  (setq *HAF:tmp-tin-color* nil)
+  (setq *HAF:tmp-tin-suffix* nil)
 )
 
 ;;; Settings-Befehl
