@@ -733,9 +733,9 @@
 ;;; Rückgabe: (T importEnt) bei Erfolg oder (nil nil) bei Fehler
 ;;;           importEnt ist die Entity die später gelöscht werden sollte
 (defun ensure-block-available (blockname / block-path import-result standard-block actual-blockname all-paths block-list)
-  ;; Wenn kein Blockname angegeben: Verwende Standard-Block
+  ;; Wenn kein Blockname angegeben: Verwende BLI:resolve-blockname (DWG → Global → nil)
   (if (null blockname)
-    (setq actual-blockname (get-standard-block))
+    (setq actual-blockname (BLI:resolve-blockname nil))
     (setq actual-blockname blockname)
   )
 
@@ -752,11 +752,12 @@
         )
       )
 
-      ;; Wenn genau 1 Block: Automatisch als Standard setzen
+      ;; Wenn genau 1 Block: Automatisch als Standard setzen + in DWG speichern
       (if (= (length block-list) 1)
         (progn
           (setq actual-blockname (car block-list))
           (set-standard-block actual-blockname)
+          (BLI:dwg-block-write nil actual-blockname)
           (princ (strcat "\n✓ Einziger Block automatisch als Standard gesetzt: " actual-blockname))
         )
       )
