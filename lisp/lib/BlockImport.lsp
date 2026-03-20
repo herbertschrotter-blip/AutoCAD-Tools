@@ -528,8 +528,8 @@
                     (progn
                       (princ "\n  ✓ Block-Definition erfolgreich importiert")
 
-                      ;; REGEN damit AutoCAD die neue Block-Definition visuell registriert
-                      (vl-catch-all-apply 'vla-regen (list doc acAllViewports))
+                                            ;; REGEN damit AutoCAD die neue Block-Definition visuell registriert
+                      (command "._regenall")
 
                       (vlax-release-object dbx)
                       (BLI:log-write "INFO" (strcat "Block erfolgreich importiert: " blockname))
