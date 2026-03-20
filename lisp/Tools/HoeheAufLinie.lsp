@@ -2,8 +2,8 @@
 ;;; Hoeheninterpolation entlang einer Linie zwischen zwei Fixpunkten
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 2.4.0
-;;; Datum: 2026-03-19
+;;; Version: 2.5.0
+;;; Datum: 2026-03-20
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAL (HoeheAufLinie)
 ;;;
@@ -24,7 +24,7 @@
 ;;; KONSTANTEN (Top-Level erlaubt)
 ;;; ============================================================================
 
-(setq *HAL:version* "2.4.0")
+(setq *HAL:version* "2.5.0")
 (setq *HAL:appdata-folder* "HoeheAufLinie")
 (setq *HAL:blockname* "BLK_Hoehenkote")
 
@@ -214,6 +214,93 @@
     (progn
       (HAL:log-write "ERROR" (strcat "Config schreiben fehlgeschlagen: " cfg-path))
       nil
+    )
+  )
+)
+
+;;; Liest einzelnen Wert aus Config-Datei
+;;; Parameter: search-key - Schluessel (String)
+;;; Rueckgabe: Wert (String) oder nil
+(defun HAL:load-config-value (search-key / appdata cfg-path fp line pos key value found)
+  (setq appdata (HAL:get-appdata-path))
+  (setq cfg-path (strcat appdata "\\Config\\" *HAL:appdata-folder* ".cfg"))
+  (setq found nil)
+  
+  (if (findfile cfg-path)
+    (progn
+      (setq fp (open cfg-path "r"))
+      (if fp
+        (progn
+          (while (and (setq line (read-line fp)) (not found))
+            (if (setq pos (vl-string-search "=" line))
+              (progn
+                (setq key (substr line 1 pos))
+                (setq value (substr line (+ pos 2)))
+                (if (= key search-key) (setq found value))
+              )
+            )
+          )
+          (close fp)
+        )
+      )
+    )
+  )
+  found
+)
+
+;;; Setzt einzelnen Wert in Config (laedt, aendert, speichert)
+;;; Parameter: set-key - Schluessel, set-value - Wert (beides Strings)
+(defun HAL:save-config-value (set-key set-value / appdata cfg-path fp line pos key value all-lines found)
+  (setq appdata (HAL:get-appdata-path))
+  (setq cfg-path (strcat appdata "\\Config\\" *HAL:appdata-folder* ".cfg"))
+  (setq all-lines '())
+  (setq found nil)
+  
+  ;; Bestehende Config lesen
+  (if (findfile cfg-path)
+    (progn
+      (setq fp (open cfg-path "r"))
+      (if fp
+        (progn
+          (while (setq line (read-line fp))
+            (if (setq pos (vl-string-search "=" line))
+              (progn
+                (setq key (substr line 1 pos))
+                (if (= key set-key)
+                  (progn
+                    (setq all-lines (cons (strcat set-key "=" set-value) all-lines))
+                    (setq found T)
+                  )
+                  (setq all-lines (cons line all-lines))
+                )
+              )
+              (setq all-lines (cons line all-lines))
+            )
+          )
+          (close fp)
+        )
+      )
+    )
+  )
+  
+  ;; Wenn Key nicht gefunden: hinzufuegen
+  (if (not found)
+    (setq all-lines (cons (strcat set-key "=" set-value) all-lines))
+  )
+  
+  ;; Zurueckschreiben
+  (setq cfg-path (strcat appdata "\\Config\\" *HAL:appdata-folder* ".cfg"))
+  (if (not (vl-file-directory-p (strcat appdata "\\Config")))
+    (vl-mkdir (strcat appdata "\\Config"))
+  )
+  (setq fp (open cfg-path "w"))
+  (if fp
+    (progn
+      (foreach l (reverse all-lines)
+        (write-line l fp)
+      )
+      (close fp)
+      (HAL:log-write "INFO" (strcat "Config-Wert gespeichert: " set-key "=" set-value))
     )
   )
 )
@@ -446,7 +533,7 @@
   (write-line "  label = \"HoeheAufLinie - Einstellungen\";" fp)
   (write-line "  spacer;" fp)
   
-  ;; --- Skalierung ---
+  ;; --- Skalierung (wie SetHK: Aktuelle Zeichnung + Default) ---
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"XY-Skalierung\";" fp)
   (write-line "    : edit_box {" fp)
@@ -454,10 +541,29 @@
   (write-line "      label = \"Aktuelle Zeichnung:\";" fp)
   (write-line "      edit_width = 10;" fp)
   (write-line "    }" fp)
+  (write-line "    : edit_box {" fp)
+  (write-line "      key = \"default_scale\";" fp)
+  (write-line "      label = \"Default (neue Zeichnungen):\";" fp)
+  (write-line "      edit_width = 10;" fp)
+  (write-line "    }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
   
-  ;; --- Layer ---
+  ;; --- Hoehenkoten-Block (wie SetHK: read-only Info + Button) ---
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Hoehenkoten-Block\";" fp)
+  (write-line "    : text {" fp)
+  (write-line "      key = \"blockname_info\";" fp)
+  (write-line "      label = \"\";" fp)
+  (write-line "    }" fp)
+  (write-line "    : button {" fp)
+  (write-line "      key = \"btn_block\";" fp)
+  (write-line "      label = \"Block-Verwaltung oeffnen...\";" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  
+  ;; --- Layer (wie SetHK: Toggle + Suffix + Vorschau) ---
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"Layer\";" fp)
   (write-line "    : toggle {" fp)
@@ -476,7 +582,7 @@
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
   
-  ;; --- Linie A-B ---
+  ;; --- Linie A-B (HAL-spezifisch) ---
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"Linie A-B (gelb)\";" fp)
   (write-line "    : radio_column {" fp)
@@ -497,7 +603,7 @@
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
   
-  ;; --- Konstruktionslinie (rot) ---
+  ;; --- Konstruktionslinie (HAL-spezifisch) ---
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"Konstruktionslinie (rot)\";" fp)
   (write-line "    : toggle {" fp)
@@ -507,21 +613,22 @@
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
   
-  ;; --- Block-Verwaltung ---
+  ;; --- BlockImport.lsp (wie SetHK: Pfad + Durchsuchen) ---
   (write-line "  : boxed_column {" fp)
-  (write-line "    label = \"Hoehenkoten-Block\";" fp)
-  (write-line "    : text {" fp)
-  (write-line "      key = \"blockname_info\";" fp)
-  (write-line "      label = \"\";" fp)
+  (write-line "    label = \"BlockImport.lsp\";" fp)
+  (write-line "    : edit_box {" fp)
+  (write-line "      key = \"libpath\";" fp)
+  (write-line "      label = \"Pfad:\";" fp)
+  (write-line "      edit_width = 40;" fp)
   (write-line "    }" fp)
   (write-line "    : button {" fp)
-  (write-line "      key = \"btn_block\";" fp)
-  (write-line "      label = \"Block-Verwaltung oeffnen...\";" fp)
+  (write-line "      key = \"btn_browse\";" fp)
+  (write-line "      label = \"Durchsuchen...\";" fp)
   (write-line "    }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
   
-  ;; --- Debug ---
+  ;; --- Debug (wie SetHK: Toggle + Log-Pfad) ---
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"Debug\";" fp)
   (write-line "    : toggle {" fp)
@@ -551,12 +658,19 @@
 )
 
 ;;; Oeffnet Settings-Dialog, speichert bei OK
-(defun HAL:show-settings ( / dcl-file dcl-id result cur-scale)
+(defun HAL:show-settings ( / dcl-file dcl-id result cur-scale cur-default-scale cur-libpath cfg-val)
   (HAL:log-write "INFO" "Settings-Dialog geoeffnet")
   
   ;; Aktuelle DWG-Scale lesen
   (setq cur-scale (HAL:read-dwg-scale))
-  (if (null cur-scale) (setq cur-scale 1.0))
+  (if (null cur-scale) (setq cur-scale 0.0)) ;; 0 = "nicht gesetzt"
+  
+  ;; Default-Scale aus Config
+  (setq cfg-val (HAL:load-config-value "DEFAULT_SCALE"))
+  (setq cur-default-scale (if (and cfg-val (/= cfg-val "")) (atof cfg-val) 1.0))
+  
+  ;; BlockImport Pfad
+  (setq cur-libpath (if (and (boundp '*HAL:blockimport-path*) *HAL:blockimport-path*) *HAL:blockimport-path* "(nicht konfiguriert)"))
   
   ;; DCL schreiben und laden
   (setq dcl-file (HAL:write-settings-dcl))
@@ -571,7 +685,8 @@
     )
     (progn
       ;; Werte in Dialog setzen
-      (set_tile "scale" (rtos cur-scale 2 2))
+      (set_tile "scale" (if (> cur-scale 0.0) (rtos cur-scale 2 2) "(nicht gesetzt)"))
+      (set_tile "default_scale" (rtos cur-default-scale 2 2))
       (set_tile "use_suffix" (if *HAL:use-layer-suffix* "1" "0"))
       (set_tile "layer_suffix" *HAL:layer-suffix*)
       (set_tile "layer_preview" (strcat "Vorschau: " (getvar "CLAYER") "_" *HAL:layer-suffix*))
@@ -579,11 +694,12 @@
       (set_tile "mode_xline" (if (= *HAL:lineab-mode* "XLINE") "1" "0"))
       (set_tile "lineab_keep" (if *HAL:lineab-keep* "1" "0"))
       (set_tile "xline_keep" (if *HAL:xline-keep* "1" "0"))
+      (set_tile "libpath" cur-libpath)
       (set_tile "debug" (if *HAL:debug-mode* "1" "0"))
       (set_tile "logpath" (strcat "Log: " (HAL:get-appdata-path) "\\Log"))
       (setq *block-import-context* "HoeheAufLinie")
       (set_tile "blockname_info"
-        (strcat "Block: "
+        (strcat "Aktueller Block: "
           (if (BLI:resolve-blockname "HoeheAufLinie")
             (BLI:resolve-blockname "HoeheAufLinie")
             "(nicht konfiguriert)")))
@@ -594,15 +710,35 @@
         "(set_tile \"layer_preview\" (strcat \"Vorschau: \" (getvar \"CLAYER\") \"_\" (get_tile \"layer_suffix\")))"
       )
       
+      ;; Durchsuchen-Button fuer BlockImport.lsp
+      (action_tile "btn_browse"
+        (strcat
+          "(progn"
+          "  (setq *HAL:tmp-path*"
+          "    (getfiled \"BlockImport.lsp auswaehlen\""
+          "      (if (findfile (get_tile \"libpath\"))"
+          "        (vl-filename-directory (get_tile \"libpath\"))"
+          "        (cond ((getvar \"DWGPREFIX\")) ((getenv \"USERPROFILE\")) (T \"\"))"
+          "      )"
+          "      \"lsp\" 0))"
+          "  (if *HAL:tmp-path*"
+          "    (set_tile \"libpath\" *HAL:tmp-path*)"
+          "  )"
+          ")"
+        )
+      )
+      
       ;; Block-Verwaltung Button: Werte speichern VOR done_dialog (Sub-Dialog Bug!)
       (action_tile "btn_block"
         (strcat
           "(setq *HAL:tmp-scale* (get_tile \"scale\"))"
+          "(setq *HAL:tmp-default-scale* (get_tile \"default_scale\"))"
           "(setq *HAL:tmp-use-suffix* (get_tile \"use_suffix\"))"
           "(setq *HAL:tmp-layer-suffix* (get_tile \"layer_suffix\"))"
           "(setq *HAL:tmp-mode-line* (get_tile \"mode_line\"))"
           "(setq *HAL:tmp-lineab-keep* (get_tile \"lineab_keep\"))"
           "(setq *HAL:tmp-xline-keep* (get_tile \"xline_keep\"))"
+          "(setq *HAL:tmp-libpath* (get_tile \"libpath\"))"
           "(setq *HAL:tmp-debug* (get_tile \"debug\"))"
           "(done_dialog 2)"
         )
@@ -612,11 +748,13 @@
       (action_tile "accept"
         (strcat
           "(setq *HAL:tmp-scale* (get_tile \"scale\"))"
+          "(setq *HAL:tmp-default-scale* (get_tile \"default_scale\"))"
           "(setq *HAL:tmp-use-suffix* (get_tile \"use_suffix\"))"
           "(setq *HAL:tmp-layer-suffix* (get_tile \"layer_suffix\"))"
           "(setq *HAL:tmp-mode-line* (get_tile \"mode_line\"))"
           "(setq *HAL:tmp-lineab-keep* (get_tile \"lineab_keep\"))"
           "(setq *HAL:tmp-xline-keep* (get_tile \"xline_keep\"))"
+          "(setq *HAL:tmp-libpath* (get_tile \"libpath\"))"
           "(setq *HAL:tmp-debug* (get_tile \"debug\"))"
           "(done_dialog 1)"
         )
@@ -629,15 +767,29 @@
       (cond
         ;; OK gedrueckt (result = 1)
         ((= result 1)
-          ;; Skalierung
+          ;; DWG-Skalierung speichern (nur wenn gueltig)
           (if (> (atof *HAL:tmp-scale*) 0.0)
             (progn
               (HAL:write-dwg-scale (atof *HAL:tmp-scale*))
               (HAL:log-write "INFO" (strcat "DWG-Skalierung: " *HAL:tmp-scale*))
             )
+            (if (/= *HAL:tmp-scale* "(nicht gesetzt)")
+              (progn
+                (princ "\n*** DWG-Skalierung muss > 0 sein, nicht geaendert ***")
+                (HAL:log-write "WARN" (strcat "Ungueltige DWG-Skalierung: " *HAL:tmp-scale*))
+              )
+            )
+          )
+          
+          ;; Default-Skalierung speichern (in Config)
+          (if (> (atof *HAL:tmp-default-scale*) 0.0)
             (progn
-              (princ "\n*** Skalierung muss > 0 sein, nicht geaendert ***")
-              (HAL:log-write "WARN" (strcat "Ungueltige Skalierung: " *HAL:tmp-scale*))
+              (HAL:save-config-value "DEFAULT_SCALE" *HAL:tmp-default-scale*)
+              (HAL:log-write "INFO" (strcat "Default-Skalierung: " *HAL:tmp-default-scale*))
+            )
+            (progn
+              (princ "\n*** Default-Skalierung muss > 0 sein, nicht geaendert ***")
+              (HAL:log-write "WARN" (strcat "Ungueltige Default-Skalierung: " *HAL:tmp-default-scale*))
             )
           )
           
@@ -657,6 +809,16 @@
           
           ;; Konstruktionslinie
           (setq *HAL:xline-keep* (= *HAL:tmp-xline-keep* "1"))
+          
+          ;; BlockImport Pfad speichern (nur wenn geaendert und gueltig)
+          (if (and *HAL:tmp-libpath*
+                   (/= *HAL:tmp-libpath* "(nicht konfiguriert)")
+                   (/= *HAL:tmp-libpath* cur-libpath))
+            (progn
+              (setq *HAL:blockimport-path* *HAL:tmp-libpath*)
+              (HAL:log-write "INFO" (strcat "BlockImport Pfad: " *HAL:tmp-libpath*))
+            )
+          )
           
           ;; Debug
           (setq *HAL:debug-mode* (= *HAL:tmp-debug* "1"))
@@ -702,14 +864,16 @@
   )
   
   ;; Temp-Variablen aufraeumen
-
   (setq *HAL:tmp-scale* nil)
+  (setq *HAL:tmp-default-scale* nil)
   (setq *HAL:tmp-use-suffix* nil)
   (setq *HAL:tmp-layer-suffix* nil)
   (setq *HAL:tmp-mode-line* nil)
   (setq *HAL:tmp-lineab-keep* nil)
   (setq *HAL:tmp-xline-keep* nil)
+  (setq *HAL:tmp-libpath* nil)
   (setq *HAL:tmp-debug* nil)
+  (setq *HAL:tmp-path* nil)
 )
 
 ;;; ============================================================================
