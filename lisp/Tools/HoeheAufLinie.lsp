@@ -697,8 +697,12 @@
         ;; Block-Manager oeffnen (result = 2)
         ((= result 2)
           (HAL:log-write "INFO" "Block-Verwaltung geoeffnet aus Settings")
+          (unload_dialog dcl-id)
+          (vl-file-delete dcl-file)
           (manage-block-import "HoeheAufLinie")
-          (princ "\nBlock-Verwaltung abgeschlossen.")
+          ;; Nach Block-Manager: Settings erneut oeffnen
+          (HAL:log-write "INFO" "Settings erneut oeffnen nach Block-Verwaltung")
+          (HAL:show-settings)
         )
         
         ;; Abbrechen (result = 0)
@@ -708,13 +712,18 @@
         )
       )
       
-      ;; Aufraeumen
-      (unload_dialog dcl-id)
-      (vl-file-delete dcl-file)
+      ;; Aufraeumen (nur wenn nicht schon durch result=2 aufgeraeumt)
+      (if (/= result 2)
+        (progn
+          (unload_dialog dcl-id)
+          (vl-file-delete dcl-file)
+        )
+      )
     )
   )
   
   ;; Temp-Variablen aufraeumen
+
   (setq *HAL:tmp-scale* nil)
   (setq *HAL:tmp-use-suffix* nil)
   (setq *HAL:tmp-layer-suffix* nil)
