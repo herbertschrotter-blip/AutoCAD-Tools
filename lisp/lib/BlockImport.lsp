@@ -22,7 +22,7 @@
 ;;; ShowBlockPath     - Zeigt konfigurierte Pfade
 ;;; ResetBlockPath    - Löscht alle Pfade
 ;;;
-;;; Version: 1.10.1
+;;; Version: 1.11.0
 ;;; Datum: 2026-03-19
 ;;; Autor: Herbert Schrotter
 
@@ -1249,27 +1249,14 @@
 
 ;;; Erstellt die Listbox-Einträge für den DCL-Dialog
 ;;; Rückgabe: Liste von Strings für list_box (oder nil)
-(defun BLI:build-block-list ( / all-paths standard-block dwg-block entries name marker)
+(defun BLI:build-block-list ( / all-paths entries)
   (setq all-paths (read-all-block-paths))
-  (setq standard-block (get-standard-block))
-  (setq dwg-block (BLI:dwg-block-read nil))
   (setq entries '())
 
   (if all-paths
     (foreach pair all-paths
       (if (not (wcmatch (car pair) "*STANDARD*"))
-        (progn
-          (setq name (car pair))
-          (setq marker
-            (cond
-              ((and (eq name dwg-block) (eq name standard-block)) " [DWG+STD]")
-              ((eq name dwg-block) " [DWG]")
-              ((eq name standard-block) " [STD]")
-              (T "")
-            )
-          )
-          (setq entries (append entries (list (strcat name marker))))
-        )
+        (setq entries (append entries (list (car pair))))
       )
     )
   )
@@ -1278,18 +1265,9 @@
 
 ;;; Gibt den reinen Blocknamen aus einem Listbox-Eintrag zurück
 ;;; Entfernt " [STANDARD]", " OK", " FEHLT!" Suffixe
-(defun BLI:extract-blockname (entry / pos)
-  (if entry
-    (progn
-      ;; Entferne " [...]" Suffix
-      (setq pos (vl-string-search " [" entry))
-      (if pos
-        (substr entry 1 pos)
-        entry
-      )
-    )
-    nil
-  )
+(defun BLI:extract-blockname (entry / )
+  ;; Blockname = Listbox-Eintrag (keine Suffixe)
+  entry
 )
 
 ;;; Gibt die reine Block-Liste zurück (nur Namen, ohne Suffixe)
@@ -1698,8 +1676,8 @@
 ;; KEIN vl-load-com auf Top-Level! (Lazy-Init: wird von aufrufendem Script geladen)
 
 ;; Lade-Meldung
-(BLI:log-write "INFO" "=== BlockImport.lsp v1.10.1 geladen ===")
-(princ "\nBlockImport.lsp v1.10.1 geladen.")
+(BLI:log-write "INFO" "=== BlockImport.lsp v1.11.0 geladen ===")
+(princ "\nBlockImport.lsp v1.11.0 geladen.")
 (princ "\nBefehle: ManageBlockImport - Block-Verwaltung")
 (princ "\n         ShowBlockPath - Zeigt konfigurierte Pfade")
 (princ "\n         ResetBlockPath - Löscht alle Pfade")
