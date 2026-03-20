@@ -2,7 +2,7 @@
 ;;; Hoeheninterpolation auf einer Flaeche definiert durch 3-4 Eckpunkte
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 3.2.0
+;;; Version: 3.2.1
 ;;; Datum: 2026-03-20
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAF (HoeheAufFlaeche)
@@ -27,7 +27,7 @@
 ;;; KONSTANTEN (Top-Level erlaubt)
 ;;; ============================================================================
 
-(setq *HAF:version* "3.2.0")
+(setq *HAF:version* "3.2.1")
 (setq *HAF:appdata-folder* "HoeheAufFlaeche")
 (setq *HAF:blockname* "BLK_Hoehenkote")
 
@@ -1717,11 +1717,11 @@
 )
 
 ;;; Visualisiert TIN als geschlossene 3D-Polylinien (1 pro Dreieck)
-;;; UCS→WCS Transformation fuer korrekte Platzierung im BKS
-;;; Rueckgabe: Liste von Entity-Names
+;;; Verwendet entmakex mit UCS→WCS Transformation
+;;; Rueckgabe: Liste von Entity-Names (POLYLINE Header-Entities)
 (defun HAF:draw-tin (pts heights triangles
                      / tri pa pb pc ha hb hc entities ent
-                       p1-wcs p2-wcs p3-wcs last-ent ent-data)
+                       p1-wcs p2-wcs p3-wcs header)
   (setq entities nil)
   (foreach tri triangles
     (setq pa (nth (car tri) pts))
@@ -1730,23 +1730,32 @@
     (setq ha (nth (car tri) heights))
     (setq hb (nth (cadr tri) heights))
     (setq hc (nth (caddr tri) heights))
-    ;; UCS→WCS Transformation (getpoint gibt UCS-Koordinaten)
+    ;; UCS→WCS Transformation
     (setq p1-wcs (trans (list (car pa) (cadr pa) ha) 1 0))
     (setq p2-wcs (trans (list (car pb) (cadr pb) hb) 1 0))
     (setq p3-wcs (trans (list (car pc) (cadr pc) hc) 1 0))
-    ;; Geschlossene 3DPOLY: Dreieck mit 3 Punkten + Close
-    (setq last-ent (entlast))
-    (command "._3DPOLY" p1-wcs p2-wcs p3-wcs "._Close")
-    (setq ent (entlast))
-    (if (not (equal ent last-ent))
+    ;; 3D-Polylinie als POLYLINE + VERTEX + SEQEND (geschlossen)
+    ;; Flag 8 = 3D polyline, Flag 1 = closed
+    (setq header (entmakex
+      (list '(0 . "POLYLINE") '(100 . "AcDbEntity") '(8 . "0")
+            (cons 62 *HAF:tin-color*)
+            '(100 . "AcDb3dPolyline")
+            '(66 . 1) '(70 . 9))))  ;; 8 (3D) + 1 (closed) = 9
+    (if header
       (progn
-        ;; Farbe setzen
-        (setq ent-data (entget ent))
-        (if (assoc 62 ent-data)
-          (entmod (subst (cons 62 *HAF:tin-color*) (assoc 62 ent-data) ent-data))
-          (entmod (append ent-data (list (cons 62 *HAF:tin-color*))))
-        )
-        (setq entities (cons ent entities))
+        ;; 3 Vertices
+        (entmakex (list '(0 . "VERTEX") '(100 . "AcDbEntity") '(8 . "0")
+                        '(100 . "AcDbVertex") '(100 . "AcDb3dPolylineVertex")
+                        (cons 10 p1-wcs) '(70 . 32)))
+        (entmakex (list '(0 . "VERTEX") '(100 . "AcDbEntity") '(8 . "0")
+                        '(100 . "AcDbVertex") '(100 . "AcDb3dPolylineVertex")
+                        (cons 10 p2-wcs) '(70 . 32)))
+        (entmakex (list '(0 . "VERTEX") '(100 . "AcDbEntity") '(8 . "0")
+                        '(100 . "AcDbVertex") '(100 . "AcDb3dPolylineVertex")
+                        (cons 10 p3-wcs) '(70 . 32)))
+        ;; SEQEND
+        (entmakex (list '(0 . "SEQEND") '(100 . "AcDbEntity") '(8 . "0")))
+        (setq entities (cons header entities))
       )
     )
   )
