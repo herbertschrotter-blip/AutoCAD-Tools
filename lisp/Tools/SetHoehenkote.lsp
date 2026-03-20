@@ -825,7 +825,9 @@
 
 ;;; Fuegt Hoehenkoten-Block an gegebenem Punkt mit Hoehe und Skalierung ein
 (defun SetHK:insert-block (einfuegepunkt hoehe scale / blockName heightStr intPart decPart height2DecStr attdia ent attribs insertionPoint block-available importEnt hk-layer ent-data)
-  (setq blockName *SetHK:blockname*)
+  ;; Blockname: DWG Custom Property → Globaler Standard → Fallback auf *SetHK:blockname*
+  (setq blockName (BLI:resolve-blockname *SetHK:block-context*))
+  (if (null blockName) (setq blockName *SetHK:blockname*))
   
   (SetHK:log-write "DEBUG" (strcat "insert-block: pt=("
     (rtos (car einfuegepunkt) 2 3) " " (rtos (cadr einfuegepunkt) 2 3)
