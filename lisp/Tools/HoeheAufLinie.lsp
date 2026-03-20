@@ -2,7 +2,7 @@
 ;;; Hoeheninterpolation entlang einer Linie zwischen zwei Fixpunkten
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 2.5.0
+;;; Version: 2.5.1
 ;;; Datum: 2026-03-20
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAL (HoeheAufLinie)
@@ -24,7 +24,7 @@
 ;;; KONSTANTEN (Top-Level erlaubt)
 ;;; ============================================================================
 
-(setq *HAL:version* "2.5.0")
+(setq *HAL:version* "2.5.1")
 (setq *HAL:appdata-folder* "HoeheAufLinie")
 (setq *HAL:blockname* "BLK_Hoehenkote")
 
@@ -884,6 +884,24 @@
   (rtos heightValue 2 2)
 )
 
+;;; Konvertiert Hoehe in String mit exakt 3 Dezimalstellen (wie SetHK)
+(defun HAL:ensure-three-decimals (heightValue / heightStr decimalPos decimals)
+  (setq heightStr (rtos heightValue 2 3))
+  
+  (if (not (vl-string-search "." heightStr))
+    (setq heightStr (strcat heightStr ".000"))
+    (progn
+      (setq decimalPos (vl-string-search "." heightStr))
+      (setq decimals (substr heightStr (+ decimalPos 2)))
+      (while (< (strlen decimals) 3)
+        (setq decimals (strcat decimals "0"))
+      )
+      (setq heightStr (strcat (substr heightStr 1 (+ decimalPos 1)) decimals))
+    )
+  )
+  heightStr
+)
+
 (defun HAL:format-height (heightValue)
   (rtos heightValue 2 2)
 )
@@ -1221,7 +1239,7 @@
 ;;; HILFSFUNKTIONEN - BLOCK EINFUEGEN
 ;;; ============================================================================
 
-(defun HAL:insert-block (einfuegepunkt hoehe scale skip-if-exists / blockName heightStr old-attdia block-available importEnt ent attribs insertionPoint hk-layer ent-data)
+(defun HAL:insert-block (einfuegepunkt hoehe scale skip-if-exists / blockName heightStr intPart decPart height2DecStr old-attdia block-available importEnt ent attribs insertionPoint hk-layer ent-data)
     ;; Blockname aus BlockImport (DWG Property → Globaler Standard)
   (setq *block-import-context* "HoeheAufLinie")
   (setq blockName (BLI:resolve-blockname "HoeheAufLinie"))
@@ -1257,8 +1275,29 @@
             (progn
               (setq importEnt (cadr block-available))
               (HAL:debug (strcat "  importEnt=" (if importEnt (vl-princ-to-string importEnt) "nil")))
-              (setq heightStr (HAL:format-height-value hoehe))
-              (HAL:debug (strcat "  heightStr=" heightStr))
+              
+              ;; Hoehe als String mit genau 3 Dezimalstellen (wie SetHK)
+              (setq heightStr (HAL:ensure-three-decimals hoehe))
+              
+              ;; Hoehe in Ganzzahl- und Dezimalteil aufteilen
+              (setq intPart (substr heightStr 1 (vl-string-search "." heightStr)))
+              (setq decPart (substr heightStr (+ (strlen intPart) 2)))
+              
+              ;; Dezimalteil auf 3 Stellen begrenzen
+              (if (< (strlen decPart) 3)
+                (setq decPart (strcat decPart (apply 'strcat (repeat (- 3 (strlen decPart)) "0"))))
+              )
+              
+              ;; Hoehe als String mit 2 Dezimalstellen fuer HOEHE Attribut
+              (setq height2DecStr (strcat intPart "." (substr decPart 1 2)))
+              
+              ;; Vorzeichen hinzufuegen
+              (setq height2DecStr (cond
+                                    ((= hoehe 0.0) (strcat "%%p" height2DecStr))
+                                    ((> hoehe 0.0) (strcat "+" height2DecStr))
+                                    (T height2DecStr)))
+              
+              (HAL:debug (strcat "  heightStr=" heightStr " height2DecStr=" height2DecStr))
               
               ;; HK-Layer VOR dem Einfuegen erstellen (VLA-Calls duerfen nicht waehrend command laufen)
               (if *HAL:use-layer-suffix*
@@ -1276,17 +1315,25 @@
               (if ent (HAL:debug (strcat "  entlast Typ: " (cdr (assoc 0 (entget ent))))))
               (setvar "ATTDIA" old-attdia)
               
-              ;; Attribute setzen
+              ;; Attribute setzen (HOEHE mit 2 Dez, 3DEZ mit 3. Dezimalstelle - wie SetHK)
               (if (and ent (eq (cdr (assoc 0 (entget ent))) "INSERT"))
                 (progn
                   (HAL:debug "  Block INSERT gefunden - setze Attribute...")
                   (setq attribs (entnext ent))
                   (while (and attribs (eq (cdr (assoc 0 (entget attribs))) "ATTRIB"))
                     (HAL:debug (strcat "    Attribut: " (cdr (assoc 2 (entget attribs))) " = " (cdr (assoc 1 (entget attribs)))))
-                    (if (eq (cdr (assoc 2 (entget attribs))) "HOEHE")
-                      (progn
-                        (HAL:debug (strcat "    >>> Setze HOEHE auf: " heightStr))
-                        (entmod (subst (cons 1 heightStr) (assoc 1 (entget attribs)) (entget attribs)))
+                    (cond
+                      ((eq (cdr (assoc 2 (entget attribs))) "HOEHE")
+                        (HAL:debug (strcat "    >>> Setze HOEHE auf: " height2DecStr))
+                        (entmod (subst (cons 1 height2DecStr) (assoc 1 (entget attribs)) (entget attribs)))
+                      )
+                      ((eq (cdr (assoc 2 (entget attribs))) "3DEZ")
+                        (if (not (= (substr decPart 3 1) "0"))
+                          (progn
+                            (HAL:debug (strcat "    >>> Setze 3DEZ auf: " (substr decPart 3 1)))
+                            (entmod (subst (cons 1 (substr decPart 3 1)) (assoc 1 (entget attribs)) (entget attribs)))
+                          )
+                        )
                       )
                     )
                     (setq attribs (entnext attribs))
@@ -1318,9 +1365,9 @@
                 (progn (HAL:debug "  Entferne importEnt...") (entdel importEnt))
               )
               
-              (HAL:log-write "INFO" (strcat "Block gesetzt: " heightStr " Z=" (rtos hoehe 2 3) " Scale=" (rtos scale 2 2)
+              (HAL:log-write "INFO" (strcat "Block gesetzt: " height2DecStr " Z=" (rtos hoehe 2 3) " Scale=" (rtos scale 2 2)
                                             (if (and *HAL:use-layer-suffix* hk-layer) (strcat " Layer=" hk-layer) "")))
-              (princ (strcat "\n  Hoehenkote gesetzt: " heightStr " | Z=" (rtos hoehe 2 3) " | XY-Scale=" (rtos scale 2 2)
+              (princ (strcat "\n  Hoehenkote gesetzt: " height2DecStr " | Z=" (rtos hoehe 2 3) " | XY-Scale=" (rtos scale 2 2)
                             (if (and *HAL:use-layer-suffix* hk-layer) (strcat " | Layer=" hk-layer) "")))
               T
             )
