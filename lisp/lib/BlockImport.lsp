@@ -22,7 +22,7 @@
 ;;; ShowBlockPath     - Zeigt konfigurierte Pfade
 ;;; ResetBlockPath    - Löscht alle Pfade
 ;;;
-;;; Version: 1.9.0
+;;; Version: 1.10.0
 ;;; Datum: 2026-03-19
 ;;; Autor: Herbert Schrotter
 
@@ -1208,23 +1208,37 @@
   (write-line "    key = \"standard_info\";" fp)
   (write-line "    label = \"\";" fp)
   (write-line "  }" fp)
+  ;; --- Zeichnungs-Block Info ---
+  (write-line "  : text {" fp)
+  (write-line "    key = \"dwg_info\";" fp)
+  (write-line "    label = \"\";" fp)
+  (write-line "  }" fp)
   (write-line "  spacer;" fp)
 
   ;; --- Buttons Zeile 1 ---
   (write-line "  : row {" fp)
   (write-line "    : button {" fp)
   (write-line "      key = \"btn_standard\";" fp)
-  (write-line "      label = \"Als Standard\";" fp)
+  (write-line "      label = \"Globaler Standard\";" fp)
   (write-line "      width = 16;" fp)
   (write-line "    }" fp)
   (write-line "    : button {" fp)
-  (write-line "      key = \"btn_path\";" fp)
-  (write-line "      label = \"Pfad aendern\";" fp)
+  (write-line "      key = \"btn_dwg\";" fp)
+  (write-line "      label = \"Fuer Zeichnung\";" fp)
   (write-line "      width = 16;" fp)
   (write-line "    }" fp)
   (write-line "  }" fp)
 
   ;; --- Buttons Zeile 2 ---
+  (write-line "  : row {" fp)
+  (write-line "    : button {" fp)
+  (write-line "      key = \"btn_path\";" fp)
+  (write-line "      label = \"Pfad aendern\";" fp)
+  (write-line "      width = 16;" fp)
+  (write-line "    }" fp)
+  (write-line "    : button {" fp)
+
+  ;; --- Buttons Zeile 3 ---
   (write-line "  : row {" fp)
   (write-line "    : button {" fp)
   (write-line "      key = \"btn_add\";" fp)
@@ -1374,10 +1388,17 @@
           )
         )
 
-        ;; Standard-Block Info
+        ;; Standard-Block Info (global)
         (setq standard-block (get-standard-block))
         (set_tile "standard_info"
-          (strcat "Standard-Block: " (if standard-block standard-block "Nicht gesetzt")))
+          (strcat "Globaler Standard: " (if standard-block standard-block "Nicht gesetzt")))
+
+        ;; Zeichnungs-Block Info
+        (set_tile "dwg_info"
+          (strcat "Zeichnungs-Block: "
+            (if (BLI:dwg-block-read nil)
+              (BLI:dwg-block-read nil)
+              "(verwendet Global)")))
 
         ;; --- Listbox Selection: Pfad-Anzeige aktualisieren ---
         (action_tile "block_list"
@@ -1398,6 +1419,18 @@
             "(setq *BLI:tmp-sel-name* (BLI:extract-blockname (nth *BLI:tmp-sel-idx* *BLI:tmp-entries*)))"
             "(if *BLI:tmp-sel-name*"
             "  (progn (set-standard-block *BLI:tmp-sel-name*) (done_dialog 1))"
+            "  (alert \"Bitte einen Block auswaehlen\")"
+            ")"
+          )
+        )
+
+        ;; --- Button: Fuer Zeichnung ---
+        (action_tile "btn_dwg"
+          (strcat
+            "(setq *BLI:tmp-sel-idx* (atoi (get_tile \"block_list\")))"
+            "(setq *BLI:tmp-sel-name* (BLI:extract-blockname (nth *BLI:tmp-sel-idx* *BLI:tmp-entries*)))"
+            "(if *BLI:tmp-sel-name*"
+            "  (progn (BLI:dwg-block-write nil *BLI:tmp-sel-name*) (done_dialog 6))"
             "  (alert \"Bitte einen Block auswaehlen\")"
             ")"
           )
@@ -1441,6 +1474,11 @@
           ;; result=1: Refresh (nach Standard setzen)
           ((= result 1)
             (BLI:log-write "INFO" (strcat "Standard-Block geändert: " (if *BLI:tmp-sel-name* *BLI:tmp-sel-name* "?")))
+          )
+
+          ;; result=6: Zeichnungs-Block gesetzt (Refresh)
+          ((= result 6)
+            (BLI:log-write "INFO" (strcat "Zeichnungs-Block gesetzt: " (if *BLI:tmp-sel-name* *BLI:tmp-sel-name* "?")))
           )
 
           ;; result=3: Pfad ändern
@@ -1682,8 +1720,8 @@
 ;; KEIN vl-load-com auf Top-Level! (Lazy-Init: wird von aufrufendem Script geladen)
 
 ;; Lade-Meldung
-(BLI:log-write "INFO" "=== BlockImport.lsp v1.9.0 geladen ===")
-(princ "\nBlockImport.lsp v1.9.0 geladen.")
+(BLI:log-write "INFO" "=== BlockImport.lsp v1.10.0 geladen ===")
+(princ "\nBlockImport.lsp v1.10.0 geladen.")
 (princ "\nBefehle: ManageBlockImport - Block-Verwaltung")
 (princ "\n         ShowBlockPath - Zeigt konfigurierte Pfade")
 (princ "\n         ResetBlockPath - Löscht alle Pfade")
