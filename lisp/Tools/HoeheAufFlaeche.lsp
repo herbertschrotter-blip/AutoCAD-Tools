@@ -13,7 +13,7 @@
 ;;; - Beliebig viele Punkte innerhalb/außerhalb setzen
 ;;; - ESC zum Beenden
 ;;;
-;;; Version: 1.6.1
+;;; Version: 1.8.1
 ;;; Datum: 2026-02-24
 ;;; Autor: Herbert Schrotter
 
@@ -530,7 +530,10 @@
 ;;;   scale - XY-Skalierung (Zahl)
 ;;;   skip-if-exists - T = Nicht einfügen wenn Block schon existiert (für Eckpunkte)
 ;;;                    nil = Immer einfügen (für gesuchte Punkte)
-;;; Rückgabe: Entity-Name des eingefügten Blocks oder nil
+;;; Rückgabe: 
+;;;   Entity-Name des eingefügten Blocks
+;;;   "EXISTS" wenn Block bereits existiert (nur bei skip-if-exists=T)
+;;;   nil bei Fehler
 (defun insert-hoehenkote-block (einfuegepunkt hoehe scale skip-if-exists / blockName heightStr old-attdia block-available importEnt ent attribs insertionPoint)
   (setq blockName *hoehenkote-blockname*)
   
@@ -541,7 +544,7 @@
       (if (and skip-if-exists (block-exists-at-position einfuegepunkt hoehe blockName))
         (progn
           (princ (strcat "\n  ✓ Block existiert bereits: " (format-height-value hoehe) " | Z=" (rtos hoehe 2 3)))
-          nil  ; Kein Block eingefügt
+          "EXISTS"  ; Spezielle Rückgabe: Block existiert bereits
         )
         (progn
           ;; BESTEHENDER CODE: Block verfügbar machen
@@ -601,6 +604,207 @@
 )
 
 ;;; ============================================================================
+;;; HILFSFUNKTIONEN - TRIANGULATIONS-ENTSCHEIDUNG
+;;; ============================================================================
+
+;;; Prüft ob zwei Höhenwerte gleich sind (mit Toleranz)
+(defun heights-equal-p (h1 h2 / tolerance)
+  (setq tolerance 0.01)  ; 1cm Toleranz
+  (< (abs (- h1 h2)) tolerance)
+)
+
+;;; Zählt wie viele Höhenwerte gleich einem Referenzwert sind
+(defun count-equal-heights (href h1 h2 h3 h4 / count)
+  (setq count 0)
+  (if (heights-equal-p href h1) (setq count (+ count 1)))
+  (if (heights-equal-p href h2) (setq count (+ count 1)))
+  (if (heights-equal-p href h3) (setq count (+ count 1)))
+  (if (heights-equal-p href h4) (setq count (+ count 1)))
+  count
+)
+
+;;; Zeichnet 3D-Polylinie zwischen zwei Punkten
+(defun draw-3d-polyline (pt1 h1 pt2 h2 / p1-3d p2-3d)
+  (setq p1-3d (list (car pt1) (cadr pt1) h1))
+  (setq p2-3d (list (car pt2) (cadr pt2) h2))
+  (command "_3DPOLY" p1-3d p2-3d "")
+  (princ "\n  → 3D-Polylinie gezeichnet (Verschneidung)")
+)
+
+;;; Lässt User einen Eckpunkt aus der Liste wählen
+(defun select-corner-from-list (corner-points corner-heights prompt / pt selected-pt i found index)
+  (princ (strcat "\n" prompt))
+  (setq pt (getpoint))
+  
+  (if (valid-point-p pt)
+    (progn
+      ;; Finde nächsten Eckpunkt
+      (setq i 0)
+      (setq found nil)
+      (setq min-dist 999999)
+      (setq index -1)
+      
+      (while (< i (length corner-points))
+        (setq corner-pt (nth i corner-points))
+        (setq dist (distance pt corner-pt))
+        
+        (if (< dist min-dist)
+          (progn
+            (setq min-dist dist)
+            (setq index i)
+            (setq selected-pt corner-pt)
+          )
+        )
+        
+        (setq i (+ i 1))
+      )
+      
+      (if (< min-dist 100)  ; Max 100 Einheiten Abstand
+        (list selected-pt index)
+        nil
+      )
+    )
+    nil
+  )
+)
+
+;;; Hauptfunktion: Bestimmt welche Diagonale verwendet werden soll
+;;; Rückgabe: "AC" oder "BD" oder "USER"
+;;; Klassifiziert Viereck nach Höhenverteilung
+;;; Rückgabe: ("mulde" index) | ("kuppe" index) | ("sattel") | ("flat") | ("ambiguous")
+(defun classify-quad (h1 h2 h3 h4 / eps minv maxv mincount maxcount all-heights i count)
+  (setq eps 0.01)  ; 1cm Toleranz
+  
+  ;; Hilfsfunktion: Zähle wie viele Werte gleich einem Referenzwert sind
+  (defun count-equal (refval vallist / count)
+    (setq count 0)
+    (foreach val vallist
+      (if (< (abs (- val refval)) eps)
+        (setq count (+ count 1))
+      )
+    )
+    count
+  )
+  
+  ;; Alle Höhen als Liste
+  (setq all-heights (list h1 h2 h3 h4))
+  
+  ;; Min und Max finden
+  (setq minv (apply 'min all-heights))
+  (setq maxv (apply 'max all-heights))
+  
+  ;; Zähle wie viele Punkte = min bzw. = max
+  (setq mincount (count-equal minv all-heights))
+  (setq maxcount (count-equal maxv all-heights))
+  
+  ;; Klassifikation
+  (cond
+    ;; Alle gleich → FLACH
+    ((and (< (abs (- h1 h2)) eps)
+          (< (abs (- h1 h3)) eps)
+          (< (abs (- h1 h4)) eps))
+     (list "flat"))
+    
+    ;; Genau EIN Minimum → MULDE
+    ((= mincount 1)
+     (setq i 0)
+     (foreach val all-heights
+       (setq i (+ i 1))
+       (if (< (abs (- val minv)) eps)
+         (setq min-idx i)
+       )
+     )
+     (list "mulde" min-idx))
+    
+    ;; Genau EIN Maximum → KUPPE
+    ((= maxcount 1)
+     (setq i 0)
+     (foreach val all-heights
+       (setq i (+ i 1))
+       (if (< (abs (- val maxv)) eps)
+         (setq max-idx i)
+       )
+     )
+     (list "kuppe" max-idx))
+    
+    ;; Gegenüberliegende Paare gleich → SATTEL
+    ((and (< (abs (- h1 h3)) eps)
+          (< (abs (- h2 h4)) eps)
+          (>= (abs (- h1 h2)) eps))
+     (list "sattel"))
+    
+    ;; Sonst → UNKLAR
+    (T
+     (list "ambiguous"))
+  )
+)
+
+;;; Hauptfunktion: Bestimmt welche Diagonale verwendet werden soll
+;;; Verwendet hydrologische Klassifikation (Mulde/Kuppe/Sattel)
+;;; Rückgabe: "13" (p1-p3) oder "24" (p2-p4) oder "USER"
+(defun determine-diagonal (p1 h1 p2 h2 p3 h3 p4 h4 / classification class-type class-idx diff-13 diff-24)
+  
+  ;; Klassifiziere das Viereck
+  (setq classification (classify-quad h1 h2 h3 h4))
+  (setq class-type (car classification))
+  (setq class-idx (cadr classification))
+  
+  (cond
+    ;; FLACH → egal welche Diagonale
+    ((= class-type "flat")
+     (princ "\n  → Fläche eben - verwende Diagonale 1-3")
+     "13")
+    
+    ;; MULDE → Diagonale DURCH den tiefsten Punkt
+    ((= class-type "mulde")
+     (princ (strcat "\n  → Mulde an Punkt " (itoa class-idx) " - verwende Diagonale durch diesen Punkt"))
+     (cond
+       ((or (= class-idx 1) (= class-idx 3))
+        (princ " (1-3)")
+        "13")
+       ((or (= class-idx 2) (= class-idx 4))
+        (princ " (2-4)")
+        "24")
+     ))
+    
+    ;; KUPPE → Diagonale DURCH den höchsten Punkt
+    ((= class-type "kuppe")
+     (princ (strcat "\n  → Kuppe an Punkt " (itoa class-idx) " - verwende Diagonale durch diesen Punkt"))
+     (cond
+       ((or (= class-idx 1) (= class-idx 3))
+        (princ " (1-3)")
+        "13")
+       ((or (= class-idx 2) (= class-idx 4))
+        (princ " (2-4)")
+        "24")
+     ))
+    
+    ;; SATTEL → User fragen
+    ((= class-type "sattel")
+     (princ "\n  ⚠ Sattelfläche erkannt - bitte Verschneidung definieren")
+     "USER")
+    
+    ;; UNKLAR → Prüfe Höhendifferenzen
+    ((= class-type "ambiguous")
+     (setq diff-13 (abs (- h1 h3)))
+     (setq diff-24 (abs (- h2 h4)))
+     (if (< diff-13 diff-24)
+       (progn
+         (princ "\n  → Unklare Geometrie - wähle Diagonale 1-3 (kleinere Höhendifferenz)")
+         "13")
+       (progn
+         (princ "\n  → Unklare Geometrie - wähle Diagonale 2-4 (kleinere Höhendifferenz)")
+         "24")
+     ))
+    
+    ;; Fallback
+    (T
+     (princ "\n  ⚠ Unbekannter Fall - verwende Diagonale 1-3")
+     "13")
+  )
+)
+
+;;; ============================================================================
 ;;; BEFEHLE
 ;;; ============================================================================
 
@@ -610,7 +814,11 @@
                            p1 h1 p2 h2 p3 h3 p4 h4
                            num-corners pg interpolated-height scale
                            bary inside tri-info
-                           pt ht prompt-str block-ent last-ent)
+                           pt ht prompt-str block-ent last-ent
+                           diff-AC diff-BD diagonal-choice use-diagonal
+                           corner1-result corner1-pt corner1-idx corner1-h
+                           corner2-result corner2-pt corner2-idx corner2-h
+                           count1 count2 count3 count4 min-dist corner-pt dist index selected-pt i found)
   
   ;; Lokaler Error-Handler
   (defun *error* (msg)
@@ -725,14 +933,18 @@
            ;; NEU: T = skip-if-exists für Eckpunkte
            (setq block-ent (insert-hoehenkote-block pt ht scale T))
            
-           (if block-ent
+           ;; Prüfe Rückgabewert: Entity, "EXISTS", oder nil
+           (if (or block-ent (= block-ent "EXISTS"))
              (progn
-               (princ (strcat "\n  ✓ Eckpunkt " (itoa corner-number) " gesetzt"))
+               (if (not (= block-ent "EXISTS"))
+                 (princ (strcat "\n  ✓ Eckpunkt " (itoa corner-number) " gesetzt"))
+               )
                
-               ;; Zu Listen hinzufügen
+               ;; Zu Listen hinzufügen (auch wenn "EXISTS")
                (setq corner-points (append corner-points (list pt)))
                (setq corner-heights (append corner-heights (list ht)))
-               (setq corner-entities (append corner-entities (list block-ent)))
+               ;; Bei "EXISTS" fügen wir nil zur Entity-Liste hinzu (kein neuer Block)
+               (setq corner-entities (append corner-entities (list (if (= block-ent "EXISTS") nil block-ent))))
                (setq corner-number (+ corner-number 1))
                
                ;; Bei 3 Punkten: Optional fertig
@@ -788,7 +1000,98 @@
         (progn
           (setq p4 (nth 3 corner-points))
           (setq h4 (nth 3 corner-heights))
+          
+          ;; ================================================================
+          ;; TRIANGULATIONS-ENTSCHEIDUNG FÜR 4 ECKPUNKTE
+          ;; ================================================================
+          
+          (princ "\n")
+          (setq diagonal-choice (determine-diagonal p1 h1 p2 h2 p3 h3 p4 h4))
+          
+          ;; Zeichne die gewählte Diagonale als 3D-Polylinie
+          (if (not (= diagonal-choice "USER"))
+            (progn
+              (if (= diagonal-choice "13")
+                (draw-3d-polyline p1 h1 p3 h3)
+                (draw-3d-polyline p2 h2 p4 h4)
+              )
+            )
+          )
+          
+          (if (= diagonal-choice "USER")
+            ;; User muss Verschneidung definieren
+            (progn
+              (princ "\n")
+              (princ "\nBitte definieren Sie die Verschneidung:")
+              
+              ;; Erster Eckpunkt
+              (setq corner1-result (select-corner-from-list corner-points corner-heights 
+                                     "  1. Eckpunkt wählen: "))
+              
+              (if corner1-result
+                (progn
+                  (setq corner1-pt (car corner1-result))
+                  (setq corner1-idx (cadr corner1-result))
+                  (setq corner1-h (nth corner1-idx corner-heights))
+                  (princ (strcat "\n     → Eckpunkt " (itoa (+ corner1-idx 1)) 
+                                 " gewählt (Höhe: " (rtos corner1-h 2 2) ")"))
+                  
+                  ;; Zweiter Eckpunkt
+                  (setq corner2-result (select-corner-from-list corner-points corner-heights 
+                                         "  2. Eckpunkt wählen: "))
+                  
+                  (if corner2-result
+                    (progn
+                      (setq corner2-pt (car corner2-result))
+                      (setq corner2-idx (cadr corner2-result))
+                      (setq corner2-h (nth corner2-idx corner-heights))
+                      (princ (strcat "\n     → Eckpunkt " (itoa (+ corner2-idx 1)) 
+                                     " gewählt (Höhe: " (rtos corner2-h 2 2) ")"))
+                      
+                      ;; Zeichne 3D-Polylinie
+                      (draw-3d-polyline corner1-pt corner1-h corner2-pt corner2-h)
+                      
+                      ;; Bestimme welche Diagonale gewählt wurde
+                      (cond
+                        ;; Diagonale 1-3 (Punkte 1 und 3)
+                        ((or (and (= corner1-idx 0) (= corner2-idx 2))
+                             (and (= corner1-idx 2) (= corner2-idx 0)))
+                         (setq diagonal-choice "13")
+                         (princ "\n  ✓ Diagonale 1-3 gewählt"))
+                        
+                        ;; Diagonale 2-4 (Punkte 2 und 4)
+                        ((or (and (= corner1-idx 1) (= corner2-idx 3))
+                             (and (= corner1-idx 3) (= corner2-idx 1)))
+                         (setq diagonal-choice "24")
+                         (princ "\n  ✓ Diagonale 2-4 gewählt"))
+                        
+                        ;; Keine Diagonale (benachbarte Punkte)
+                        (T
+                         (princ "\n  *** Fehler: Keine Diagonale gewählt! ***")
+                         (princ "\n  *** Bitte gegenüberliegende Punkte wählen! ***")
+                         (setq diagonal-choice "13")  ; Fallback
+                        )
+                      )
+                    )
+                    (progn
+                      (princ "\n  *** Kein 2. Punkt gewählt - verwende Diagonale 1-3 ***")
+                      (setq diagonal-choice "13")
+                    )
+                  )
+                )
+                (progn
+                  (princ "\n  *** Kein 1. Punkt gewählt - verwende Diagonale 1-3 ***")
+                  (setq diagonal-choice "13")
+                )
+              )
+            )
+          )
+          
+          ;; Speichere finale Wahl für die Interpolations-Schleife
+          (setq use-diagonal diagonal-choice)
         )
+        ;; Bei 3 Punkten: Keine Wahl nötig (wird nicht verwendet)
+        (setq use-diagonal "13")  ; Dummy
       )
       
       ;; ====================================================================
@@ -820,24 +1123,44 @@
                       (calculate-height-on-plane p1 h1 p2 h2 p3 h3 pg))
                     (setq tri-info "Ebene 1-2-3")
                   )
-                  ;; 4 Punkte: 2 Dreiecke
+                  ;; 4 Punkte: 2 Dreiecke je nach gewählter Diagonale
                   (progn
-                    ;; Dreieck 1: p1-p2-p3
-                    (setq bary (barycentric-coordinates p1 p2 p3 pg))
-                    (setq inside (point-in-triangle-p bary))
-                    
-                    (if inside
-                      ;; Punkt in Dreieck 1
+                    (if (= use-diagonal "13")
+                      ;; Diagonale 1-3: Dreiecke 1-2-3 und 1-3-4
                       (progn
-                        (setq interpolated-height 
-                          (calculate-height-in-triangle p1 h1 p2 h2 p3 h3 pg))
-                        (setq tri-info "Dreieck 1-2-3")
+                        (setq bary (barycentric-coordinates p1 p2 p3 pg))
+                        (setq inside (point-in-triangle-p bary))
+                        
+                        (if inside
+                          (progn
+                            (setq interpolated-height 
+                              (calculate-height-in-triangle p1 h1 p2 h2 p3 h3 pg))
+                            (setq tri-info "Dreieck 1-2-3")
+                          )
+                          (progn
+                            (setq interpolated-height 
+                              (calculate-height-in-triangle p1 h1 p3 h3 p4 h4 pg))
+                            (setq tri-info "Dreieck 1-3-4")
+                          )
+                        )
                       )
-                      ;; Versuche Dreieck 2: p1-p3-p4
+                      ;; Diagonale 2-4: Dreiecke 1-2-4 und 2-3-4
                       (progn
-                        (setq interpolated-height 
-                          (calculate-height-in-triangle p1 h1 p3 h3 p4 h4 pg))
-                        (setq tri-info "Dreieck 1-3-4")
+                        (setq bary (barycentric-coordinates p1 p2 p4 pg))
+                        (setq inside (point-in-triangle-p bary))
+                        
+                        (if inside
+                          (progn
+                            (setq interpolated-height 
+                              (calculate-height-in-triangle p1 h1 p2 h2 p4 h4 pg))
+                            (setq tri-info "Dreieck 1-2-4")
+                          )
+                          (progn
+                            (setq interpolated-height 
+                              (calculate-height-in-triangle p2 h2 p3 h3 p4 h4 pg))
+                            (setq tri-info "Dreieck 2-3-4")
+                          )
+                        )
                       )
                     )
                   )
@@ -898,7 +1221,7 @@
 ;;; ============================================================================
 
 (vl-load-com)
-(princ "\nHoeheAufFlaeche.lsp v1.6.1 geladen.")
+(princ "\nHoeheAufFlaeche.lsp v1.8.1 geladen.")
 (princ "\nBefehle:")
 (princ "\n  HoeheAufFlaeche (HAF)    - Höheninterpolation auf Fläche (S/Z)")
 (princ "\n  ManageBlockImportHAF     - Block-Verwaltung für HoeheAufFlaeche")
