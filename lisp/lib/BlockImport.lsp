@@ -528,6 +528,9 @@
                     (progn
                       (princ "\n  ✓ Block-Definition erfolgreich importiert")
 
+                      ;; REGEN damit AutoCAD die neue Block-Definition visuell registriert
+                      (vl-catch-all-apply 'vla-regen (list doc acAllViewports))
+
                       (vlax-release-object dbx)
                       (BLI:log-write "INFO" (strcat "Block erfolgreich importiert: " blockname))
                       T  ;; Rückgabe: Erfolg (Block-Definition ist in Zeichnung)
@@ -1502,8 +1505,8 @@
 (vl-load-com)
 
 ;; Lade-Meldung
-(BLI:log-write "INFO" "=== BlockImport.lsp v1.8.0 geladen ===")
-(princ "\nBlockImport.lsp v1.8.0 geladen.")
+(BLI:log-write "INFO" "=== BlockImport.lsp v1.8.1 geladen ===")
+(princ "\nBlockImport.lsp v1.8.1 geladen.")
 (princ "\nBefehle: ManageBlockImport - Block-Verwaltung")
 (princ "\n         ShowBlockPath - Zeigt konfigurierte Pfade")
 (princ "\n         ResetBlockPath - Löscht alle Pfade")
