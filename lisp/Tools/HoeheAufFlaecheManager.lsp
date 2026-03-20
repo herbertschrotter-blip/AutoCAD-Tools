@@ -3615,6 +3615,666 @@
   (princ)
 )
 
+;;; ============================================================================
+;;; SETTINGS (DCL Dialog)
+;;; ============================================================================
+
+(defun HAFM:write-settings-dcl ( / dcl-file fp)
+  (setq dcl-file (vl-filename-mktemp "haf" nil ".dcl"))
+  (setq fp (open dcl-file "w"))
+  
+  (write-line "hafm_settings : dialog {" fp)
+  (write-line "  label = \"HoeheAufFlaecheManager - Einstellungen\";" fp)
+  (write-line "  spacer;" fp)
+  
+  ;; --- Skalierung ---
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"XY-Skalierung\";" fp)
+  (write-line "    : edit_box {" fp)
+  (write-line "      key = \"scale\";" fp)
+  (write-line "      label = \"Aktuelle Zeichnung:\";" fp)
+  (write-line "      edit_width = 10;" fp)
+  (write-line "    }" fp)
+  (write-line "    : edit_box {" fp)
+  (write-line "      key = \"default_scale\";" fp)
+  (write-line "      label = \"Default (neue Zeichnungen):\";" fp)
+  (write-line "      edit_width = 10;" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  
+  ;; --- Block ---
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Hoehenkoten-Block\";" fp)
+  (write-line "    : text {" fp)
+  (write-line "      key = \"blockname_info\";" fp)
+  (write-line "      label = \"\";" fp)
+  (write-line "    }" fp)
+  (write-line "    : button {" fp)
+  (write-line "      key = \"btn_block\";" fp)
+  (write-line "      label = \"Block-Verwaltung oeffnen...\";" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  
+  ;; --- Hoehenkote ---
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Hoehenkote\";" fp)
+  (write-line "    : toggle {" fp)
+  (write-line "      key = \"use_suffix\";" fp)
+  (write-line "      label = \"Eigener Layer\";" fp)
+  (write-line "    }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : edit_box {" fp)
+  (write-line "        key = \"layer_suffix\";" fp)
+  (write-line "        label = \"Suffix (nach _):\";" fp)
+  (write-line "        edit_width = 10;" fp)
+  (write-line "      }" fp)
+  (write-line "      : text {" fp)
+  (write-line "        key = \"layer_preview\";" fp)
+  (write-line "        label = \"\";" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  
+  ;; --- Umrandung ---
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Umrandung\";" fp)
+  (write-line "    : toggle {" fp)
+  (write-line "      key = \"outline_keep\";" fp)
+  (write-line "      label = \"Behalten\";" fp)
+  (write-line "    }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"outline_own_layer\";" fp)
+  (write-line "        label = \"Eigener Layer\";" fp)
+  (write-line "      }" fp)
+  (write-line "      : edit_box {" fp)
+  (write-line "        key = \"outline_suffix\";" fp)
+  (write-line "        label = \"Suffix:\";" fp)
+  (write-line "        edit_width = 6;" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"outline_bylayer\";" fp)
+  (write-line "        label = \"Layer-Farbe\";" fp)
+  (write-line "      }" fp)
+  (write-line "      : popup_list {" fp)
+  (write-line "        key = \"outline_color\";" fp)
+  (write-line "        label = \"Farbe:\";" fp)
+  (write-line "        list = \"Rot\\nGelb\\nGruen\\nCyan\\nBlau\\nMagenta\\nWeiss\";" fp)
+  (write-line "        width = 12;" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  
+  ;; --- Bruchlinie ---
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Bruchlinie\";" fp)
+  (write-line "    : toggle {" fp)
+  (write-line "      key = \"breakline_keep\";" fp)
+  (write-line "      label = \"Behalten\";" fp)
+  (write-line "    }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"breakline_own_layer\";" fp)
+  (write-line "        label = \"Eigener Layer\";" fp)
+  (write-line "      }" fp)
+  (write-line "      : edit_box {" fp)
+  (write-line "        key = \"breakline_suffix\";" fp)
+  (write-line "        label = \"Suffix:\";" fp)
+  (write-line "        edit_width = 6;" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"breakline_bylayer\";" fp)
+  (write-line "        label = \"Layer-Farbe\";" fp)
+  (write-line "      }" fp)
+  (write-line "      : popup_list {" fp)
+  (write-line "        key = \"breakline_color\";" fp)
+  (write-line "        label = \"Farbe:\";" fp)
+  (write-line "        list = \"Rot\\nGelb\\nGruen\\nCyan\\nBlau\\nMagenta\\nWeiss\";" fp)
+  (write-line "        width = 12;" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  
+  ;; --- Hoehenlinie ---
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Hoehenlinie\";" fp)
+  (write-line "    : toggle {" fp)
+  (write-line "      key = \"contour_keep\";" fp)
+  (write-line "      label = \"Behalten\";" fp)
+  (write-line "    }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"contour_own_layer\";" fp)
+  (write-line "        label = \"Eigener Layer\";" fp)
+  (write-line "      }" fp)
+  (write-line "      : edit_box {" fp)
+  (write-line "        key = \"contour_suffix\";" fp)
+  (write-line "        label = \"Suffix:\";" fp)
+  (write-line "        edit_width = 6;" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"contour_bylayer\";" fp)
+  (write-line "        label = \"Layer-Farbe\";" fp)
+  (write-line "      }" fp)
+  (write-line "      : popup_list {" fp)
+  (write-line "        key = \"contour_color\";" fp)
+  (write-line "        label = \"Farbe:\";" fp)
+  (write-line "        list = \"Rot\\nGelb\\nGruen\\nCyan\\nBlau\\nMagenta\\nWeiss\";" fp)
+  (write-line "        width = 12;" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  
+  ;; --- Hoehenlinienraster ---
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Hoehenlinienraster\";" fp)
+  (write-line "    : toggle {" fp)
+  (write-line "      key = \"grid_keep\";" fp)
+  (write-line "      label = \"Behalten\";" fp)
+  (write-line "    }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"grid_own_layer\";" fp)
+  (write-line "        label = \"Eigener Layer\";" fp)
+  (write-line "      }" fp)
+  (write-line "      : edit_box {" fp)
+  (write-line "        key = \"grid_suffix\";" fp)
+  (write-line "        label = \"Suffix:\";" fp)
+  (write-line "        edit_width = 6;" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"grid_bylayer\";" fp)
+  (write-line "        label = \"Layer-Farbe\";" fp)
+  (write-line "      }" fp)
+  (write-line "      : popup_list {" fp)
+  (write-line "        key = \"grid_color\";" fp)
+  (write-line "        label = \"Farbe:\";" fp)
+  (write-line "        list = \"Rot\\nGelb\\nGruen\\nCyan\\nBlau\\nMagenta\\nWeiss\\nGrau\";" fp)
+  (write-line "        width = 12;" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "    : edit_box {" fp)
+  (write-line "      key = \"grid_interval\";" fp)
+  (write-line "      label = \"Abstand (N):\";" fp)
+  (write-line "      edit_width = 8;" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  
+  ;; --- TIN-Netz ---
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"TIN-Netz (5+ Punkte)\";" fp)
+  (write-line "    : toggle {" fp)
+  (write-line "      key = \"tin_keep\";" fp)
+  (write-line "      label = \"Behalten\";" fp)
+  (write-line "    }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"tin_own_layer\";" fp)
+  (write-line "        label = \"Eigener Layer\";" fp)
+  (write-line "      }" fp)
+  (write-line "      : edit_box {" fp)
+  (write-line "        key = \"tin_suffix\";" fp)
+  (write-line "        label = \"Suffix:\";" fp)
+  (write-line "        edit_width = 6;" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"tin_bylayer\";" fp)
+  (write-line "        label = \"Layer-Farbe\";" fp)
+  (write-line "      }" fp)
+  (write-line "      : popup_list {" fp)
+  (write-line "        key = \"tin_color\";" fp)
+  (write-line "        label = \"Farbe:\";" fp)
+  (write-line "        list = \"Rot\\nGelb\\nGruen\\nCyan\\nBlau\\nMagenta\\nWeiss\\nGrau\";" fp)
+  (write-line "        width = 12;" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  
+  ;; --- BlockImport Pfad ---
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"BlockImport.lsp\";" fp)
+  (write-line "    : edit_box {" fp)
+  (write-line "      key = \"libpath\";" fp)
+  (write-line "      label = \"Pfad:\";" fp)
+  (write-line "      edit_width = 40;" fp)
+  (write-line "    }" fp)
+  (write-line "    : button {" fp)
+  (write-line "      key = \"btn_browse\";" fp)
+  (write-line "      label = \"Durchsuchen...\";" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  
+  ;; --- Debug ---
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Debug\";" fp)
+  (write-line "    : toggle {" fp)
+  (write-line "      key = \"debug\";" fp)
+  (write-line "      label = \"Debug-Modus aktivieren\";" fp)
+  (write-line "    }" fp)
+  (write-line "    : text {" fp)
+  (write-line "      key = \"logpath\";" fp)
+  (write-line "      label = \"\";" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  
+  ;; --- Info ---
+  (write-line "  : text {" fp)
+  (write-line "    key = \"info\";" fp)
+  (write-line "    label = \"\";" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  
+  ;; --- OK / Abbrechen ---
+  (write-line "  ok_cancel;" fp)
+  (write-line "}" fp)
+  
+  (close fp)
+  dcl-file
+)
+
+;;; Oeffnet Settings-Dialog, speichert bei OK
+(defun HAFM:show-settings ( / dcl-file dcl-id result cur-scale cur-default-scale cur-libpath cfg-val)
+  (HAFM:log-write "INFO" "Settings-Dialog geoeffnet")
+  
+  ;; Aktuelle Werte lesen (HAFM: nur Config, kein DWG Property)
+  (setq cfg-val (HAFM:get-config-value "DEFAULT_SCALE"))
+  (setq cur-scale (if (and cfg-val (/= cfg-val "")) (atof cfg-val) 1.0))
+  (setq cur-default-scale cur-scale)
+  (setq cur-libpath (HAFM:get-config-value "BLOCKIMPORT_PATH"))
+  (if (null cur-libpath) (setq cur-libpath "(nicht konfiguriert)"))
+  
+  ;; DCL schreiben und laden
+  (setq dcl-file (HAFM:write-settings-dcl))
+  (setq dcl-id (load_dialog dcl-file))
+  
+  (if (not (new_dialog "hafm_settings" dcl-id))
+    (progn
+      (HAFM:log-write "ERROR" "DCL Dialog konnte nicht geoeffnet werden")
+      (princ "\n*** Fehler: Dialog konnte nicht geoeffnet werden ***")
+      (unload_dialog dcl-id)
+      (vl-file-delete dcl-file)
+    )
+    (progn
+      ;; Werte in Dialog setzen
+      (set_tile "scale" (if (> cur-scale 0.0) (rtos cur-scale 2 2) "(nicht gesetzt)"))
+      (set_tile "default_scale" (rtos cur-default-scale 2 2))
+      (set_tile "use_suffix" (if *HAFM:use-layer-suffix* "1" "0"))
+      (set_tile "layer_suffix" *HAFM:layer-suffix*)
+      (set_tile "layer_preview" (strcat "Vorschau: " (getvar "CLAYER") "_" *HAFM:layer-suffix*))
+      (set_tile "libpath" cur-libpath)
+      (set_tile "debug" (if *HAFM:debug-mode* "1" "0"))
+      (set_tile "logpath" (strcat "Log: " (HAFM:get-appdata-path) "\\Log"))
+      (setq *block-import-context* "HAFM")
+      (set_tile "blockname_info"
+        (strcat "Aktueller Block: "
+          (if (BLI:resolve-blockname "HAFM")
+            (BLI:resolve-blockname "HAFM")
+            "(nicht konfiguriert)")))
+      (set_tile "info" (strcat "HoeheAufFlaecheManager v" *HAFM:version*))
+      
+      ;; Linien-Settings in Dialog setzen
+      ;; Umrandung
+      (set_tile "outline_keep" (if *HAFM:outline-keep* "1" "0"))
+      (set_tile "outline_own_layer" (if *HAFM:outline-own-layer* "1" "0"))
+      (set_tile "outline_bylayer" (if *HAFM:outline-use-layer* "1" "0"))
+      (set_tile "outline_color" (itoa (1- *HAFM:outline-color*)))  ;; ACI 1-7 -> Index 0-6
+      (set_tile "outline_suffix" *HAFM:outline-suffix*)
+      ;; Bruchlinie
+      (set_tile "breakline_keep" (if *HAFM:breakline-keep* "1" "0"))
+      (set_tile "breakline_own_layer" (if *HAFM:breakline-own-layer* "1" "0"))
+      (set_tile "breakline_bylayer" (if *HAFM:breakline-use-layer* "1" "0"))
+      (set_tile "breakline_color" (itoa (1- *HAFM:breakline-color*)))
+      (set_tile "breakline_suffix" *HAFM:breakline-suffix*)
+      ;; Hoehenlinie
+      (set_tile "contour_keep" (if *HAFM:contour-keep* "1" "0"))
+      (set_tile "contour_own_layer" (if *HAFM:contour-own-layer* "1" "0"))
+      (set_tile "contour_bylayer" (if *HAFM:contour-use-layer* "1" "0"))
+      (set_tile "contour_color" (itoa (1- *HAFM:contour-color*)))
+      (set_tile "contour_suffix" *HAFM:contour-suffix*)
+      ;; Hoehenlinienraster
+      (set_tile "grid_keep" (if *HAFM:grid-keep* "1" "0"))
+      (set_tile "grid_own_layer" (if *HAFM:grid-own-layer* "1" "0"))
+      (set_tile "grid_bylayer" (if *HAFM:grid-use-layer* "1" "0"))
+      (set_tile "grid_color" (itoa (1- *HAFM:grid-color*)))
+      (set_tile "grid_suffix" *HAFM:grid-suffix*)
+      (set_tile "grid_interval" (rtos *HAFM:grid-interval* 2 2))
+      ;; TIN-Netz
+      (set_tile "tin_keep" (if *HAFM:tin-keep* "1" "0"))
+      (set_tile "tin_own_layer" (if *HAFM:tin-own-layer* "1" "0"))
+      (set_tile "tin_bylayer" (if *HAFM:tin-use-layer* "1" "0"))
+      (set_tile "tin_color" (itoa (1- *HAFM:tin-color*)))
+      (set_tile "tin_suffix" *HAFM:tin-suffix*)
+      
+      ;; Live-Vorschau Layer-Suffix
+      (action_tile "layer_suffix"
+        "(set_tile \"layer_preview\" (strcat \"Vorschau: \" (getvar \"CLAYER\") \"_\" (get_tile \"layer_suffix\")))"
+      )
+      
+      ;; Durchsuchen-Button fuer BlockImport.lsp
+      (action_tile "btn_browse"
+        (strcat
+          "(progn"
+          "  (setq *HAFM:tmp-path*"
+          "    (getfiled \"BlockImport.lsp auswaehlen\""
+          "      (if (findfile (get_tile \"libpath\"))"
+          "        (vl-filename-directory (get_tile \"libpath\"))"
+          "        (cond ((getvar \"DWGPREFIX\")) ((getenv \"USERPROFILE\")) (T \"\"))"
+          "      )"
+          "      \"lsp\" 0))"
+          "  (if *HAFM:tmp-path*"
+          "    (set_tile \"libpath\" *HAFM:tmp-path*)"
+          "  )"
+          ")"
+        )
+      )
+      
+      ;; Block-Verwaltung Button: Werte speichern VOR done_dialog (Sub-Dialog Bug!)
+      (action_tile "btn_block"
+        (strcat
+          "(setq *HAFM:tmp-scale* (get_tile \"scale\"))"
+          "(setq *HAFM:tmp-default-scale* (get_tile \"default_scale\"))"
+          "(setq *HAFM:tmp-use-suffix* (get_tile \"use_suffix\"))"
+          "(setq *HAFM:tmp-layer-suffix* (get_tile \"layer_suffix\"))"
+          "(setq *HAFM:tmp-libpath* (get_tile \"libpath\"))"
+          "(setq *HAFM:tmp-debug* (get_tile \"debug\"))"
+          "(setq *HAFM:tmp-outline-keep* (get_tile \"outline_keep\"))"
+          "(setq *HAFM:tmp-outline-own-layer* (get_tile \"outline_own_layer\"))"
+          "(setq *HAFM:tmp-outline-bylayer* (get_tile \"outline_bylayer\"))"
+          "(setq *HAFM:tmp-outline-color* (get_tile \"outline_color\"))"
+          "(setq *HAFM:tmp-outline-suffix* (get_tile \"outline_suffix\"))"
+          "(setq *HAFM:tmp-breakline-keep* (get_tile \"breakline_keep\"))"
+          "(setq *HAFM:tmp-breakline-own-layer* (get_tile \"breakline_own_layer\"))"
+          "(setq *HAFM:tmp-breakline-bylayer* (get_tile \"breakline_bylayer\"))"
+          "(setq *HAFM:tmp-breakline-color* (get_tile \"breakline_color\"))"
+          "(setq *HAFM:tmp-breakline-suffix* (get_tile \"breakline_suffix\"))"
+          "(setq *HAFM:tmp-contour-keep* (get_tile \"contour_keep\"))"
+          "(setq *HAFM:tmp-contour-own-layer* (get_tile \"contour_own_layer\"))"
+          "(setq *HAFM:tmp-contour-bylayer* (get_tile \"contour_bylayer\"))"
+          "(setq *HAFM:tmp-contour-color* (get_tile \"contour_color\"))"
+          "(setq *HAFM:tmp-contour-suffix* (get_tile \"contour_suffix\"))"
+          "(setq *HAFM:tmp-grid-keep* (get_tile \"grid_keep\"))"
+          "(setq *HAFM:tmp-grid-own-layer* (get_tile \"grid_own_layer\"))"
+          "(setq *HAFM:tmp-grid-bylayer* (get_tile \"grid_bylayer\"))"
+          "(setq *HAFM:tmp-grid-color* (get_tile \"grid_color\"))"
+          "(setq *HAFM:tmp-grid-suffix* (get_tile \"grid_suffix\"))"
+          "(setq *HAFM:tmp-grid-interval* (get_tile \"grid_interval\"))"
+          "(setq *HAFM:tmp-tin-keep* (get_tile \"tin_keep\"))"
+          "(setq *HAFM:tmp-tin-own-layer* (get_tile \"tin_own_layer\"))"
+          "(setq *HAFM:tmp-tin-bylayer* (get_tile \"tin_bylayer\"))"
+          "(setq *HAFM:tmp-tin-color* (get_tile \"tin_color\"))"
+          "(setq *HAFM:tmp-tin-suffix* (get_tile \"tin_suffix\"))"
+          "(done_dialog 2)"
+        )
+      )
+      
+      ;; OK: Werte in globale Vars speichern VOR done_dialog (Sub-Dialog Bug!)
+      (action_tile "accept"
+        (strcat
+          "(setq *HAFM:tmp-scale* (get_tile \"scale\"))"
+          "(setq *HAFM:tmp-default-scale* (get_tile \"default_scale\"))"
+          "(setq *HAFM:tmp-use-suffix* (get_tile \"use_suffix\"))"
+          "(setq *HAFM:tmp-layer-suffix* (get_tile \"layer_suffix\"))"
+          "(setq *HAFM:tmp-libpath* (get_tile \"libpath\"))"
+          "(setq *HAFM:tmp-debug* (get_tile \"debug\"))"
+          "(setq *HAFM:tmp-outline-keep* (get_tile \"outline_keep\"))"
+          "(setq *HAFM:tmp-outline-own-layer* (get_tile \"outline_own_layer\"))"
+          "(setq *HAFM:tmp-outline-bylayer* (get_tile \"outline_bylayer\"))"
+          "(setq *HAFM:tmp-outline-color* (get_tile \"outline_color\"))"
+          "(setq *HAFM:tmp-outline-suffix* (get_tile \"outline_suffix\"))"
+          "(setq *HAFM:tmp-breakline-keep* (get_tile \"breakline_keep\"))"
+          "(setq *HAFM:tmp-breakline-own-layer* (get_tile \"breakline_own_layer\"))"
+          "(setq *HAFM:tmp-breakline-bylayer* (get_tile \"breakline_bylayer\"))"
+          "(setq *HAFM:tmp-breakline-color* (get_tile \"breakline_color\"))"
+          "(setq *HAFM:tmp-breakline-suffix* (get_tile \"breakline_suffix\"))"
+          "(setq *HAFM:tmp-contour-keep* (get_tile \"contour_keep\"))"
+          "(setq *HAFM:tmp-contour-own-layer* (get_tile \"contour_own_layer\"))"
+          "(setq *HAFM:tmp-contour-bylayer* (get_tile \"contour_bylayer\"))"
+          "(setq *HAFM:tmp-contour-color* (get_tile \"contour_color\"))"
+          "(setq *HAFM:tmp-contour-suffix* (get_tile \"contour_suffix\"))"
+          "(setq *HAFM:tmp-grid-keep* (get_tile \"grid_keep\"))"
+          "(setq *HAFM:tmp-grid-own-layer* (get_tile \"grid_own_layer\"))"
+          "(setq *HAFM:tmp-grid-bylayer* (get_tile \"grid_bylayer\"))"
+          "(setq *HAFM:tmp-grid-color* (get_tile \"grid_color\"))"
+          "(setq *HAFM:tmp-grid-suffix* (get_tile \"grid_suffix\"))"
+          "(setq *HAFM:tmp-grid-interval* (get_tile \"grid_interval\"))"
+          "(setq *HAFM:tmp-tin-keep* (get_tile \"tin_keep\"))"
+          "(setq *HAFM:tmp-tin-own-layer* (get_tile \"tin_own_layer\"))"
+          "(setq *HAFM:tmp-tin-bylayer* (get_tile \"tin_bylayer\"))"
+          "(setq *HAFM:tmp-tin-color* (get_tile \"tin_color\"))"
+          "(setq *HAFM:tmp-tin-suffix* (get_tile \"tin_suffix\"))"
+          "(done_dialog 1)"
+        )
+      )
+      
+      ;; Dialog starten
+      (setq result (start_dialog))
+      
+      ;; Auswerten
+      (cond
+        ;; OK (result = 1)
+        ((= result 1)
+          ;; Skalierung (nur Config, kein DWG Property)
+          (if (> (atof *HAFM:tmp-scale*) 0.0)
+            (progn
+              (setq *HAFM:default-scale* (atof *HAFM:tmp-scale*))
+              (HAFM:set-config-value "DEFAULT_SCALE" *HAFM:tmp-scale*)
+              (HAFM:log-write "INFO" (strcat "Skalierung: " *HAFM:tmp-scale*))
+            )
+            (if (/= *HAFM:tmp-scale* "(nicht gesetzt)")
+              (HAFM:log-write "WARN" (strcat "Ungueltige Skalierung: " *HAFM:tmp-scale*))
+            )
+          )
+          ;; Default-Skalierung (gleich)
+          (if (> (atof *HAFM:tmp-default-scale*) 0.0)
+            (progn
+              (setq *HAFM:default-scale* (atof *HAFM:tmp-default-scale*))
+              (HAFM:set-config-value "DEFAULT_SCALE" *HAFM:tmp-default-scale*)
+              (HAFM:log-write "INFO" (strcat "Default-Skalierung: " *HAFM:tmp-default-scale*))
+            )
+            (HAFM:log-write "WARN" (strcat "Ungueltige Default-Skalierung: " *HAFM:tmp-default-scale*))
+          )
+          ;; Layer-Suffix
+          (setq *HAFM:use-layer-suffix* (= *HAFM:tmp-use-suffix* "1"))
+          (HAFM:set-config-value "USE_LAYER_SUFFIX" (if *HAFM:use-layer-suffix* "1" "0"))
+          (if (and *HAFM:tmp-layer-suffix* (/= *HAFM:tmp-layer-suffix* ""))
+            (progn
+              (setq *HAFM:layer-suffix* *HAFM:tmp-layer-suffix*)
+              (HAFM:set-config-value "LAYER_SUFFIX" *HAFM:layer-suffix*)
+            )
+            (progn
+              (princ "\n*** Layer-Suffix darf nicht leer sein ***")
+              (HAFM:log-write "WARN" "Leeres Layer-Suffix ignoriert")
+            )
+          )
+          ;; BlockImport Pfad
+          (if (and *HAFM:tmp-libpath*
+                   (/= *HAFM:tmp-libpath* "(nicht konfiguriert)")
+                   (/= *HAFM:tmp-libpath* cur-libpath))
+            (progn
+              (HAFM:set-config-value "BLOCKIMPORT_PATH" *HAFM:tmp-libpath*)
+              (HAFM:log-write "INFO" (strcat "BlockImport Pfad: " *HAFM:tmp-libpath*))
+            )
+          )
+          ;; Debug
+          (setq *HAFM:debug-mode* (= *HAFM:tmp-debug* "1"))
+          (HAFM:set-config-value "DEBUG" (if *HAFM:debug-mode* "1" "0"))
+          
+          ;; Umrandung
+          (setq *HAFM:outline-keep* (= *HAFM:tmp-outline-keep* "1"))
+          (setq *HAFM:outline-own-layer* (= *HAFM:tmp-outline-own-layer* "1"))
+          (setq *HAFM:outline-use-layer* (= *HAFM:tmp-outline-bylayer* "1"))
+          (setq *HAFM:outline-color* (1+ (atoi *HAFM:tmp-outline-color*))) ;; Index 0-6 -> ACI 1-7
+          (if (and *HAFM:tmp-outline-suffix* (/= *HAFM:tmp-outline-suffix* ""))
+            (setq *HAFM:outline-suffix* *HAFM:tmp-outline-suffix*))
+          (HAFM:set-config-value "OUTLINE_KEEP" (if *HAFM:outline-keep* "1" "0"))
+          (HAFM:set-config-value "OUTLINE_OWN_LAYER" (if *HAFM:outline-own-layer* "1" "0"))
+          (HAFM:set-config-value "OUTLINE_USE_LAYER" (if *HAFM:outline-use-layer* "1" "0"))
+          (HAFM:set-config-value "OUTLINE_COLOR" (itoa *HAFM:outline-color*))
+          (HAFM:set-config-value "OUTLINE_SUFFIX" *HAFM:outline-suffix*)
+          
+          ;; Bruchlinie
+          (setq *HAFM:breakline-keep* (= *HAFM:tmp-breakline-keep* "1"))
+          (setq *HAFM:breakline-own-layer* (= *HAFM:tmp-breakline-own-layer* "1"))
+          (setq *HAFM:breakline-use-layer* (= *HAFM:tmp-breakline-bylayer* "1"))
+          (setq *HAFM:breakline-color* (1+ (atoi *HAFM:tmp-breakline-color*)))
+          (if (and *HAFM:tmp-breakline-suffix* (/= *HAFM:tmp-breakline-suffix* ""))
+            (setq *HAFM:breakline-suffix* *HAFM:tmp-breakline-suffix*))
+          (HAFM:set-config-value "BREAKLINE_KEEP" (if *HAFM:breakline-keep* "1" "0"))
+          (HAFM:set-config-value "BREAKLINE_OWN_LAYER" (if *HAFM:breakline-own-layer* "1" "0"))
+          (HAFM:set-config-value "BREAKLINE_USE_LAYER" (if *HAFM:breakline-use-layer* "1" "0"))
+          (HAFM:set-config-value "BREAKLINE_COLOR" (itoa *HAFM:breakline-color*))
+          (HAFM:set-config-value "BREAKLINE_SUFFIX" *HAFM:breakline-suffix*)
+          
+          ;; Hoehenlinie
+          (setq *HAFM:contour-keep* (= *HAFM:tmp-contour-keep* "1"))
+          (setq *HAFM:contour-own-layer* (= *HAFM:tmp-contour-own-layer* "1"))
+          (setq *HAFM:contour-use-layer* (= *HAFM:tmp-contour-bylayer* "1"))
+          (setq *HAFM:contour-color* (1+ (atoi *HAFM:tmp-contour-color*)))
+          (if (and *HAFM:tmp-contour-suffix* (/= *HAFM:tmp-contour-suffix* ""))
+            (setq *HAFM:contour-suffix* *HAFM:tmp-contour-suffix*))
+          (HAFM:set-config-value "CONTOUR_KEEP" (if *HAFM:contour-keep* "1" "0"))
+          (HAFM:set-config-value "CONTOUR_OWN_LAYER" (if *HAFM:contour-own-layer* "1" "0"))
+          (HAFM:set-config-value "CONTOUR_USE_LAYER" (if *HAFM:contour-use-layer* "1" "0"))
+          (HAFM:set-config-value "CONTOUR_COLOR" (itoa *HAFM:contour-color*))
+          (HAFM:set-config-value "CONTOUR_SUFFIX" *HAFM:contour-suffix*)
+          
+          ;; Hoehenlinienraster
+          (setq *HAFM:grid-keep* (= *HAFM:tmp-grid-keep* "1"))
+          (setq *HAFM:grid-own-layer* (= *HAFM:tmp-grid-own-layer* "1"))
+          (setq *HAFM:grid-use-layer* (= *HAFM:tmp-grid-bylayer* "1"))
+          (setq *HAFM:grid-color* (1+ (atoi *HAFM:tmp-grid-color*)))
+          (if (and *HAFM:tmp-grid-suffix* (/= *HAFM:tmp-grid-suffix* ""))
+            (setq *HAFM:grid-suffix* *HAFM:tmp-grid-suffix*))
+          (if (and *HAFM:tmp-grid-interval* (/= *HAFM:tmp-grid-interval* ""))
+            (if (> (atof *HAFM:tmp-grid-interval*) 0.0)
+              (setq *HAFM:grid-interval* (atof *HAFM:tmp-grid-interval*))
+              (HAFM:log-write "WARN" "Raster-Abstand muss > 0 sein")
+            )
+          )
+          (HAFM:set-config-value "GRID_KEEP" (if *HAFM:grid-keep* "1" "0"))
+          (HAFM:set-config-value "GRID_OWN_LAYER" (if *HAFM:grid-own-layer* "1" "0"))
+          (HAFM:set-config-value "GRID_USE_LAYER" (if *HAFM:grid-use-layer* "1" "0"))
+          (HAFM:set-config-value "GRID_COLOR" (itoa *HAFM:grid-color*))
+          (HAFM:set-config-value "GRID_SUFFIX" *HAFM:grid-suffix*)
+          (HAFM:set-config-value "GRID_INTERVAL" (rtos *HAFM:grid-interval* 2 2))
+          
+          ;; TIN-Netz
+          (setq *HAFM:tin-keep* (= *HAFM:tmp-tin-keep* "1"))
+          (setq *HAFM:tin-own-layer* (= *HAFM:tmp-tin-own-layer* "1"))
+          (setq *HAFM:tin-use-layer* (= *HAFM:tmp-tin-bylayer* "1"))
+          (setq *HAFM:tin-color* (1+ (atoi *HAFM:tmp-tin-color*)))
+          (if (and *HAFM:tmp-tin-suffix* (/= *HAFM:tmp-tin-suffix* ""))
+            (setq *HAFM:tin-suffix* *HAFM:tmp-tin-suffix*))
+          (HAFM:set-config-value "TIN_KEEP" (if *HAFM:tin-keep* "1" "0"))
+          (HAFM:set-config-value "TIN_OWN_LAYER" (if *HAFM:tin-own-layer* "1" "0"))
+          (HAFM:set-config-value "TIN_USE_LAYER" (if *HAFM:tin-use-layer* "1" "0"))
+          (HAFM:set-config-value "TIN_COLOR" (itoa *HAFM:tin-color*))
+          (HAFM:set-config-value "TIN_SUFFIX" *HAFM:tin-suffix*)
+          
+          (HAFM:log-write "INFO" (strcat "Settings: HK=" (if *HAFM:use-layer-suffix* (strcat "_" *HAFM:layer-suffix*) "aus")
+                                        " UM=" (if *HAFM:outline-keep* "behalten" "temp") "/" (HAFM:color-name *HAFM:outline-color*)
+                                        " BL=" (if *HAFM:breakline-keep* "behalten" "temp") "/" (HAFM:color-name *HAFM:breakline-color*)
+                                        " HL=" (if *HAFM:contour-keep* "behalten" "temp") "/" (HAFM:color-name *HAFM:contour-color*)
+                                        " HR=" (if *HAFM:grid-keep* "behalten" "temp") "/" (HAFM:color-name *HAFM:grid-color*)
+                                        " TIN=" (if *HAFM:tin-keep* "behalten" "temp") "/" (HAFM:color-name *HAFM:tin-color*)
+                                        " N=" (rtos *HAFM:grid-interval* 2 2)
+                                        " Debug=" (if *HAFM:debug-mode* "ein" "aus")))
+          (HAFM:flush-config)
+          (princ "\nEinstellungen gespeichert.")
+        )
+        
+        ;; Block-Manager (result = 2)
+        ((= result 2)
+          (HAFM:log-write "INFO" "Block-Verwaltung geoeffnet aus Settings")
+          (unload_dialog dcl-id)
+          (vl-file-delete dcl-file)
+          (manage-block-import "HAFM")
+          ;; Settings erneut oeffnen
+          (HAFM:log-write "INFO" "Settings erneut oeffnen nach Block-Verwaltung")
+          (HAFM:show-settings)
+        )
+        
+        ;; Abbrechen (result = 0)
+        (T
+          (HAFM:log-write "INFO" "Settings abgebrochen")
+          (princ "\nAbgebrochen.")
+        )
+      )
+      
+      ;; Aufraeumen (nur wenn nicht schon durch result=2)
+      (if (/= result 2)
+        (progn
+          (unload_dialog dcl-id)
+          (vl-file-delete dcl-file)
+        )
+      )
+    )
+  )
+  
+  ;; Temp-Variablen aufraeumen
+  (setq *HAFM:tmp-scale* nil)
+  (setq *HAFM:tmp-default-scale* nil)
+  (setq *HAFM:tmp-use-suffix* nil)
+  (setq *HAFM:tmp-layer-suffix* nil)
+  (setq *HAFM:tmp-libpath* nil)
+  (setq *HAFM:tmp-debug* nil)
+  (setq *HAFM:tmp-path* nil)
+  (setq *HAFM:tmp-outline-keep* nil)
+  (setq *HAFM:tmp-outline-own-layer* nil)
+  (setq *HAFM:tmp-outline-bylayer* nil)
+  (setq *HAFM:tmp-outline-color* nil)
+  (setq *HAFM:tmp-outline-suffix* nil)
+  (setq *HAFM:tmp-breakline-keep* nil)
+  (setq *HAFM:tmp-breakline-own-layer* nil)
+  (setq *HAFM:tmp-breakline-bylayer* nil)
+  (setq *HAFM:tmp-breakline-color* nil)
+  (setq *HAFM:tmp-breakline-suffix* nil)
+  (setq *HAFM:tmp-contour-keep* nil)
+  (setq *HAFM:tmp-contour-own-layer* nil)
+  (setq *HAFM:tmp-contour-bylayer* nil)
+  (setq *HAFM:tmp-contour-color* nil)
+  (setq *HAFM:tmp-contour-suffix* nil)
+  (setq *HAFM:tmp-grid-keep* nil)
+  (setq *HAFM:tmp-grid-own-layer* nil)
+  (setq *HAFM:tmp-grid-bylayer* nil)
+  (setq *HAFM:tmp-grid-color* nil)
+  (setq *HAFM:tmp-grid-suffix* nil)
+  (setq *HAFM:tmp-grid-interval* nil)
+  (setq *HAFM:tmp-tin-keep* nil)
+  (setq *HAFM:tmp-tin-own-layer* nil)
+  (setq *HAFM:tmp-tin-bylayer* nil)
+  (setq *HAFM:tmp-tin-color* nil)
+  (setq *HAFM:tmp-tin-suffix* nil)
+)
+
+
+;;; Settings-Befehl
+(defun c:HAFMSETTINGS ( / )
+  (HAFM:ensure-init)
+  (HAFM:show-settings)
+  (princ)
+)
+
 ;;; HAFMDEBUG - Debug toggle
 (defun c:HAFMDEBUG ( / )
   (HAFM:ensure-init)
