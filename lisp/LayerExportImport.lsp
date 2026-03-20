@@ -3,7 +3,7 @@
 ;;; Layer-Synchronisation zwischen Zeichnungen via Master-Datei
 ;;; MasterID-System | Custom Property GUID | ObjectDBX Batch-Sync
 ;;; 
-;;; Version: 2.7.1
+;;; Version: 3.0.0
 ;;; Datum:   2026-03-10
 ;;; Autor:   Herbert Schrotter
 ;;;
@@ -87,7 +87,7 @@
   (setq filepath (LXI:get-config-path))
   (setq fp (open filepath "w"))
   (if fp (progn
-    (write-line ";;; LayerSync Konfiguration v2.7.1" fp)
+    (write-line ";;; LayerSync Konfiguration v3.0.0" fp)
     (write-line (strcat "PATH=" *LXI:base-path*) fp)
     (write-line (strcat "PREFIX=" *LXI:prefix*) fp)
     (write-line (strcat "DEBUG=" (if *LXI:debug* "ON" "OFF")) fp)
@@ -136,7 +136,7 @@
   (setq fp (open filepath "w"))
   (if fp (progn
     (write-line (strcat "=== LayerSync Log - " (LXI:timestamp-sec) " ===") fp)
-    (write-line (strcat "Version: 2.7.1") fp)
+    (write-line (strcat "Version: 3.0.0") fp)
     (write-line (strcat "DWG: " (vl-filename-base (getvar "DWGNAME")) ".dwg") fp)
     (write-line "" fp)
     (close fp))))
@@ -819,12 +819,110 @@
       ;; String-Vergleich funktioniert weil Format "YYYY-MO-DD HH:MM"
       (> (strcase master-modified) (strcase last-sync)))))
 
+
+;;; ========================================================================
+;;; SNAPSHOT (.csv) - Zustand der Layer beim letzten Sync (Three-Way-Merge)
+;;; Eine Datei pro DWG: LayerSnapshot_<GUID>.csv
+;;; 11 Felder: Name;Color;Linetype;Lineweight;Plot;OnOff;Freeze;Lock;
+;;;            VPDefault;Description;Transparency
+;;; Index: 0=Name 1=Color 2=Ltype 3=LW 4=Plot 5=OnOff
+;;;        6=Frz 7=Lock 8=VPDef 9=Desc 10=Trans
+;;; ACHTUNG: Reihenfolge wie Master (nicht wie collect-layers!)
+;;; ========================================================================
+
+;;; Snapshot-Dateipfad fuer eine DWG
+(defun LXI:snapshot-path (guid / sync-dir)
+  (setq sync-dir (LXI:get-sync-folder))
+  (if sync-dir
+    (strcat sync-dir "\\LayerSnapshot_" guid ".csv")
+    nil))
+
+;;; Liest Snapshot einer DWG
+;;; Rueckgabe: Association-Liste ((LAYERNAME . (col ltype lw plot onoff frz lck vpdef desc trans)) ...)
+(defun LXI:read-snapshot (guid / filepath fp line fields result nf)
+  (setq filepath (LXI:snapshot-path guid))
+  (if (or (null filepath) (not (findfile filepath))) nil
+    (progn
+      (setq fp (open filepath "r"))
+      (if (null fp) nil
+        (progn
+          (setq result nil)
+          (while (setq line (read-line fp))
+            (if (and (> (strlen line) 0)
+                     (/= (substr line 1 4) "Name"))
+              (progn
+                (setq fields (LXI:split-string line *LXI:sep*))
+                (if (= (length fields) 11)
+                  (setq result
+                    (cons (cons (strcase (nth 0 fields))
+                                (cdr fields))
+                          result))))))
+          (close fp)
+          result)))))
+
+;;; Schreibt Snapshot nach Sync
+;;; Parameter: layers - collect-layers Ergebnis (12 Felder)
+;;;   0=Name 1=Color 2=Ltype 3=LW 4=OnOff 5=Frz 6=Lock 7=Plot 8=VPDef 9=Desc 10=Trans 11=Handle
+;;; Gespeichert in Master-Reihenfolge: Name;Color;Ltype;LW;Plot;OnOff;Frz;Lock;VPDef;Desc;Trans
+(defun LXI:write-snapshot (guid layers / filepath fp lay s)
+  (setq filepath (LXI:snapshot-path guid))
+  (if (null filepath) nil
+    (progn
+      (setq s *LXI:sep*)
+      (setq fp (open filepath "w"))
+      (if (null fp) nil
+        (progn
+          (write-line
+            (strcat "Name" s "Color" s "Linetype" s "Lineweight" s "Plot"
+                    s "OnOff" s "Freeze" s "Lock" s "VPDefault"
+                    s "Description" s "Transparency") fp)
+          (foreach lay layers
+            (write-line
+              (strcat (nth 0 lay) s (nth 1 lay) s (nth 2 lay) s
+                      (nth 3 lay) s (nth 7 lay) s (nth 4 lay) s
+                      (nth 5 lay) s (nth 6 lay) s (nth 8 lay) s
+                      (nth 9 lay) s (nth 10 lay)) fp))
+          (close fp) T)))))
+
+;;; Holt Snapshot-Werte fuer einen Layer
+;;; Rueckgabe: Liste (col ltype lw plot onoff frz lck vpdef desc trans) oder nil
+(defun LXI:snapshot-get (snapshot lay-name / entry)
+  (if (null snapshot) nil
+    (progn
+      (setq entry (assoc (strcase lay-name) snapshot))
+      (if entry (cdr entry) nil))))
+
+;;; Three-Way-Merge fuer eine Property
+;;; Parameter: base-val (Snapshot), local-val, master-val
+;;; Rueckgabe: Liste (winner-val source)
+;;;   source = "NONE" (identisch) / "LOCAL" / "MASTER" / "CONFLICT"
+(defun LXI:three-way-merge-field (base-val local-val master-val / )
+  (cond
+    ;; Alle gleich -> nichts tun
+    ((and (= (strcase local-val) (strcase master-val)))
+      (list local-val "NONE"))
+    ;; Kein Base (erster Sync) -> Master gewinnt
+    ((null base-val)
+      (if (= (strcase local-val) (strcase master-val))
+        (list local-val "NONE")
+        (list master-val "MASTER")))
+    ;; Nur Lokal geaendert
+    ((and (/= (strcase local-val) (strcase base-val))
+          (= (strcase master-val) (strcase base-val)))
+      (list local-val "LOCAL"))
+    ;; Nur Master geaendert
+    ((and (= (strcase local-val) (strcase base-val))
+          (/= (strcase master-val) (strcase base-val)))
+      (list master-val "MASTER"))
+    ;; Beide geaendert, gleicher Wert
+    ((= (strcase local-val) (strcase master-val))
+      (list local-val "NONE"))
+    ;; Beide geaendert, unterschiedlicher Wert -> Konflikt
+    (T
+      (list master-val "CONFLICT"))))
+
 ;;; ========================================================================
 ;;; LAYER SAMMELN (VLA-basiert, aktuelle Zeichnung)
-;;; Rueckgabe: Sortierte Liste von Layer-Property-Listen (12 Werte)
-;;; Index: 0=Name 1=Color 2=Linetype 3=Lineweight 4=OnOff 5=Freeze
-;;;        6=Lock 7=Plot 8=VPDefault 9=Description 10=Transparency 11=Handle
-;;; ========================================================================
 
 (defun LXI:collect-layers ( / doc layers-coll lay-obj lay-name lay-data result)
   (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)))
@@ -1843,6 +1941,368 @@
 
 
 ;;; ========================================================================
+;;; SYNC-KERNFUNKTION (Three-Way-Merge mit Snapshot)
+;;; Ersetzt do-import + do-export in LAYSYNC
+;;;
+;;; Ablauf:
+;;; 1. Master, Lokale Layer, Mapper, Snapshot lesen
+;;; 2. Fuer jeden Master-Layer:
+;;;    - Lokal nicht vorhanden -> anlegen
+;;;    - Lokal vorhanden -> Three-Way-Merge pro Property
+;;;    - Lokal geloescht (Handle weg) -> Fragen
+;;;    - Name geaendert (Handle-Match) -> Fragen
+;;; 3. Fuer jeden lokalen Layer nicht im Master -> exportieren
+;;; 4. Master + Mapper + Snapshot + SyncLog + History schreiben
+;;; ========================================================================
+(defun LXI:do-sync ( / dwg guid dwg-path timestamp
+                       master-data mapper-data dwg-mapper snapshot
+                       layers local-layer local-data
+                       lay mid master-name col ltype lw plot-flag on-off frz lck
+                       vpdef desc trans
+                       mapped-entry mapped-handle mapped-name local-name
+                       base-vals merge-result winner source
+                       master-vals local-vals prop-names prop-idx
+                       apply-to-local apply-to-master
+                       choice lay-obj handle new-mapper delete-list
+                       doc layers-coll
+                       history-entries new-mid existing-master
+                       synclog-data is-first-sync
+                       cnt-new cnt-upd-local cnt-upd-master cnt-skip
+                       cnt-ren cnt-del cnt-conflict cnt-export
+                       master-names)
+  (setq dwg (LXI:dwg-name))
+  (setq guid (LXI:dwg-guid))
+  (setq dwg-path (LXI:dwg-path))
+  (setq timestamp (LXI:timestamp))
+  (setq cnt-new 0 cnt-upd-local 0 cnt-upd-master 0 cnt-skip 0
+        cnt-ren 0 cnt-del 0 cnt-conflict 0 cnt-export 0)
+  (setq delete-list nil history-entries nil)
+  (setq prop-names '("Color" "Linetype" "Lineweight" "Plot" "OnOff"
+                      "Freeze" "Lock" "VPDefault" "Description" "Transparency"))
+  
+  (LXI:debug-print (strcat "=== do-sync: " dwg " GUID: " guid " ==="))
+  
+  ;; 1. Alles lesen
+  (setq master-data (LXI:read-master))
+  (if (null master-data) (setq master-data nil))
+  (setq mapper-data (LXI:read-mapper))
+  (if (null mapper-data) (setq mapper-data nil))
+  (setq dwg-mapper (LXI:mapper-get-dwg-entries mapper-data guid dwg))
+  (setq snapshot (LXI:read-snapshot guid))
+  (setq layers (LXI:collect-layers))
+  (setq is-first-sync (and (null dwg-mapper) (null snapshot)))
+  
+  (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)))
+  (setq layers-coll (vla-get-Layers doc))
+  
+  (if is-first-sync
+    (princ "\n  Erster Sync fuer diese Zeichnung.")
+    (princ (strcat "\n  " (if snapshot
+      (strcat "Snapshot vorhanden (" (itoa (length snapshot)) " Layer)")
+      "Kein Snapshot") ".")))
+  (princ (strcat "\n  Master: " (itoa (length master-data)) " Layer"))
+  (princ (strcat "\n  Lokal:  " (itoa (if layers (length layers) 0))
+                 " " *LXI:prefix* "* Layer"))
+  
+  ;; Master-Namen sammeln (fuer Schritt 3)
+  (setq master-names nil)
+  (foreach lay master-data
+    (setq master-names (cons (strcase (nth 1 lay)) master-names)))
+  
+  ;; 2. Fuer jeden Master-Layer
+  (foreach lay master-data
+    (setq mid (nth 0 lay) master-name (nth 1 lay)
+          col (nth 2 lay) ltype (nth 3 lay) lw (nth 4 lay)
+          plot-flag (nth 5 lay) on-off (nth 6 lay)
+          frz (nth 7 lay) lck (nth 8 lay)
+          vpdef (nth 9 lay) desc (nth 10 lay) trans (nth 11 lay))
+    ;; Master-Werte in einheitlicher Reihenfolge (wie Snapshot)
+    (setq master-vals (list col ltype lw plot-flag on-off frz lck vpdef desc trans))
+    
+    ;; Mapper-Eintrag suchen
+    (setq mapped-entry nil)
+    (foreach e dwg-mapper
+      (if (= (strcase (nth 0 e)) (strcase mid)) (setq mapped-entry e)))
+    
+    (cond
+      ;; FALL A: Im Mapper (bekannter Layer)
+      (mapped-entry
+        (progn
+          (setq mapped-handle (nth 2 mapped-entry))
+          (setq local-name (LXI:find-local-by-handle mapped-handle))
+          (cond
+            ;; A1: Lokal vorhanden
+            (local-name
+              (cond
+                ;; Name gleich -> Three-Way-Merge
+                ((= (strcase local-name) (strcase master-name))
+                  (progn
+                    (setq lay-obj
+                      (vl-catch-all-apply 'vla-Item (list layers-coll local-name)))
+                    (if (not (vl-catch-all-error-p lay-obj))
+                      (progn
+                        (setq local-data (LXI:read-layer-vla lay-obj))
+                        ;; Lokale Werte in Master-Reihenfolge
+                        (setq local-vals
+                          (list (nth 1 local-data) (nth 2 local-data)
+                                (nth 3 local-data) (nth 7 local-data)
+                                (nth 4 local-data) (nth 5 local-data)
+                                (nth 6 local-data) (nth 8 local-data)
+                                (nth 9 local-data) (nth 10 local-data)))
+                        ;; Snapshot (Base)
+                        (setq base-vals (LXI:snapshot-get snapshot local-name))
+                        ;; Pro Property mergen
+                        (setq apply-to-local nil apply-to-master nil prop-idx 0)
+                        (repeat 10
+                          (setq merge-result
+                            (LXI:three-way-merge-field
+                              (if base-vals (nth prop-idx base-vals) nil)
+                              (nth prop-idx local-vals)
+                              (nth prop-idx master-vals)))
+                          (setq winner (nth 0 merge-result)
+                                source (nth 1 merge-result))
+                          (cond
+                            ((= source "LOCAL")
+                              (progn
+                                (setq apply-to-master (cons prop-idx apply-to-master))
+                                ;; History
+                                (setq history-entries
+                                  (cons (list mid master-name timestamp "AENDERUNG"
+                                    (nth prop-idx prop-names)
+                                    (nth prop-idx master-vals)
+                                    (nth prop-idx local-vals) dwg)
+                                    history-entries))))
+                            ((= source "MASTER")
+                              (setq apply-to-local (cons prop-idx apply-to-local)))
+                            ((= source "CONFLICT")
+                              (progn
+                                ;; Neuester Mod-Stamp gewinnt
+                                (setq apply-to-local (cons prop-idx apply-to-local))
+                                (setq cnt-conflict (1+ cnt-conflict))
+                                (LXI:debug-print
+                                  (strcat "  Konflikt: " master-name
+                                          " " (nth prop-idx prop-names)
+                                          " L=" (nth prop-idx local-vals)
+                                          " M=" (nth prop-idx master-vals)
+                                          " -> Master")))))
+                          (setq prop-idx (1+ prop-idx)))
+                        ;; Lokal aktualisieren (Master -> Lokal)
+                        (if apply-to-local
+                          (progn
+                            (LXI:update-layer-props local-name
+                              (nth 0 master-vals) (nth 1 master-vals)
+                              (nth 2 master-vals) (nth 3 master-vals)
+                              (nth 4 master-vals) (nth 5 master-vals)
+                              (nth 6 master-vals) (nth 7 master-vals)
+                              (nth 8 master-vals) (nth 9 master-vals))
+                            (setq cnt-upd-local
+                              (+ cnt-upd-local (length apply-to-local)))))
+                        ;; Master aktualisieren (Lokal -> Master)
+                        (if apply-to-master
+                          (progn
+                            (setq master-data (LXI:remove-by-id master-data mid))
+                            ;; Neuen Master-Eintrag bauen mit lokalen Werten
+                            (setq master-data
+                              (cons
+                                (list mid master-name
+                                  (nth 0 local-vals) (nth 1 local-vals)
+                                  (nth 2 local-vals) (nth 3 local-vals)
+                                  (nth 4 local-vals) (nth 5 local-vals)
+                                  (nth 6 local-vals) (nth 7 local-vals)
+                                  (nth 8 local-vals) (nth 9 local-vals)
+                                  ;; Mod-Stamps: geaenderte aktualisieren
+                                  (if (member 0 apply-to-master)
+                                    (LXI:make-mod-stamp timestamp dwg) (nth 12 lay))
+                                  (if (member 1 apply-to-master)
+                                    (LXI:make-mod-stamp timestamp dwg) (nth 13 lay))
+                                  (if (member 2 apply-to-master)
+                                    (LXI:make-mod-stamp timestamp dwg) (nth 14 lay))
+                                  (if (member 3 apply-to-master)
+                                    (LXI:make-mod-stamp timestamp dwg) (nth 15 lay))
+                                  (if (member 4 apply-to-master)
+                                    (LXI:make-mod-stamp timestamp dwg) (nth 16 lay))
+                                  (if (member 5 apply-to-master)
+                                    (LXI:make-mod-stamp timestamp dwg) (nth 17 lay))
+                                  (if (member 6 apply-to-master)
+                                    (LXI:make-mod-stamp timestamp dwg) (nth 18 lay))
+                                  (if (member 7 apply-to-master)
+                                    (LXI:make-mod-stamp timestamp dwg) (nth 19 lay))
+                                  (if (member 8 apply-to-master)
+                                    (LXI:make-mod-stamp timestamp dwg) (nth 20 lay))
+                                  (if (member 9 apply-to-master)
+                                    (LXI:make-mod-stamp timestamp dwg) (nth 21 lay))
+                                  dwg timestamp)
+                                master-data))
+                            (setq cnt-upd-master
+                              (+ cnt-upd-master (length apply-to-master)))))
+                        ;; Nichts geaendert
+                        (if (and (null apply-to-local) (null apply-to-master))
+                          (setq cnt-skip (1+ cnt-skip))))
+                      (setq cnt-skip (1+ cnt-skip)))))
+                ;; Name anders (Umbenennung)
+                (T
+                  (progn
+                    (setq choice (LXI:ask-rename master-name local-name mid))
+                    (if (= choice "Master")
+                      (progn
+                        (command "._-RENAME" "LA" local-name master-name)
+                        (princ (strcat "\n  > " local-name " -> " master-name))
+                        (LXI:update-layer-props master-name
+                          col ltype lw plot-flag on-off frz lck vpdef desc trans)
+                        (setq history-entries
+                          (cons (list mid master-name timestamp "UMBENENNUNG"
+                                      "Name" local-name master-name dwg)
+                                history-entries))
+                        (setq cnt-ren (1+ cnt-ren)))
+                      (progn
+                        (princ (strcat "\n  = Beibehalten: " local-name))
+                        ;; Master-Name auf lokalen Namen aendern
+                        (setq master-data (LXI:remove-by-id master-data mid))
+                        (setq master-data
+                          (cons (LXI:list-set-nth lay 1 local-name) master-data))
+                        (setq cnt-skip (1+ cnt-skip))))))))
+            ;; A2: Lokal geloescht (Handle nicht gefunden)
+            (T
+              (progn
+                (setq choice (LXI:ask-deleted master-name mid))
+                (cond
+                  ((= choice "Neu")
+                    (if (LXI:create-layer master-name
+                          col ltype lw plot-flag on-off frz lck vpdef desc trans)
+                      (progn (princ (strcat "\n  + " master-name))
+                             (setq cnt-new (1+ cnt-new)))
+                      (princ (strcat "\n  *** Fehler: " master-name))))
+                  ((= choice "Loeschen")
+                    (setq delete-list (cons mid delete-list)
+                          cnt-del (1+ cnt-del)))
+                  (T (setq cnt-skip (1+ cnt-skip)))))))))
+      ;; FALL B: Nicht im Mapper
+      (T
+        (progn
+          (if (tblsearch "LAYER" master-name)
+            ;; Lokal vorhanden aber nicht gemappt -> Three-Way ohne Base
+            (progn
+              (setq lay-obj
+                (vl-catch-all-apply 'vla-Item (list layers-coll master-name)))
+              (if (not (vl-catch-all-error-p lay-obj))
+                (progn
+                  (setq local-data (LXI:read-layer-vla lay-obj))
+                  (setq local-vals
+                    (list (nth 1 local-data) (nth 2 local-data)
+                          (nth 3 local-data) (nth 7 local-data)
+                          (nth 4 local-data) (nth 5 local-data)
+                          (nth 6 local-data) (nth 8 local-data)
+                          (nth 9 local-data) (nth 10 local-data)))
+                  ;; Ohne Base: Master gewinnt bei Unterschied
+                  (setq apply-to-local nil prop-idx 0)
+                  (repeat 10
+                    (if (/= (strcase (nth prop-idx local-vals))
+                            (strcase (nth prop-idx master-vals)))
+                      (setq apply-to-local (cons prop-idx apply-to-local)))
+                    (setq prop-idx (1+ prop-idx)))
+                  (if apply-to-local
+                    (progn
+                      (LXI:update-layer-props master-name
+                        col ltype lw plot-flag on-off frz lck vpdef desc trans)
+                      (setq cnt-upd-local (+ cnt-upd-local (length apply-to-local))))
+                    (setq cnt-skip (1+ cnt-skip))))
+                (setq cnt-skip (1+ cnt-skip))))
+            ;; Lokal nicht vorhanden -> anlegen
+            (if (LXI:create-layer master-name
+                  col ltype lw plot-flag on-off frz lck vpdef desc trans)
+              (progn
+                (LXI:debug-print (strcat "  + " master-name))
+                (setq cnt-new (1+ cnt-new)))
+              (princ (strcat "\n  *** Fehler: " master-name))))))))
+  
+  ;; 3. Lokale Layer die nicht im Master sind -> exportieren
+  (if layers
+    (foreach local-layer layers
+      (setq local-name (nth 0 local-layer))
+      (if (not (member (strcase local-name) master-names))
+        (progn
+          (setq new-mid (LXI:next-master-id master-data))
+          (setq master-data
+            (cons (list new-mid local-name
+                        (nth 1 local-layer) (nth 2 local-layer) (nth 3 local-layer)
+                        (nth 7 local-layer) (nth 4 local-layer) (nth 5 local-layer)
+                        (nth 6 local-layer) (nth 8 local-layer)
+                        (nth 9 local-layer) (nth 10 local-layer)
+                        (LXI:make-mod-stamp timestamp dwg)
+                        (LXI:make-mod-stamp timestamp dwg)
+                        (LXI:make-mod-stamp timestamp dwg)
+                        (LXI:make-mod-stamp timestamp dwg)
+                        (LXI:make-mod-stamp timestamp dwg)
+                        (LXI:make-mod-stamp timestamp dwg)
+                        (LXI:make-mod-stamp timestamp dwg)
+                        (LXI:make-mod-stamp timestamp dwg)
+                        (LXI:make-mod-stamp timestamp dwg)
+                        (LXI:make-mod-stamp timestamp dwg)
+                        dwg timestamp)
+                  master-data))
+          (setq master-names (cons (strcase local-name) master-names))
+          (setq history-entries
+            (cons (list new-mid local-name timestamp "NEU" "" "" "" dwg)
+                  history-entries))
+          (setq cnt-export (1+ cnt-export))))))
+  
+  ;; 4. Geloeschte Layer aus Master entfernen
+  (if delete-list
+    (foreach del-mid delete-list
+      (setq master-data (LXI:remove-by-id master-data del-mid))))
+  
+  ;; 5. Mapper aktualisieren
+  (setq mapper-data (LXI:mapper-remove-dwg mapper-data guid dwg))
+  (setq new-mapper nil)
+  ;; Aktuelle Layer neu lesen (nach Aenderungen)
+  (setq layers (LXI:collect-layers))
+  (if layers
+    (foreach local-layer layers
+      (setq local-name (nth 0 local-layer)
+            handle (nth 11 local-layer))
+      (setq mid (car (LXI:find-by-name master-data local-name)))
+      (if mid
+        (setq new-mapper
+          (cons (list mid local-name handle dwg dwg-path guid) new-mapper)))))
+  (setq mapper-data (append mapper-data new-mapper))
+  
+  ;; 6. Alles schreiben
+  (LXI:write-master master-data)
+  (LXI:write-mapper mapper-data)
+  ;; Snapshot schreiben (aktueller Zustand nach Sync)
+  (if layers (LXI:write-snapshot guid layers))
+  ;; History
+  (if history-entries (LXI:append-history (reverse history-entries)))
+  ;; SyncLog
+  (setq synclog-data (LXI:read-synclog))
+  (setq synclog-data (LXI:update-last-sync synclog-data dwg guid))
+  (LXI:write-synclog synclog-data)
+  
+  ;; 7. Ergebnis
+  (LXI:log-write (strcat "--- Sync (" dwg ") ---"))
+  (princ (strcat "\n\n  --- Sync (" dwg ") ---"))
+  (if (> cnt-new 0)
+    (princ (strcat "\n    + " (itoa cnt-new) " neu aus Master angelegt")))
+  (if (> cnt-export 0)
+    (princ (strcat "\n    + " (itoa cnt-export) " neu in Master exportiert")))
+  (if (> cnt-upd-local 0)
+    (princ (strcat "\n    < " (itoa cnt-upd-local) " Properties Master -> Lokal")))
+  (if (> cnt-upd-master 0)
+    (princ (strcat "\n    > " (itoa cnt-upd-master) " Properties Lokal -> Master")))
+  (if (> cnt-ren 0)
+    (princ (strcat "\n    ~ " (itoa cnt-ren) " umbenannt")))
+  (if (> cnt-del 0)
+    (princ (strcat "\n    - " (itoa cnt-del) " aus Master entfernt")))
+  (if (> cnt-conflict 0)
+    (princ (strcat "\n    ! " (itoa cnt-conflict) " Konflikte (Master gewinnt)")))
+  (if (and (= cnt-new 0) (= cnt-export 0) (= cnt-upd-local 0)
+           (= cnt-upd-master 0) (= cnt-ren 0) (= cnt-del 0))
+    (princ (strcat "\n    = Synchron (" (itoa cnt-skip) " Layer)")))
+  (princ (strcat "\n    Master gesamt: " (itoa (length master-data)) " Layer"))
+  T)
+
+
+;;; ========================================================================
 ;;; BATCH-SYNC FUNKTIONEN (Documents + ObjectDBX)
 ;;; ========================================================================
 
@@ -2346,7 +2806,7 @@
 ;;; ========================================================================
 ;;; Hauptbefehl: LAYSYNC (mit Option fuer Batch)
 ;;; ========================================================================
-(defun c:LAYSYNC ( / *error* old-cmdecho imp-ok exp-ok choice)
+(defun c:LAYSYNC ( / *error* old-cmdecho sync-ok choice)
   (defun *error* (msg)
     (if (not (LXI:cancel-p msg))
       (progn
@@ -2363,17 +2823,12 @@
   (princ (strcat "\n  LAYSYNC: " (LXI:dwg-name)))
   (princ (strcat "\n  GUID:    " (LXI:dwg-guid)))
   (princ "\n========================================")
-  (princ "\n\n>> Schritt 1/2: Import (Master -> Zeichnung)")
-  (setq imp-ok (LXI:do-import))
-  (princ "\n\n>> Schritt 2/2: Export (Zeichnung -> Master)")
-  (setq exp-ok (LXI:do-export))
+  (setq sync-ok (LXI:do-sync))
   (princ "\n")
   (princ "\n========================================")
-  (cond
-    ((and imp-ok exp-ok) (princ "\n  Sync erfolgreich."))
-    ((and (null imp-ok) exp-ok) (princ "\n  Export OK (Master war leer)."))
-    ((and imp-ok (null exp-ok)) (princ "\n  Import OK, Export fehlgeschlagen!"))
-    (T (princ "\n  *** Sync fehlgeschlagen!")))
+  (if sync-ok
+    (princ "\n  Sync erfolgreich.")
+    (princ "\n  *** Sync fehlgeschlagen!"))
   (princ "\n========================================")
   ;; Batch-Option anbieten
   (princ "\n")
@@ -2929,6 +3384,6 @@
 ;;; Initialisierung (nur Minimum beim Laden)
 ;;; ========================================================================
 (LXI:read-config)
-(princ "\nLayerExportImport.lsp v2.7.1 geladen.")
+(princ "\nLayerExportImport.lsp v3.0.0 geladen.")
 (princ "\nBefehle: LAYSYNC | LAYSYNCALL | LAYEXP | LAYIMP | LAYLOG | LAYSTATUS | LAYCFG | LAYDIFF | LAYCOUNT | LAYUNDO")
 (princ)

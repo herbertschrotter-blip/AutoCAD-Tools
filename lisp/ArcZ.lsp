@@ -2,7 +2,7 @@
 ;;; ArcZ.lsp
 ;;; 3D-Kreisbogen durch 3 Punkte mit beliebigen Z-Höhen
 ;;; 
-;;; Version: 3.3.1
+;;; Version: 3.3.5
 ;;; Datum: 2026-02-19
 ;;; Autor: Herbert Schrotter
 ;;;
@@ -45,35 +45,45 @@
 ;;; ============================================================================
 
 ;; --------------------------------------------------------------
-;; 3-Point Circle - Lee Mac (3D-erweitert)
-;; Berechnet Mittelpunkt und Radius eines Kreises durch 3 Punkte
+;; 3-Point Circle - Lee Mac Cartesian (3D-erweitert)
+;; Löst 3 Gleichungen für Kreismittelpunkt im 3D-Raum
 ;; --------------------------------------------------------------
 
-(defun LM:3pcircle ( pt1 pt2 pt3 / cen md1 md2 vc1 vc2 pt1-2d pt2-2d pt3-2d )
-  ;; Für inters: Nur XY verwenden (2D)
-  (setq pt1-2d (list (car pt1) (cadr pt1)))
-  (setq pt2-2d (list (car pt2) (cadr pt2)))
-  (setq pt3-2d (list (car pt3) (cadr pt3)))
+(defun LM:3pcircle ( pt1 pt2 pt3 / v2 v3 a b c d )
+  ;; Verschiebe pt1 zum Ursprung
+  (setq v2 (mapcar '- pt2 pt1))
+  (setq v3 (mapcar '- pt3 pt1))
   
-  (setq md1 (mapcar '(lambda ( a b ) (/ (+ a b) 2.0)) pt1-2d pt2-2d))
-  (setq md2 (mapcar '(lambda ( a b ) (/ (+ a b) 2.0)) pt2-2d pt3-2d))
+  ;; Berechne Determinante (2D-Teil von Lee Mac)
+  (setq a (* 2.0 (- (* (car v2) (cadr v3)) (* (cadr v2) (car v3)))))
   
-  (setq vc1 (mapcar '- pt2-2d pt1-2d))
-  (setq vc2 (mapcar '- pt3-2d pt2-2d))
+  ;; Berechne Längenquadrate
+  (setq b (+ (* (car v2) (car v2)) 
+             (* (cadr v2) (cadr v2))
+             (* (caddr v2) (caddr v2))))  ;; 3D!
   
-  ;; Schnittpunkt in 2D berechnen
-  (setq cen (inters md1 (mapcar '+ md1 (list (- (cadr vc1)) (car vc1)))
-                    md2 (mapcar '+ md2 (list (- (cadr vc2)) (car vc2)))
-                    nil
-            ))
+  (setq c (+ (* (car v3) (car v3)) 
+             (* (cadr v3) (cadr v3))
+             (* (caddr v3) (caddr v3))))  ;; 3D!
   
-  (if cen
+  ;; Prüfe ob kollinear
+  (if (not (equal 0.0 a 1e-8))
     (progn
-      ;; Z-Koordinate hinzufügen (Durchschnitt)
-      (setq cen (append cen (list (/ (+ (caddr pt1) (caddr pt2) (caddr pt3)) 3.0))))
-      (list cen (distance cen pt1))
+      ;; Mittelpunkt berechnen (verschiebe zurück zu pt1)
+      (setq d
+        (mapcar '+ pt1
+          (list
+            (/ (- (* (cadr v3) b) (* (cadr v2) c)) a)
+            (/ (- (* (car v2) c) (* (car v3) b)) a)
+            ;; Z-Koordinate: Durchschnitt der 3 Punkte
+            (/ (+ (caddr pt1) (caddr pt2) (caddr pt3)) 3.0)
+          )
+        )
+      )
+      ;; Rückgabe: (Center Radius)
+      (list d (distance d pt1))
     )
-    nil
+    nil  ;; Punkte kollinear
   )
 )
 
@@ -111,7 +121,7 @@
 ;;; HAUPTFUNKTION
 ;;; ============================================================================
 
-(defun c:ARCZ ( / lst pt1 pt2 pt3 v1 v2 normal )
+(defun c:ARCZ ( / lst pt1 pt2 pt3 v1 v2 normal ang-start ang-end )
 
   ;; Punkte wählen
   (if (and (setq pt1 (getpoint "\nStartpunkt wählen: "))
@@ -156,14 +166,27 @@
               (princ (strcat "\nP3 → OCS: " (vl-princ-to-string (trans pt3 1 normal))))
               
               (princ "\n=== DEBUG: Winkel im OCS ===")
-              (princ (strcat "\nStart: " (rtos (angle (trans (car lst) 1 normal) (trans pt1 1 normal)) 2 4)))
-              (princ (strcat "\nEnd:   " (rtos (angle (trans (car lst) 1 normal) (trans pt3 1 normal)) 2 4)))
+              (setq ang-start (angle (trans (car lst) 1 normal) (trans pt1 1 normal)))
+              (setq ang-end (angle (trans (car lst) 1 normal) (trans pt3 1 normal)))
+              (princ (strcat "\nStart (original): " (rtos ang-start 2 4)))
+              (princ (strcat "\nEnd (original):   " (rtos ang-end 2 4)))
+              
+              ;; Prüfen ob > 180° (langer Bogen) → vertauschen!
+              (if (> (- ang-end ang-start) pi)
+                  (progn
+                    (princ "\n=== Winkel > 180° → vertauschen! ===")
+                    (mapcar 'set '(ang-start ang-end) (list ang-end ang-start))
+                  )
+              )
+              
+              (princ (strcat "\nStart (final): " (rtos ang-start 2 4)))
+              (princ (strcat "\nEnd (final):   " (rtos ang-end 2 4)))
               
               (princ "\n=== DEBUG: entmakex ===")
               (princ (strcat "\n010: " (vl-princ-to-string (trans (car lst) 1 normal))))
               (princ (strcat "\n040: " (rtos (cadr lst) 2 4)))
-              (princ (strcat "\n050: " (rtos (angle (trans (car lst) 1 normal) (trans pt1 1 normal)) 2 4)))
-              (princ (strcat "\n051: " (rtos (angle (trans (car lst) 1 normal) (trans pt3 1 normal)) 2 4)))
+              (princ (strcat "\n050: " (rtos ang-start 2 4)))
+              (princ (strcat "\n051: " (rtos ang-end 2 4)))
               (princ (strcat "\n210: " (vl-princ-to-string normal)))
               (princ "\n========================================")
               
@@ -173,8 +196,8 @@
                      '(000 . "ARC")
                       (cons 010 (trans (car lst) 1 normal))
                       (cons 040 (cadr lst))
-                      (cons 050 (angle (trans (car lst) 1 normal) (trans pt1 1 normal)))
-                      (cons 051 (angle (trans (car lst) 1 normal) (trans pt3 1 normal)))
+                      (cons 050 ang-start)
+                      (cons 051 ang-end)
                       (cons 210 normal)
                   )
               )
@@ -194,7 +217,7 @@
 ;;; INITIALISIERUNG
 ;;; ============================================================================
 
-(princ "\nArcZ.lsp v3.3.1 geladen.")
+(princ "\nArcZ.lsp v3.3.5 geladen.")
 (princ "\nBefehl: ARCZ - 3D-Kreisbogen durch 3 Punkte")
 (princ "\nMethode: Pure Mathematik (kein UCS-Wechsel!)")
 (princ)

@@ -1,0 +1,50 @@
+;;; LayerExport v0.1.1
+;;; Zeichnung: Einreichplan Nicole.dwg
+;;; Datum: 2026-03-09 00:23
+;;; Anzahl Layer: 44
+;;;
+Name	Color	Linetype	Lineweight	Plot	OnOff	Freeze	Lock
+00_Abbruch_Türen	50	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Abbruch_Wand-HLZ	50	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Abbruch_Wand-HLZ-Schraff	50	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Abbruch_Wand-Putz	50	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Beton	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Bodenplatte	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Dachvorsprung	7	DA	Default	PLOT	ON	THAWED	UNLOCKED
+00_Einrichtung	8	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_FFOK	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Fenster	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Grundgrenze	1	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Hilfe	6	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Holz	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Holz-Schraff	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Holz-tragend	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Randleisten	3	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Schnitt	10	DA	Default	PLOT	ON	THAWED	UNLOCKED
+00_Sockel	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Stiege-nicht-sichtbar	7	DA	Default	PLOT	ON	THAWED	UNLOCKED
+00_Stiege-sichtbar	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Straße-öffentlich	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Terrassenplatten	9	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Terrassenplatten-Schraff	9	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Text-Allgemein	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Text_Fenster	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Text_Stiege	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Text_Stiege-nicht-sichtbar	7	DA	Default	PLOT	ON	THAWED	UNLOCKED
+00_Text_Türen	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Türen	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Wände-Fassade	30	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Wände-HLZ	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Wände-HLZ-Schraff	21	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Wände-Putz	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Wände-nicht-sichtbar	7	DA	Default	PLOT	ON	THAWED	UNLOCKED
+00_Wände-sichtbar	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Wände_HLZ	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Wände_HLZ_Schraff	21	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Wände_Putz	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+00_Zählerschrank	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+01_A-Holz-Schraff	254	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+01_A-Wand	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+01_S-Holz	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+01_S-Rigips-UK	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
+02_Umrandung	7	Continuous	Default	PLOT	ON	THAWED	UNLOCKED
