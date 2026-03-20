@@ -413,7 +413,7 @@
 )
 
 (defun HAL:read-dwg-scale ( / val)
-  (setq val (HAL:dwg-custom-read "HoehenkoteScale"))
+  (setq val (HAL:dwg-custom-read "HAL_Scale"))
   (if (and val (/= val ""))
     (atof val)
     nil
@@ -421,7 +421,7 @@
 )
 
 (defun HAL:write-dwg-scale (scale-value / )
-  (HAL:dwg-custom-write "HoehenkoteScale" (rtos scale-value 2 6))
+    (HAL:dwg-custom-write "HAL_Scale" (rtos scale-value 2 6))
 )
 
 ;;; ============================================================================
@@ -697,11 +697,11 @@
       (set_tile "libpath" cur-libpath)
       (set_tile "debug" (if *HAL:debug-mode* "1" "0"))
       (set_tile "logpath" (strcat "Log: " (HAL:get-appdata-path) "\\Log"))
-      (setq *block-import-context* "HoeheAufLinie")
+      (setq *block-import-context* "HAL")
       (set_tile "blockname_info"
         (strcat "Aktueller Block: "
-          (if (BLI:resolve-blockname "HoeheAufLinie")
-            (BLI:resolve-blockname "HoeheAufLinie")
+          (if (BLI:resolve-blockname "HAL")
+            (BLI:resolve-blockname "HAL")
             "(nicht konfiguriert)")))
       (set_tile "info" (strcat "HoeheAufLinie v" *HAL:version*))
       
@@ -840,7 +840,7 @@
           (HAL:log-write "INFO" "Block-Verwaltung geoeffnet aus Settings")
           (unload_dialog dcl-id)
           (vl-file-delete dcl-file)
-          (manage-block-import "HoeheAufLinie")
+          (manage-block-import "HAL")
           ;; Nach Block-Manager: Settings erneut oeffnen
           (HAL:log-write "INFO" "Settings erneut oeffnen nach Block-Verwaltung")
           (HAL:show-settings)
@@ -1241,16 +1241,16 @@
 
 (defun HAL:insert-block (einfuegepunkt hoehe scale skip-if-exists / blockName heightStr intPart decPart height2DecStr old-attdia block-available importEnt ent attribs insertionPoint hk-layer ent-data)
     ;; Blockname aus BlockImport (DWG Property → Globaler Standard)
-  (setq *block-import-context* "HoeheAufLinie")
-  (setq blockName (BLI:resolve-blockname "HoeheAufLinie"))
+  (setq *block-import-context* "HAL")
+  (setq blockName (BLI:resolve-blockname "HAL"))
   ;; Wenn kein Block konfiguriert: Block-Manager automatisch oeffnen
   (if (null blockName)
     (progn
       (HAL:log-write "WARN" "Kein Block konfiguriert - oeffne Block-Verwaltung")
       (princ "\n*** Kein Block konfiguriert! Block-Verwaltung wird geoeffnet... ***")
-      (manage-block-import "HoeheAufLinie")
+      (manage-block-import "HAL")
       ;; Nochmal versuchen
-      (setq blockName (BLI:resolve-blockname "HoeheAufLinie"))
+      (setq blockName (BLI:resolve-blockname "HAL"))
     )
   )
   
@@ -1610,7 +1610,7 @@
 ;;; Block-Verwaltung (HAL-eigene Namen, ueberschreiben nicht BlockImport-Befehle)
 (defun c:HALBlock ()
   (HAL:ensure-init)
-  (manage-block-import "HoeheAufLinie")
+    (manage-block-import "HAL")
 )
 
 ;;; ============================================================================

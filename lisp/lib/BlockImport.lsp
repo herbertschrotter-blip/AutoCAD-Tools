@@ -415,7 +415,7 @@
 )
 
 ;;; Liest Blockname aus DWG Custom Property
-;;; Property-Name: "BLI_Block_<context>" (z.B. "BLI_Block_SetHK")
+;;; Property-Name: "<context>_Block" (z.B. "SetHK_Block")
 ;;; Parameter: context - Context-String (z.B. "SetHK", "HoeheAufLinie")
 ;;;            Wenn nil: verwendet *block-import-context*
 ;;; Rueckgabe: Blockname (String) oder nil wenn nicht gesetzt
@@ -428,7 +428,7 @@
       nil
     )
     (progn
-      (setq prop-name (strcat "BLI_Block_" context))
+      (setq prop-name (strcat context "_Block"))
       (setq found nil result nil)
 
       ;; SummaryInfo holen (direkt, wie in SetHK:read-dwg-scale)
@@ -454,7 +454,7 @@
 )
 
 ;;; Schreibt Blockname in DWG Custom Property
-;;; Property-Name: "BLI_Block_<context>" (z.B. "BLI_Block_SetHK")
+;;; Property-Name: "<context>_Block" (z.B. "SetHK_Block")
 ;;; Parameter: context - Context-String, blockname - Blockname
 ;;; Rueckgabe: T bei Erfolg, nil bei Fehler
 (defun BLI:dwg-block-write (context blockname / prop-name doc si num-props i key val found)
@@ -466,7 +466,7 @@
       nil
     )
     (progn
-      (setq prop-name (strcat "BLI_Block_" context))
+      (setq prop-name (strcat context "_Block"))
       (setq found nil)
 
       ;; SummaryInfo holen (direkt, wie in SetHK:write-dwg-scale)
