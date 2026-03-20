@@ -2,7 +2,7 @@
 ;;; Hoeheninterpolation entlang einer Linie zwischen zwei Fixpunkten
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 2.3.4
+;;; Version: 2.3.5
 ;;; Datum: 2026-03-19
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAL (HoeheAufLinie)
@@ -1395,18 +1395,8 @@
   (princ)
 )
 
-;;; Block-Verwaltung
-(defun c:ShowBlockPath ()
-  (HAL:ensure-init)
-  (show-block-path)
-)
-
-(defun c:ResetBlockPath ()
-  (HAL:ensure-init)
-  (reset-block-path)
-)
-
-(defun c:ManageBlockImportHAL ()
+;;; Block-Verwaltung (HAL-eigene Namen, ueberschreiben nicht BlockImport-Befehle)
+(defun c:HALBlock ()
   (HAL:ensure-init)
   (manage-block-import "HoeheAufLinie")
 )
@@ -1419,8 +1409,7 @@
 (princ "\nBefehle:")
 (princ "\n  HoeheAufLinie (HAL)      - Hoeheninterpolation (S/K/E Keywords)")
 (princ "\n  HALDEBUG                 - Debug ein/aus")
-(princ "\n  ManageBlockImportHAL     - Block-Verwaltung")
-(princ "\n  ShowBlockPath / ResetBlockPath")
+(princ "\n  HALBlock                 - Block-Verwaltung")
 (princ "\n")
 (princ)
 
