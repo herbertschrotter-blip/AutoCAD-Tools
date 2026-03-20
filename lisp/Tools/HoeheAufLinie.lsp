@@ -2,7 +2,7 @@
 ;;; Hoeheninterpolation entlang einer Linie zwischen zwei Fixpunkten
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 2.3.1
+;;; Version: 2.3.3
 ;;; Datum: 2026-03-19
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAL (HoeheAufLinie)
@@ -1097,6 +1097,11 @@
               (setq heightStr (HAL:format-height-value hoehe))
               (HAL:debug (strcat "  heightStr=" heightStr))
               
+              ;; HK-Layer VOR dem Einfuegen erstellen (VLA-Calls duerfen nicht waehrend command laufen)
+              (if *HAL:use-layer-suffix*
+                (setq hk-layer (HAL:ensure-hk-layer))
+              )
+              
               (setq old-attdia (getvar "ATTDIA"))
               (setvar "ATTDIA" 0)
               (HAL:debug (strcat "  _-insert: blockName=" blockName " scale=" (rtos scale 2 4)))
@@ -1134,17 +1139,12 @@
               (setq insertionPoint (cdr (assoc 10 (entget ent))))
               (HAL:debug (strcat "  Position nach Move=(" (rtos (car insertionPoint) 2 4) " " (rtos (cadr insertionPoint) 2 4) " " (rtos (caddr insertionPoint) 2 4) ")"))
               
-              ;; HK-Layer zuweisen (wenn aktiviert)
-              (if *HAL:use-layer-suffix*
+                            ;; HK-Layer zuweisen (Layer wurde VOR insert erstellt)
+              (if (and *HAL:use-layer-suffix* hk-layer)
                 (progn
-                  (setq hk-layer (HAL:ensure-hk-layer))
-                  (if hk-layer
-                    (progn
-                      (setq ent-data (entget ent))
-                      (entmod (subst (cons 8 hk-layer) (assoc 8 ent-data) ent-data))
-                      (HAL:debug (strcat "  Block auf Layer: " hk-layer))
-                    )
-                  )
+                  (setq ent-data (entget ent))
+                  (entmod (subst (cons 8 hk-layer) (assoc 8 ent-data) ent-data))
+                  (HAL:debug (strcat "  Block auf Layer: " hk-layer))
                 )
               )
               
