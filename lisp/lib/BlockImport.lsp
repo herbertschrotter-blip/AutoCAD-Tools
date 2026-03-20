@@ -22,7 +22,7 @@
 ;;; ShowBlockPath     - Zeigt konfigurierte Pfade
 ;;; ResetBlockPath    - Löscht alle Pfade
 ;;;
-;;; Version: 1.8.4
+;;; Version: 1.9.0
 ;;; Datum: 2026-03-19
 ;;; Autor: Herbert Schrotter
 
@@ -1681,8 +1681,8 @@
 ;; KEIN vl-load-com auf Top-Level! (Lazy-Init: wird von aufrufendem Script geladen)
 
 ;; Lade-Meldung
-(BLI:log-write "INFO" "=== BlockImport.lsp v1.8.4 geladen ===")
-(princ "\nBlockImport.lsp v1.8.4 geladen.")
+(BLI:log-write "INFO" "=== BlockImport.lsp v1.9.0 geladen ===")
+(princ "\nBlockImport.lsp v1.9.0 geladen.")
 (princ "\nBefehle: ManageBlockImport - Block-Verwaltung")
 (princ "\n         ShowBlockPath - Zeigt konfigurierte Pfade")
 (princ "\n         ResetBlockPath - Löscht alle Pfade")
