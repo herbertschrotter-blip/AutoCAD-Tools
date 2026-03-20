@@ -22,8 +22,8 @@
 ;;; ShowBlockPath     - Zeigt konfigurierte Pfade
 ;;; ResetBlockPath    - Löscht alle Pfade
 ;;;
-;;; Version: 1.11.0
-;;; Datum: 2026-03-19
+;;; Version: 1.12.0
+;;; Datum: 2026-03-20
 ;;; Autor: Herbert Schrotter
 
 ;;; ============================================================================
@@ -152,19 +152,11 @@
 
 ;;; Liest alle gespeicherten Block-Pfade aus Konfigurationsdatei
 ;;; Rückgabe: Association-Liste ((blockname . filepath) ...) oder nil
-(defun read-all-block-paths ( / file line pos key value result version context-prefix)
+(defun read-all-block-paths ( / file line pos key value result version)
   (setq result '())
 
   ;; AppData-Pfad sicherstellen (setzt *block-config-file*)
   (BLI:get-appdata-path)
-
-  ;; Context-Präfix bestimmen (falls gesetzt)
-  (setq context-prefix
-    (if *block-import-context*
-      (strcat *block-import-context* ":")
-      nil
-    )
-  )
 
   ;; Prüfe ob Config-Datei existiert
   (if (not (findfile *block-config-file*))
@@ -185,38 +177,22 @@
         (setq version (read-line file))
 
         ;; Alle weiteren Zeilen: key=value
+        ;; Block-Pfade sind context-frei (globaler Pool)
+        ;; Nur Eintraege OHNE ":" und OHNE *STANDARD* sind Block-Pfade
         (while (setq line (read-line file))
           (if (setq pos (vl-string-search "=" line))
             (progn
-              ;; Blockname (vor =)
               (setq key (substr line 1 pos))
-              ;; Pfad (nach =)
               (setq value (substr line (+ pos 2)))
-
-              ;; Context-Filterung
-              (if context-prefix
-                ;; MIT Context: Nur "Context:BlockName" Einträge (NICHT *STANDARD*)
-                (if (and (> (strlen key) (strlen context-prefix))
-                         (eq (substr key 1 (strlen context-prefix)) context-prefix)
-                         (not (wcmatch key "*STANDARD*")))
-                  (progn
-                    ;; Entferne Context-Präfix
-                    (setq key (substr key (+ (strlen context-prefix) 1)))
-                    (setq result (cons (cons key value) result))
-                  )
-                )
-                ;; OHNE Context: Nur Einträge ohne ":" (legacy Support, NICHT *STANDARD*)
-                (if (and (not (vl-string-search ":" key))
-                         (not (wcmatch key "*STANDARD*")))
-                  (setq result (cons (cons key value) result))
-                )
+              (if (and (not (vl-string-search ":" key))
+                       (not (wcmatch key "*STANDARD*")))
+                (setq result (cons (cons key value) result))
               )
             )
           )
         )
         (close file)
-        (BLI:log-write "DEBUG" (strcat "Config gelesen: " (itoa (length result)) " Einträge"
-          (if context-prefix (strcat " (Context: " *block-import-context* ")") "")))
+        (BLI:log-write "DEBUG" (strcat "Config gelesen: " (itoa (length result)) " Block-Pfade"))
         result
       )
     )
@@ -337,14 +313,11 @@
     )
   )
 
-  ;; Key mit Context-Präfix (falls nicht schon *STANDARD*)
+  ;; Key: *STANDARD* Keys behalten Context, Block-Pfade sind context-frei
   (setq key-with-context
     (if (wcmatch blockname "*STANDARD*")
       blockname  ;; *STANDARD:Context* bleibt wie ist
-      (if *block-import-context*
-        (strcat *block-import-context* ":" blockname)
-        blockname  ;; Kein Context: Blockname ohne Präfix
-      )
+      blockname  ;; Block-Pfade: KEIN Context-Präfix
     )
   )
 
@@ -981,32 +954,13 @@
   )
 
   (setq standard-block (get-standard-block))
-  (setq context-prefix
-    (if *block-import-context*
-      (strcat *block-import-context* ":")
-      nil
-    )
-  )
 
-  ;; Erstelle Anzeige-Liste (OHNE Context-Präfix und OHNE *STANDARD*)
+  ;; Erstelle Anzeige-Liste (alle Block-Pfade, OHNE *STANDARD* und OHNE Context-Keys)
   (setq block-list '())
   (foreach pair all-paths
-    ;; Filtere für aktuellen Context
-    (if context-prefix
-      ;; MIT Context: Nur "Context:BlockName" (nicht *STANDARD*)
-      (if (and (> (strlen (car pair)) (strlen context-prefix))
-               (eq (substr (car pair) 1 (strlen context-prefix)) context-prefix)
-               (not (wcmatch (car pair) "*STANDARD*")))
-        (progn
-          ;; Entferne Context-Präfix für Anzeige
-          (setq block-list (cons (substr (car pair) (+ (strlen context-prefix) 1)) block-list))
-        )
-      )
-      ;; OHNE Context: Nur Einträge ohne ":" (nicht *STANDARD*)
-      (if (and (not (vl-string-search ":" (car pair)))
-               (not (wcmatch (car pair) "*STANDARD*")))
-        (setq block-list (cons (car pair) block-list))
-      )
+    (if (and (not (vl-string-search ":" (car pair)))
+             (not (wcmatch (car pair) "*STANDARD*")))
+      (setq block-list (cons (car pair) block-list))
     )
   )
 
@@ -1040,12 +994,8 @@
           (setq selected-block (nth (- choice 1) block-list))
 
           ;; selected-block-with-context MIT Context-Präfix (für Löschen)
-          (setq selected-block-with-context
-            (if context-prefix
-              (strcat context-prefix selected-block)
-              selected-block
-            )
-          )
+          ;; Block-Pfade sind context-frei
+          (setq selected-block-with-context selected-block)
 
           ;; Prüfe ob Standard-Block entfernt wird
           (setq was-standard (eq selected-block standard-block))
@@ -1105,29 +1055,12 @@
                   (princ "\n")
                   (princ "\n*** Der Standard-Block wurde entfernt! ***")
 
-                  ;; Prüfe ob noch andere Blocks vorhanden (im aktuellen Context!)
+                  ;; Prüfe ob noch andere Blocks vorhanden
                   (setq remaining-blocks '())
-                  (setq context-prefix
-                    (if *block-import-context*
-                      (strcat *block-import-context* ":")
-                      nil
-                    )
-                  )
-
                   (foreach pair new-paths
-                    ;; Nur Blocks im aktuellen Context zählen
-                    (if context-prefix
-                      ;; MIT Context: Prüfe auf "Context:BlockName" (nicht *STANDARD*)
-                      (if (and (> (strlen (car pair)) (strlen context-prefix))
-                               (eq (substr (car pair) 1 (strlen context-prefix)) context-prefix)
-                               (not (wcmatch (car pair) "*STANDARD*")))
-                        (setq remaining-blocks (cons pair remaining-blocks))
-                      )
-                      ;; OHNE Context: Nur Einträge ohne ":" und nicht *STANDARD*
-                      (if (and (not (vl-string-search ":" (car pair)))
-                               (not (wcmatch (car pair) "*STANDARD*")))
-                        (setq remaining-blocks (cons pair remaining-blocks))
-                      )
+                    (if (and (not (vl-string-search ":" (car pair)))
+                             (not (wcmatch (car pair) "*STANDARD*")))
+                      (setq remaining-blocks (cons pair remaining-blocks))
                     )
                   )
 
@@ -1512,20 +1445,8 @@
   ;; AppData sicherstellen
   (BLI:get-appdata-path)
 
-  (setq context-prefix
-    (if *block-import-context*
-      (strcat *block-import-context* ":")
-      nil
-    )
-  )
-
-  ;; Key mit Context
-  (setq key-with-context
-    (if context-prefix
-      (strcat context-prefix blockname)
-      blockname
-    )
-  )
+  ;; Block-Pfade sind context-frei
+  (setq key-with-context blockname)
 
   ;; Prüfe ob es der Standard-Block war
   (setq standard-block (get-standard-block))
@@ -1676,8 +1597,8 @@
 ;; KEIN vl-load-com auf Top-Level! (Lazy-Init: wird von aufrufendem Script geladen)
 
 ;; Lade-Meldung
-(BLI:log-write "INFO" "=== BlockImport.lsp v1.11.0 geladen ===")
-(princ "\nBlockImport.lsp v1.11.0 geladen.")
+(BLI:log-write "INFO" "=== BlockImport.lsp v1.12.0 geladen ===")
+(princ "\nBlockImport.lsp v1.12.0 geladen.")
 (princ "\nBefehle: ManageBlockImport - Block-Verwaltung")
 (princ "\n         ShowBlockPath - Zeigt konfigurierte Pfade")
 (princ "\n         ResetBlockPath - Löscht alle Pfade")
