@@ -2,7 +2,7 @@
 ;;; Hoeheninterpolation auf einer Flaeche definiert durch 3-4 Eckpunkte
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 3.1.1
+;;; Version: 3.1.2
 ;;; Datum: 2026-03-20
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAF (HoeheAufFlaeche)
@@ -27,7 +27,7 @@
 ;;; KONSTANTEN (Top-Level erlaubt)
 ;;; ============================================================================
 
-(setq *HAF:version* "3.1.1")
+(setq *HAF:version* "3.1.2")
 (setq *HAF:appdata-folder* "HoeheAufFlaeche")
 (setq *HAF:blockname* "BLK_Hoehenkote")
 
@@ -1693,50 +1693,43 @@
 )
 
 ;;; Visualisiert TIN als Linien (Dreieckskanten)
-;;; Zeichnet nur Kanten von Dreiecken deren Schwerpunkt innerhalb der Umrandung liegt
+;;; Kein Polygon-Clipping: Alle Endpunkte sind Eckpunkte, alle Kanten gueltig
 ;;; Vermeidet Duplikate durch Kanten-Tracking
 ;;; Rueckgabe: Liste von Entity-Names
-(defun HAF:draw-tin (pts heights triangles polygon
+(defun HAF:draw-tin (pts heights triangles
                      / tri pa pb pc ha hb hc entities ent
                        p1-3d p2-3d p3-3d edges edge
-                       cx cy drawn-edges edge-key)
+                       drawn-edges edge-key)
   (setq entities nil)
-  (setq drawn-edges nil) ;; Vermeidet doppelte Kanten
+  (setq drawn-edges nil)
   (foreach tri triangles
     (setq pa (nth (car tri) pts))
     (setq pb (nth (cadr tri) pts))
     (setq pc (nth (caddr tri) pts))
-    ;; Schwerpunkt des Dreiecks pruefen
-    (setq cx (/ (+ (car pa) (car pb) (car pc)) 3.0))
-    (setq cy (/ (+ (cadr pa) (cadr pb) (cadr pc)) 3.0))
-    (if (or (null polygon) (HAF:point-in-polygon (list cx cy) polygon))
-      (progn
-        (setq ha (nth (car tri) heights))
-        (setq hb (nth (cadr tri) heights))
-        (setq hc (nth (caddr tri) heights))
-        (setq p1-3d (list (car pa) (cadr pa) ha))
-        (setq p2-3d (list (car pb) (cadr pb) hb))
-        (setq p3-3d (list (car pc) (cadr pc) hc))
-        ;; 3 Kanten pro Dreieck
-        (setq edges (list
-          (list (min (car tri) (cadr tri)) (max (car tri) (cadr tri)) p1-3d p2-3d)
-          (list (min (cadr tri) (caddr tri)) (max (cadr tri) (caddr tri)) p2-3d p3-3d)
-          (list (min (caddr tri) (car tri)) (max (caddr tri) (car tri)) p3-3d p1-3d)))
-        (foreach edge edges
-          ;; Kanten-Key fuer Duplikat-Check (sortierte Indizes)
-          (setq edge-key (strcat (itoa (car edge)) "-" (itoa (cadr edge))))
-          (if (not (member edge-key drawn-edges))
-            (progn
-              (setq drawn-edges (cons edge-key drawn-edges))
-              (setq ent (entmakex
-                (list '(0 . "LINE") '(100 . "AcDbEntity") '(8 . "0")
-                      (cons 62 *HAF:tin-color*)
-                      '(100 . "AcDbLine")
-                      (cons 10 (caddr edge))
-                      (cons 11 (cadddr edge)))))
-              (if ent (setq entities (cons ent entities)))
-            )
-          )
+    (setq ha (nth (car tri) heights))
+    (setq hb (nth (cadr tri) heights))
+    (setq hc (nth (caddr tri) heights))
+    (setq p1-3d (list (car pa) (cadr pa) ha))
+    (setq p2-3d (list (car pb) (cadr pb) hb))
+    (setq p3-3d (list (car pc) (cadr pc) hc))
+    ;; 3 Kanten pro Dreieck
+    (setq edges (list
+      (list (min (car tri) (cadr tri)) (max (car tri) (cadr tri)) p1-3d p2-3d)
+      (list (min (cadr tri) (caddr tri)) (max (cadr tri) (caddr tri)) p2-3d p3-3d)
+      (list (min (caddr tri) (car tri)) (max (caddr tri) (car tri)) p3-3d p1-3d)))
+    (foreach edge edges
+      ;; Kanten-Key fuer Duplikat-Check (sortierte Indizes)
+      (setq edge-key (strcat (itoa (car edge)) "-" (itoa (cadr edge))))
+      (if (not (member edge-key drawn-edges))
+        (progn
+          (setq drawn-edges (cons edge-key drawn-edges))
+          (setq ent (entmakex
+            (list '(0 . "LINE") '(100 . "AcDbEntity") '(8 . "0")
+                  (cons 62 *HAF:tin-color*)
+                  '(100 . "AcDbLine")
+                  (cons 10 (caddr edge))
+                  (cons 11 (cadddr edge)))))
+          (if ent (setq entities (cons ent entities)))
         )
       )
     )
@@ -2402,7 +2395,7 @@
            (progn
              (princ (strcat "\n  " (itoa (length *HAF:tin-triangles*)) " Dreiecke berechnet"))
              ;; TIN visualisieren (temporaere 3DFaces)
-             (setq tin-entities (HAF:draw-tin corner-points corner-heights *HAF:tin-triangles* corner-points))
+             (setq tin-entities (HAF:draw-tin corner-points corner-heights *HAF:tin-triangles*))
              (princ (strcat "\n  TIN gezeichnet (" (itoa (length tin-entities)) " 3DFaces)"))
            )
            (progn
