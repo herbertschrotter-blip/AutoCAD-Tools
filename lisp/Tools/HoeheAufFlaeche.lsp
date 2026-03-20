@@ -2,7 +2,7 @@
 ;;; Hoeheninterpolation auf einer Flaeche definiert durch 3-4 Eckpunkte
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 2.3.0
+;;; Version: 3.0.0
 ;;; Datum: 2026-03-20
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAF (HoeheAufFlaeche)
@@ -27,7 +27,7 @@
 ;;; KONSTANTEN (Top-Level erlaubt)
 ;;; ============================================================================
 
-(setq *HAF:version* "2.3.0")
+(setq *HAF:version* "3.0.0")
 (setq *HAF:appdata-folder* "HoeheAufFlaeche")
 (setq *HAF:blockname* "BLK_Hoehenkote")
 
@@ -41,6 +41,7 @@
 (setq *HAF:initialized* nil)
 (setq *HAF:last-height* nil)
 (setq *HAF:log-session-id* nil)
+(setq *HAF:tin-triangles* nil)  ;; Delaunay-Dreiecke (fuer 5+ Punkte)
 
 ;; Settings (Defaults, werden von Config ueberschrieben)
 (setq *HAF:use-layer-suffix* T)
@@ -1365,17 +1366,317 @@
 )
 
 ;;; ============================================================================
+;;; DELAUNAY TRIANGULATION (Bowyer-Watson Algorithmus)
+;;; ============================================================================
+
+;;; Datenstruktur fuer Dreiecke:
+;;;   Ein Dreieck = Liste von 3 Punkt-Indizes (i j k)
+;;;   Punkte werden als separate Liste verwaltet: ((x y h) (x y h) ...)
+;;;   Index 0-basiert
+
+;;; Berechnet Umkreis (Circumcircle) eines Dreiecks
+;;; Parameter: pa pb pc - drei Punkte (x y)
+;;; Rueckgabe: (cx cy r^2) - Mittelpunkt + Radius-Quadrat, oder nil
+(defun HAF:circumcircle (pa pb pc
+                         / ax ay bx by cx cy d ux uy rsq)
+  (setq ax (car pa) ay (cadr pa))
+  (setq bx (car pb) by (cadr pb))
+  (setq cx (car pc) cy (cadr pc))
+  ;; Determinante (2x Flaeche des Dreiecks)
+  (setq d (* 2.0 (+ (* ax (- by cy))
+                     (* bx (- cy ay))
+                     (* cx (- ay by)))))
+  ;; Kollineare Punkte → kein Umkreis
+  (if (< (abs d) 1e-10)
+    nil
+    (progn
+      ;; Umkreis-Mittelpunkt
+      (setq ux (/ (+ (* (+ (* ax ax) (* ay ay)) (- by cy))
+                     (* (+ (* bx bx) (* by by)) (- cy ay))
+                     (* (+ (* cx cx) (* cy cy)) (- ay by)))
+                  d))
+      (setq uy (/ (+ (* (+ (* ax ax) (* ay ay)) (- cx bx))
+                     (* (+ (* bx bx) (* by by)) (- ax cx))
+                     (* (+ (* cx cx) (* cy cy)) (- bx ax)))
+                  d))
+      ;; Radius-Quadrat (kein sqrt noetig fuer Vergleich)
+      (setq rsq (+ (* (- ax ux) (- ax ux))
+                    (* (- ay uy) (- ay uy))))
+      (list ux uy rsq)
+    )
+  )
+)
+
+;;; Prueft ob Punkt im Umkreis eines Dreiecks liegt
+;;; Parameter: pt - Punkt (x y), circle - (cx cy r^2)
+;;; Rueckgabe: T wenn innerhalb (inkl. Rand), nil wenn ausserhalb
+(defun HAF:point-in-circumcircle (pt circle / dx dy dist-sq)
+  (setq dx (- (car pt) (car circle)))
+  (setq dy (- (cadr pt) (cadr circle)))
+  (setq dist-sq (+ (* dx dx) (* dy dy)))
+  (<= dist-sq (caddr circle))
+)
+
+;;; Erstellt Supertriangle das alle Punkte umschliesst
+;;; Parameter: pts - Liste von Punkten ((x y h) ...)
+;;; Rueckgabe: Liste von 3 Punkten ((x y 0) (x y 0) (x y 0))
+(defun HAF:supertriangle (pts / min-x max-x min-y max-y dx dy dmax mid-x mid-y)
+  (setq min-x 1e30 max-x -1e30 min-y 1e30 max-y -1e30)
+  (foreach pt pts
+    (if (< (car pt) min-x) (setq min-x (car pt)))
+    (if (> (car pt) max-x) (setq max-x (car pt)))
+    (if (< (cadr pt) min-y) (setq min-y (cadr pt)))
+    (if (> (cadr pt) max-y) (setq max-y (cadr pt)))
+  )
+  (setq dx (- max-x min-x))
+  (setq dy (- max-y min-y))
+  (setq dmax (if (> dx dy) dx dy))
+  (setq mid-x (/ (+ min-x max-x) 2.0))
+  (setq mid-y (/ (+ min-y max-y) 2.0))
+  ;; Supertriangle: gross genug um alle Punkte zu umschliessen
+  (list
+    (list (- mid-x (* 2.0 dmax)) (- mid-y dmax) 0.0)
+    (list mid-x (+ mid-y (* 2.0 dmax)) 0.0)
+    (list (+ mid-x (* 2.0 dmax)) (- mid-y dmax) 0.0)
+  )
+)
+
+;;; Prueft ob zwei Kanten gleich sind (ungeordnet)
+(defun HAF:edge-equal (e1 e2)
+  (or (and (= (car e1) (car e2)) (= (cadr e1) (cadr e2)))
+      (and (= (car e1) (cadr e2)) (= (cadr e1) (car e2))))
+)
+
+;;; Bowyer-Watson Delaunay-Triangulation
+;;; Parameter:
+;;;   pts - Liste von Punkten ((x y h) (x y h) ...)
+;;;         Nur x,y werden fuer Triangulation verwendet
+;;;         h wird mitgefuehrt fuer spaetere Interpolation
+;;;
+;;; Rueckgabe: Liste von Dreiecken ((i j k) (i j k) ...)
+;;;            Indizes beziehen sich auf pts (0-basiert)
+(defun HAF:delaunay (pts / super-pts all-pts num-super triangles
+                         i pt bad-tri polygon edge tri
+                         edges e1 e2 j is-shared
+                         new-tri result num-pts)
+  (setq num-pts (length pts))
+  (HAF:log-write "INFO" (strcat "Delaunay: " (itoa num-pts) " Punkte"))
+  
+  ;; Supertriangle erstellen
+  (setq super-pts (HAF:supertriangle pts))
+  ;; Alle Punkte: Original + 3 Supertriangle-Ecken am Ende
+  (setq all-pts (append pts super-pts))
+  (setq num-super num-pts) ;; Index ab dem Supertriangle-Punkte beginnen
+  
+  ;; Initiales Dreieck = Supertriangle (Indizes: n, n+1, n+2)
+  (setq triangles (list (list num-super (1+ num-super) (+ num-super 2))))
+  
+  ;; Jeden Punkt einfuegen
+  (setq i 0)
+  (while (< i num-pts)
+    (setq pt (nth i all-pts))
+    
+    ;; Finde "bad triangles" (Punkt liegt in deren Umkreis)
+    (setq bad-tri nil)
+    (foreach tri triangles
+      (setq circle (HAF:circumcircle
+                     (nth (car tri) all-pts)
+                     (nth (cadr tri) all-pts)
+                     (nth (caddr tri) all-pts)))
+      (if (and circle (HAF:point-in-circumcircle pt circle))
+        (setq bad-tri (cons tri bad-tri))
+      )
+    )
+    
+    ;; Finde Polygon-Rand (Kanten die nur zu EINEM bad triangle gehoeren)
+    (setq polygon nil)
+    (foreach tri bad-tri
+      ;; 3 Kanten pro Dreieck
+      (setq edges (list
+        (list (car tri) (cadr tri))
+        (list (cadr tri) (caddr tri))
+        (list (caddr tri) (car tri))))
+      (foreach edge edges
+        ;; Pruefe ob Kante von anderem bad triangle geteilt wird
+        (setq is-shared nil)
+        (foreach other bad-tri
+          (if (not (equal tri other))
+            (progn
+              (setq e1 (list (car other) (cadr other)))
+              (setq e2 (list (cadr other) (caddr other)))
+              (if (or (HAF:edge-equal edge e1)
+                      (HAF:edge-equal edge e2)
+                      (HAF:edge-equal edge (list (caddr other) (car other))))
+                (setq is-shared T)
+              )
+            )
+          )
+        )
+        ;; Nicht geteilt → gehoert zum Polygon-Rand
+        (if (not is-shared)
+          (setq polygon (cons edge polygon))
+        )
+      )
+    )
+    
+    ;; Bad triangles entfernen
+    (foreach tri bad-tri
+      (setq triangles (vl-remove tri triangles))
+    )
+    
+    ;; Neue Dreiecke: Punkt i → jede Kante des Polygons
+    (foreach edge polygon
+      (setq triangles (cons (list i (car edge) (cadr edge)) triangles))
+    )
+    
+    (setq i (1+ i))
+  )
+  
+  ;; Supertriangle-Dreiecke entfernen (alle die einen Index >= num-super haben)
+  (setq result nil)
+  (foreach tri triangles
+    (if (and (< (car tri) num-super)
+             (< (cadr tri) num-super)
+             (< (caddr tri) num-super))
+      (setq result (cons tri result))
+    )
+  )
+  
+  (HAF:log-write "INFO" (strcat "Delaunay fertig: " (itoa (length result)) " Dreiecke"))
+  result
+)
+
+;;; ============================================================================
+;;; TIN-INTERPOLATION (Punkt auf TIN-Oberflaeche)
+;;; ============================================================================
+
+;;; Findet das Dreieck im TIN das den Punkt enthaelt
+;;; Parameter:
+;;;   pg - Gesuchter Punkt (x y)
+;;;   pts - Alle Punkte ((x y h) ...)
+;;;   triangles - Delaunay-Dreiecke ((i j k) ...)
+;;;
+;;; Rueckgabe: Dreieck (i j k) oder nil
+(defun HAF:find-triangle (pg pts triangles / tri pa pb pc bary found)
+  (setq found nil)
+  (foreach tri triangles
+    (if (not found)
+      (progn
+        (setq pa (nth (car tri) pts))
+        (setq pb (nth (cadr tri) pts))
+        (setq pc (nth (caddr tri) pts))
+        (setq bary (HAF:barycentric pa pb pc pg))
+        (if (HAF:point-in-triangle-p bary)
+          (setq found tri)
+        )
+      )
+    )
+  )
+  found
+)
+
+;;; Interpoliert Hoehe auf TIN-Oberflaeche
+;;; Parameter:
+;;;   pg - Gesuchter Punkt (x y z)
+;;;   pts - Alle Punkte ((x y h) ...)
+;;;   heights - Hoehen-Liste (h1 h2 ...)
+;;;   triangles - Delaunay-Dreiecke
+;;;
+;;; Rueckgabe: Liste (hoehe methoden-info) oder nil
+(defun HAF:interpolate-tin (pg pts heights triangles
+                            / tri pa pb pc ha hb hc height tri-info)
+  (setq tri (HAF:find-triangle pg pts triangles))
+  (if tri
+    (progn
+      (setq pa (nth (car tri) pts))
+      (setq pb (nth (cadr tri) pts))
+      (setq pc (nth (caddr tri) pts))
+      (setq ha (nth (car tri) heights))
+      (setq hb (nth (cadr tri) heights))
+      (setq hc (nth (caddr tri) heights))
+      (setq height (HAF:height-in-triangle pa ha pb hb pc hc pg))
+      (setq tri-info (strcat "TIN Dreieck "
+                             (itoa (1+ (car tri))) "-"
+                             (itoa (1+ (cadr tri))) "-"
+                             (itoa (1+ (caddr tri)))))
+      (HAF:debug (strcat "interpolate-tin: " tri-info " h=" (rtos height 2 4)))
+      (list height tri-info)
+    )
+    (progn
+      (HAF:debug "interpolate-tin: Punkt ausserhalb TIN")
+      nil
+    )
+  )
+)
+
+;;; Hoehenlinie ueber alle TIN-Dreiecke berechnen
+;;; Rueckgabe: Liste von Segmenten ((p1 p2) ...)
+(defun HAF:contour-tin (pts heights triangles target-h
+                        / tri pa pb pc ha hb hc seg result)
+  (setq result nil)
+  (foreach tri triangles
+    (setq pa (nth (car tri) pts))
+    (setq pb (nth (cadr tri) pts))
+    (setq pc (nth (caddr tri) pts))
+    (setq ha (nth (car tri) heights))
+    (setq hb (nth (cadr tri) heights))
+    (setq hc (nth (caddr tri) heights))
+    (setq seg (HAF:contour-in-triangle pa ha pb hb pc hc target-h))
+    (if seg (setq result (cons seg result)))
+  )
+  (HAF:debug (strcat "contour-tin: " (itoa (length result)) " Segmente bei H=" (rtos target-h 2 2)))
+  (if result (reverse result) nil)
+)
+
+;;; Visualisiert TIN als Linien (Dreieckskanten)
+;;; Rueckgabe: Liste von Entity-Names
+(defun HAF:draw-tin (pts heights triangles
+                     / tri pa pb pc ha hb hc entities ent)
+  (setq entities nil)
+  (foreach tri triangles
+    (setq pa (nth (car tri) pts))
+    (setq pb (nth (cadr tri) pts))
+    (setq pc (nth (caddr tri) pts))
+    (setq ha (nth (car tri) heights))
+    (setq hb (nth (cadr tri) heights))
+    (setq hc (nth (caddr tri) heights))
+    ;; 3 Kanten pro Dreieck als 3DFACE
+    (setq ent (entmakex
+      (list '(0 . "3DFACE") '(100 . "AcDbEntity") '(8 . "0") '(62 . 8)
+            '(100 . "AcDb3dFace")
+            (cons 10 (list (car pa) (cadr pa) ha))
+            (cons 11 (list (car pb) (cadr pb) hb))
+            (cons 12 (list (car pc) (cadr pc) hc))
+            (cons 13 (list (car pc) (cadr pc) hc)))))
+    (if ent (setq entities (cons ent entities)))
+  )
+  (HAF:log-write "INFO" (strcat "TIN gezeichnet: " (itoa (length entities)) " 3DFaces"))
+  entities
+)
+
+;;; Loescht TIN-Entities
+(defun HAF:delete-tin (entities / )
+  (foreach ent entities
+    (if (and ent (entget ent))
+      (entdel ent)
+    )
+  )
+  (HAF:debug (strcat "TIN geloescht: " (itoa (length entities))))
+)
+
+;;; ============================================================================
 ;;; DISPATCHER - Waehlt Interpolationsmethode
 ;;; ============================================================================
 
 ;;; Zentrale Interpolationsfunktion
-;;; Waehlt automatisch: 3 Punkte → Ebene, 4 Punkte → Triangulation
+;;; Waehlt automatisch: 3 Punkte → Ebene, 4 Punkte → Triangulation, 5+ → TIN
 ;;;
 ;;; Parameter:
-;;;   pts - Liste von 3 oder 4 Punkten
-;;;   heights - Liste von 3 oder 4 Hoehen
+;;;   pts - Liste von 3+ Punkten
+;;;   heights - Liste von Hoehen
 ;;;   pg - Gesuchter Punkt
 ;;;   diagonal - "13" oder "24" (nur bei 4 Punkten, sonst nil)
+;;;   triangles - Delaunay-Dreiecke (nur bei 5+ Punkten, sonst nil)
 ;;;
 ;;; Rueckgabe: Liste (hoehe methoden-info) oder nil
 (defun HAF:interpolate (pts heights pg diagonal / num-pts)
@@ -1387,6 +1688,14 @@
      (HAF:interpolate-plane pts heights pg))
     ((= num-pts 4)
      (HAF:interpolate-triangulation pts heights pg diagonal))
+    ((>= num-pts 5)
+     ;; TIN-Modus: triangles muss als globale Variable *HAF:tin-triangles* vorliegen
+     (if *HAF:tin-triangles*
+       (HAF:interpolate-tin pg pts heights *HAF:tin-triangles*)
+       (progn
+         (HAF:log-write "ERROR" "interpolate: 5+ Punkte aber kein TIN berechnet")
+         nil)
+     ))
     (T
      (HAF:log-write "ERROR" (strcat "interpolate: ungueltige Punktzahl " (itoa num-pts)))
      nil)
@@ -1561,6 +1870,10 @@
   (cond
     ((= num-pts 3) (HAF:contour-3pt pts heights target-h))
     ((= num-pts 4) (HAF:contour-4pt pts heights target-h diagonal))
+    ((>= num-pts 5)
+     (if *HAF:tin-triangles*
+       (HAF:contour-tin pts heights *HAF:tin-triangles* target-h)
+       nil))
     (T nil)
   )
 )
@@ -1778,7 +2091,7 @@
                              num-corners scale pg result interpolated-height tri-info
                              prompt-str pt ht block-ent last-ent
                              diagonal-choice use-diagonal diagonal-ent
-                             contour-entities target-h segments outline-ent grid-entities
+                             contour-entities target-h segments outline-ent grid-entities tin-entities
                              p1 h1 p2 h2 p3 h3 p4 h4)
   
   (HAF:ensure-init)
@@ -1817,6 +2130,8 @@
         (HAF:delete-grid grid-entities)
       )
     )
+    (if tin-entities (HAF:delete-tin tin-entities))
+    (setq *HAF:tin-triangles* nil)
     ;; Systemvariablen wiederherstellen
     (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
     (if old-attdia (setvar "ATTDIA" old-attdia))
@@ -1834,7 +2149,7 @@
   (HAF:log-write "INFO" "Befehl HoeheAufFlaeche gestartet")
   
   (princ "\n=== Hoeheninterpolation auf Flaeche ===")
-  (princ "\nSetzen Sie 3 oder 4 Eckpunkte mit bekannten Hoehen.")
+  (princ "\nSetzen Sie Eckpunkte mit bekannten Hoehen (min. 3).")
   
   ;; Skalierung aus DWG
   (setq scale (HAF:read-scale))
@@ -1846,20 +2161,23 @@
   
   (setq corner-points nil corner-heights nil corner-entities nil)
   (setq corner-number 1 done nil)
-  (setq contour-entities nil diagonal-ent nil outline-ent nil grid-entities nil)
+  (setq contour-entities nil diagonal-ent nil outline-ent nil grid-entities nil tin-entities nil)
   
-  (while (and (not done) (< corner-number 5))
+  (while (not done)
     ;; Keywords je nach Zustand
-    (if (> corner-number 1)
-      (initget "Skalierung Zurueck Einstellungen")
-      (initget "Skalierung Einstellungen")
+    (cond
+      ((>= corner-number 4)
+       (initget "Fertig Skalierung Zurueck Einstellungen"))
+      ((> corner-number 1)
+       (initget "Skalierung Zurueck Einstellungen"))
+      (T
+       (initget "Skalierung Einstellungen"))
     )
     ;; Prompt zusammenbauen
     (setq prompt-str (strcat "\nEckpunkt " (itoa corner-number) " waehlen ["))
     (if (> corner-number 1) (setq prompt-str (strcat prompt-str "Zurueck/")))
-    (setq prompt-str (strcat prompt-str "Skalierung/Einstellungen"))
-    (if (>= corner-number 4) (setq prompt-str (strcat prompt-str "/ENTER=Fertig")))
-    (setq prompt-str (strcat prompt-str "] <" (rtos scale 2 2) ">: "))
+    (if (>= corner-number 4) (setq prompt-str (strcat prompt-str "Fertig/")))
+    (setq prompt-str (strcat prompt-str "Skalierung/Einstellungen] <" (rtos scale 2 2) ">: "))
     
     (setq pt (getpoint prompt-str))
     
@@ -1873,19 +2191,26 @@
        (HAF:show-settings)
        (setq scale (HAF:read-scale))
       )
+      ;; Fertig (ab 3 Punkten)
+      ((= pt "Fertig")
+       (if (>= (1- corner-number) 3)
+         (progn
+           (setq done T)
+           (HAF:log-write "INFO" (strcat "Eckpunkte: Fertig (" (itoa (1- corner-number)) " Punkte)"))
+         )
+         (princ "\n*** Mindestens 3 Eckpunkte noetig ***")
+       )
+      )
       ;; Zurueck
       ((= pt "Zurueck")
        (if (> corner-number 1)
          (progn
-           ;; Letzten Block loeschen (wenn wir einen eingefuegt haben)
            (setq last-ent (last corner-entities))
            (if last-ent (entdel last-ent))
-           ;; Listen kuerzen
            (setq corner-points (reverse (cdr (reverse corner-points))))
            (setq corner-heights (reverse (cdr (reverse corner-heights))))
            (setq corner-entities (reverse (cdr (reverse corner-entities))))
            (setq corner-number (1- corner-number))
-           ;; Umrandung aktualisieren (weniger Punkte)
            (setq outline-ent (HAF:update-outline outline-ent corner-points corner-heights))
            (HAF:log-write "INFO" (strcat "Eckpunkt " (itoa corner-number) " entfernt (Zurueck)"))
            (princ (strcat "\n  Eckpunkt " (itoa corner-number) " entfernt"))
@@ -1893,10 +2218,10 @@
          (princ "\n*** Kein Punkt zum Entfernen ***")
        )
       )
-      ;; ENTER bei >= 4 Punkten (corner-number ist schon 4 = 3 Punkte gesetzt)
-      ((and (null pt) (>= corner-number 4))
+      ;; ENTER bei >= 3 Punkten gesetzt
+      ((and (null pt) (>= (1- corner-number) 3))
        (setq done T)
-       (HAF:log-write "INFO" "Eckpunkte-Eingabe abgeschlossen (ENTER)")
+       (HAF:log-write "INFO" (strcat "Eckpunkte: ENTER (" (itoa (1- corner-number)) " Punkte)"))
       )
       ;; Gueltiger Punkt
       ((HAF:valid-point-p pt)
@@ -1906,9 +2231,7 @@
        (if ht
          (progn
            (setq *HAF:last-height* ht)
-           ;; Block einfuegen (skip-if-exists=T fuer Eckpunkte)
            (setq block-ent (HAF:insert-block pt ht scale T))
-           ;; Zu Listen hinzufuegen
            (setq corner-points (append corner-points (list pt)))
            (setq corner-heights (append corner-heights (list ht)))
            (setq corner-entities (append corner-entities (list block-ent)))
@@ -1916,19 +2239,18 @@
                                          ": (" (rtos (car pt) 2 3) " " (rtos (cadr pt) 2 3)
                                          ") H=" (rtos ht 2 3)))
            (setq corner-number (1+ corner-number))
-           ;; Umrandung aktualisieren (nach jedem neuen Eckpunkt)
            (setq outline-ent (HAF:update-outline outline-ent corner-points corner-heights))
-           ;; Hinweis bei 3 Punkten
+           ;; Hinweis ab 3 Punkten
            (if (= corner-number 4)
-             (princ "\n  (ENTER fuer 3 Punkte oder 4. Punkt setzen)")
+             (princ "\n  (F=Fertig, ENTER=Fertig, oder weitere Punkte setzen)")
            )
          )
          (princ "\n*** Ungueltige Hoehe ***")
        )
       )
-      ;; ESC oder nil (bei < 4 Punkten = zu wenig)
+      ;; ESC oder nil bei < 3 Punkten
       (T
-       (if (< corner-number 4)
+       (if (< (1- corner-number) 3)
          (progn
            (princ "\n*** Abbruch: Mindestens 3 Eckpunkte noetig ***")
            (HAF:log-write "INFO" "Abbruch: zu wenig Eckpunkte")
@@ -1941,37 +2263,59 @@
   ) ;; end while Eckpunkte
   
   ;; ====================================================================
-  ;; PHASE 2: DIAGONALE BESTIMMEN (nur bei 4 Punkten)
+  ;; PHASE 2: TRIANGULATION (Diagonale bei 4, Delaunay bei 5+)
   ;; ====================================================================
   
   (if (>= (length corner-points) 3)
     (progn
       (setq num-corners (length corner-points))
       (princ (strcat "\n\n" (itoa num-corners) " Eckpunkte definiert"))
+      (setq *HAF:tin-triangles* nil) ;; Reset
       
-      ;; Punkte fuer einfachen Zugriff
+      ;; Punkte fuer einfachen Zugriff (3 und 4 Punkte Modus)
       (setq p1 (nth 0 corner-points) h1 (nth 0 corner-heights))
       (setq p2 (nth 1 corner-points) h2 (nth 1 corner-heights))
       (setq p3 (nth 2 corner-points) h3 (nth 2 corner-heights))
       
-      (if (= num-corners 4)
-        (progn
-          (setq p4 (nth 3 corner-points) h4 (nth 3 corner-heights))
-          ;; Automatische Diagonalen-Wahl
-          (setq diagonal-choice (HAF:determine-diagonal h1 h2 h3 h4))
-          ;; Bei Sattel: User muss Bruchlinie definieren
-          (if (= diagonal-choice "USER")
-            (setq diagonal-choice
-              (HAF:user-select-diagonal corner-points corner-heights))
-          )
-          ;; Diagonale zeichnen
-          (if (= diagonal-choice "13")
-            (setq diagonal-ent (HAF:draw-diagonal p1 h1 p3 h3))
-            (setq diagonal-ent (HAF:draw-diagonal p2 h2 p4 h4))
-          )
-          (setq use-diagonal diagonal-choice)
+      (cond
+        ;; 3 Punkte: Ebene
+        ((= num-corners 3)
+         (princ "\n  Methode: Ebenengleichung (1 Dreieck)")
+         (setq use-diagonal nil)
         )
-        (setq use-diagonal nil) ;; 3 Punkte: keine Diagonale
+        ;; 4 Punkte: Triangulation mit classify-quad
+        ((= num-corners 4)
+         (princ "\n  Methode: Triangulation (2 Dreiecke)")
+         (setq p4 (nth 3 corner-points) h4 (nth 3 corner-heights))
+         (setq diagonal-choice (HAF:determine-diagonal h1 h2 h3 h4))
+         (if (= diagonal-choice "USER")
+           (setq diagonal-choice
+             (HAF:user-select-diagonal corner-points corner-heights))
+         )
+         (if (= diagonal-choice "13")
+           (setq diagonal-ent (HAF:draw-diagonal p1 h1 p3 h3))
+           (setq diagonal-ent (HAF:draw-diagonal p2 h2 p4 h4))
+         )
+         (setq use-diagonal diagonal-choice)
+        )
+        ;; 5+ Punkte: Delaunay TIN
+        (T
+         (princ (strcat "\n  Methode: Delaunay TIN (" (itoa num-corners) " Punkte)"))
+         (setq *HAF:tin-triangles* (HAF:delaunay corner-points))
+         (if *HAF:tin-triangles*
+           (progn
+             (princ (strcat "\n  " (itoa (length *HAF:tin-triangles*)) " Dreiecke berechnet"))
+             ;; TIN visualisieren (temporaere 3DFaces)
+             (setq tin-entities (HAF:draw-tin corner-points corner-heights *HAF:tin-triangles*))
+             (princ (strcat "\n  TIN gezeichnet (" (itoa (length tin-entities)) " 3DFaces)"))
+           )
+           (progn
+             (princ "\n*** FEHLER: Delaunay-Triangulation fehlgeschlagen ***")
+             (HAF:log-write "ERROR" "Delaunay fehlgeschlagen")
+           )
+         )
+         (setq use-diagonal nil)
+        )
       )
       
       ;; ====================================================================
@@ -2160,6 +2504,16 @@
         )
         (setq grid-entities nil)
       )
+      
+      ;; TIN (immer temporaer loeschen - 3DFaces sind nur Visualisierung)
+      (if tin-entities
+        (progn
+          (HAF:delete-tin tin-entities)
+          (setq tin-entities nil)
+          (HAF:log-write "INFO" "TIN 3DFaces geloescht (temporaer)")
+        )
+      )
+      (setq *HAF:tin-triangles* nil)
       
       (HAF:log-write "INFO" "Befehl HoeheAufFlaeche beendet")
       (princ "\n\nHoeheninterpolation abgeschlossen.")
