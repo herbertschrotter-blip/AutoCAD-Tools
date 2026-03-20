@@ -2,7 +2,7 @@
 ;;; Automatisches Setzen von Hoehenkoten-Bloecken in AutoCAD
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 2.3.4
+;;; Version: 2.3.6
 ;;; Datum: 2026-03-18
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SetHK (SetHoehenkote)
@@ -390,9 +390,7 @@
           ;; NICHT *SetHK:initialized* setzen → naechster Versuch moeglich
         )
         (progn
-          ;; Block-Import Context setzen
-          (setq *block-import-context* *SetHK:block-context*)
-          (SetHK:log-write "INFO" (strcat "Block-Import Context: " *SetHK:block-context*))
+                    (SetHK:log-write "INFO" (strcat "Block-Import Context: " *SetHK:block-context*))
           
           ;; Blockname aus Config laden (falls geaendert via HKSETTINGS)
           (if (SetHK:get-config-value "BLOCKNAME")
@@ -837,6 +835,7 @@
   (if (and einfuegepunkt hoehe scale)
     (progn
       ;; Block verfuegbar machen (nutzt BlockImport.lsp Bibliothek)
+      (setq *block-import-context* *SetHK:block-context*)
       (setq block-available (ensure-block-available blockName))
       
       (if (car block-available)
