@@ -2901,7 +2901,7 @@
                       )
                       ;; Einstellungen (placeholder)
                       ((= pg "Einstellungen")
-                       (princ "\n  Einstellungen: wird spaeter implementiert")
+                       (HAFM:show-settings)
                       )
                       ;; ESC / nil = Ende
                       ((null pg)
