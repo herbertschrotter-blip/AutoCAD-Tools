@@ -2,7 +2,7 @@
 ;;; Hoeheninterpolation auf einer Flaeche definiert durch 3-4 Eckpunkte
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 3.4.1
+;;; Version: 3.5.0
 ;;; Datum: 2026-03-20
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAF (HoeheAufFlaeche)
@@ -27,7 +27,7 @@
 ;;; KONSTANTEN (Top-Level erlaubt)
 ;;; ============================================================================
 
-(setq *HAF:version* "3.4.1")
+(setq *HAF:version* "3.5.0")
 (setq *HAF:appdata-folder* "HoeheAufFlaeche")
 (setq *HAF:blockname* "BLK_Hoehenkote")
 
@@ -2435,6 +2435,7 @@
                              corner-points corner-heights corner-entities corner-number done
                              num-corners num-boundary scale pg result interpolated-height tri-info
                              prompt-str pt ht block-ent last-ent inner-number
+                             extra-constraints bl-start-idx bl-pt bl-ht bl-number bl-done bl-ent
                              diagonal-choice use-diagonal diagonal-ent
                              contour-entities target-h segments outline-ent grid-entities tin-entities
                              p1 h1 p2 h2 p3 h3 p4 h4)
@@ -2617,27 +2618,100 @@
   ;; ====================================================================
   
   (setq num-boundary (length corner-points))
+  (setq extra-constraints nil)
   
   (if (and corner-points (>= num-boundary 3))
     (progn
-      (princ (strcat "\n\n--- Innere Punkte (optional, ENTER=ueberspringen) ---"))
-      (princ "\n  I=Punkt setzen, F=Fertig (weiter zur Berechnung)")
+      (princ (strcat "\n\n--- Innere Punkte / Bruchkanten (optional, ENTER=ueberspringen) ---"))
+      (princ "\n  Punkt setzen, B=Bruchkante, F=Fertig")
       (setq inner-number 1 done nil)
       
       (while (not done)
-        (initget "Fertig Skalierung Zurueck Einstellungen")
+        (initget "Bruchkante Fertig Skalierung Zurueck Einstellungen")
         (setq pt (getpoint (strcat "\nInnerer Punkt " (itoa inner-number)
-                                   " [Fertig/Zurueck/Skalierung/Einstellungen]: ")))
+                                   " [Bruchkante/Fertig/Zurueck/Skalierung/Einstellungen]: ")))
         (cond
           ;; Fertig
           ((or (= pt "Fertig") (null pt))
            (setq done T)
            (HAF:log-write "INFO" (strcat "Innere Punkte: Fertig ("
-                                         (itoa (1- inner-number)) " Punkte)"))
+                                         (itoa (1- inner-number)) " Punkte, "
+                                         (itoa (length extra-constraints)) " Constraint-Kanten)"))
            (if (> inner-number 1)
              (princ (strcat "\n  " (itoa (1- inner-number)) " innere Punkte definiert"))
-             (princ "\n  Keine inneren Punkte")
            )
+           (if extra-constraints
+             (princ (strcat "\n  " (itoa (length extra-constraints)) " Bruchkanten-Segmente"))
+             (princ "\n  Keine Bruchkanten")
+           )
+          )
+          ;; Bruchkante
+          ((= pt "Bruchkante")
+           (princ "\n  --- Bruchkante definieren (min. 2 Punkte, F=Fertig) ---")
+           (setq bl-number 1 bl-done nil)
+           (setq bl-start-idx (length corner-points)) ;; Index des ersten Bruchkanten-Punkts
+           (while (not bl-done)
+             (if (>= bl-number 3)
+               (initget "Fertig")
+               (if (= bl-number 2) (initget "Fertig"))
+             )
+             (setq bl-pt (getpoint (strcat "\n  Bruchkante Punkt " (itoa bl-number)
+                                           (if (>= bl-number 2) " [Fertig]" "")
+                                           ": ")))
+             (cond
+               ;; Fertig (ab 2 Punkten) oder ENTER
+               ((or (= bl-pt "Fertig") (and (null bl-pt) (>= bl-number 3)))
+                (if (>= bl-number 3) ;; bl-number ist schon +1 → min 2 Punkte gesetzt
+                  (progn
+                    (setq bl-done T)
+                    (HAF:log-write "INFO" (strcat "Bruchkante: " (itoa (1- bl-number))
+                                                   " Punkte, " (itoa (- bl-number 2)) " Kanten"))
+                    (princ (strcat "\n  Bruchkante: " (itoa (1- bl-number)) " Punkte, "
+                                   (itoa (- bl-number 2)) " Kante(n)"))
+                  )
+                  (progn
+                    (princ "\n*** Mindestens 2 Punkte fuer Bruchkante noetig ***")
+                    (if (and (null bl-pt) (< bl-number 3))
+                      (setq bl-done T) ;; ENTER bei <2 Punkten → abbrechen
+                    )
+                  )
+                )
+               )
+               ;; Gueltiger Punkt
+               ((HAF:valid-point-p bl-pt)
+                (setq bl-ht (HAF:get-validated-height
+                              (strcat "\n  Hoehe Bruchkante " (itoa bl-number))
+                              *HAF:last-height*))
+                (if bl-ht
+                  (progn
+                    (setq *HAF:last-height* bl-ht)
+                    (setq bl-ent (HAF:insert-block bl-pt bl-ht scale nil))
+                    (setq corner-points (append corner-points (list bl-pt)))
+                    (setq corner-heights (append corner-heights (list bl-ht)))
+                    (setq corner-entities (append corner-entities (list bl-ent)))
+                    ;; Constraint-Kante: vom vorherigen zum aktuellen Punkt
+                    (if (> bl-number 1)
+                      (setq extra-constraints
+                        (append extra-constraints
+                          (list (list (1- (length corner-points))    ;; aktueller Index
+                                     (- (length corner-points) 2))))) ;; vorheriger Index
+                    )
+                    (HAF:log-write "INFO" (strcat "Bruchkante Punkt " (itoa bl-number)
+                                                   ": (" (rtos (car bl-pt) 2 3) " "
+                                                   (rtos (cadr bl-pt) 2 3) ") H=" (rtos bl-ht 2 3)))
+                    (setq bl-number (1+ bl-number))
+                    (setq inner-number (1+ inner-number)) ;; Zaehlt auch als innerer Punkt
+                  )
+                  (princ "\n*** Ungueltige Hoehe ***")
+                )
+               )
+               ;; ESC / nil bei <2 Punkten
+               (T
+                (princ "\n  Bruchkante abgebrochen")
+                (setq bl-done T)
+               )
+             )
+           ) ;; end while Bruchkante
           )
           ;; Skalierung
           ((= pt "Skalierung")
@@ -2738,8 +2812,12 @@
         ;; Alles andere (5+ Boundary ODER innere Punkte vorhanden) → Constrained Delaunay
         (T
          (princ (strcat "\n  Methode: Constrained Delaunay TIN ("
-                        (itoa num-corners) " Punkte, " (itoa num-boundary) " Boundary)"))
-         (setq *HAF:tin-triangles* (HAF:constrained-delaunay corner-points num-boundary nil))
+                        (itoa num-corners) " Punkte, " (itoa num-boundary) " Boundary"
+                        (if extra-constraints
+                          (strcat ", " (itoa (length extra-constraints)) " Bruchkanten-Segmente")
+                          "")
+                        ")"))
+         (setq *HAF:tin-triangles* (HAF:constrained-delaunay corner-points num-boundary extra-constraints))
          (if *HAF:tin-triangles*
            (progn
              (princ (strcat "\n  " (itoa (length *HAF:tin-triangles*)) " Dreiecke (nur innerhalb Umrandung)"))
