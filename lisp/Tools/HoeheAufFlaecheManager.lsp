@@ -4,7 +4,7 @@
 ;;; Oberflaechenmanager fuer Hoeheninterpolation in AutoCAD
 ;;; Persistente Oberflaechen mit Constrained Delaunay TIN
 ;;;
-;;; Version: 1.0.0
+;;; Version: 1.1.1
 ;;; Datum: 2026-03-20
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAFM (HoeheAufFlaecheManager)
@@ -40,7 +40,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *HAFM:version* "1.0.0")
+(setq *HAFM:version* "1.1.1")
 (setq *HAFM:namespace* "HAFM")
 (setq *HAFM:appdata-folder* "HoeheAufFlaecheManager")
 (setq *HAFM:dict-name* "HAF_Surfaces")  ;; Dictionary-Name in DWG
@@ -3616,6 +3616,252 @@
 )
 
 ;;; ============================================================================
+;;; SURFACE MANAGER (Sub-Dialog aus Settings)
+;;; ============================================================================
+
+;;; Schreibt DCL fuer Surface-Manager Dialog
+(defun HAFM:write-surface-mgr-dcl ( / dcl-file fp)
+  (setq dcl-file (vl-filename-mktemp "hafm_sm" nil ".dcl"))
+  (setq fp (open dcl-file "w"))
+  
+  (write-line "hafm_surfmgr : dialog {" fp)
+  (write-line "  label = \"Oberflaechen-Verwaltung\";" fp)
+  (write-line "  spacer;" fp)
+  
+  ;; Dropdown zur Auswahl
+  (write-line "  : popup_list {" fp)
+  (write-line "    key = \"surface_list\";" fp)
+  (write-line "    label = \"Oberflaeche:\";" fp)
+  (write-line "    width = 40;" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  
+  ;; Properties Listbox
+  (write-line "  : list_box {" fp)
+  (write-line "    key = \"props\";" fp)
+  (write-line "    label = \"Eigenschaften\";" fp)
+  (write-line "    width = 50;" fp)
+  (write-line "    height = 12;" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  
+  ;; Buttons
+  (write-line "  : row {" fp)
+  (write-line "    : button {" fp)
+  (write-line "      key = \"btn_delete\";" fp)
+  (write-line "      label = \"Loeschen\";" fp)
+  (write-line "      width = 12;" fp)
+  (write-line "    }" fp)
+  (write-line "    : button {" fp)
+  (write-line "      key = \"btn_close\";" fp)
+  (write-line "      label = \"Schliessen\";" fp)
+  (write-line "      width = 12;" fp)
+  (write-line "      is_default = true;" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  
+  (write-line "}" fp)
+  (close fp)
+  dcl-file
+)
+
+;;; Baut Properties-Liste fuer eine Oberflaeche
+;;; Rueckgabe: Liste von Strings fuer list_box
+(defun HAFM:build-surface-props (name / data boundary breaklines inner-pts holes
+                                       settings handles props min-h max-h)
+  (setq data (HAFM:load-surface name))
+  (if (null data)
+    (list "(keine Daten)")
+    (progn
+      (setq boundary   (cdr (assoc "BOUNDARY"   data)))
+      (setq breaklines (cdr (assoc "BREAKLINES" data)))
+      (setq inner-pts  (cdr (assoc "INNER_PTS"  data)))
+      (setq holes      (cdr (assoc "HOLES"      data)))
+      (setq settings   (cdr (assoc "SETTINGS"   data)))
+      (setq handles    (cdr (assoc "ENTITY_HANDLES" data)))
+      
+      (setq props nil)
+      (setq props (append props (list (strcat "Name: " name))))
+      (setq props (append props (list "")))
+      
+      ;; Umrandung
+      (setq props (append props (list (strcat "Umrandung: " (itoa (length boundary)) " Punkte"))))
+      (if boundary
+        (progn
+          (setq min-h (apply 'min (mapcar 'caddr boundary)))
+          (setq max-h (apply 'max (mapcar 'caddr boundary)))
+          (setq props (append props (list (strcat "  Hoehen: " (rtos min-h 2 2) " - " (rtos max-h 2 2)))))
+        )
+      )
+      
+      ;; Innere Punkte
+      (setq props (append props (list (strcat "Innere Punkte: " (itoa (length inner-pts))))))
+      (if inner-pts
+        (progn
+          (setq min-h (apply 'min (mapcar 'caddr inner-pts)))
+          (setq max-h (apply 'max (mapcar 'caddr inner-pts)))
+          (setq props (append props (list (strcat "  Hoehen: " (rtos min-h 2 2) " - " (rtos max-h 2 2)))))
+        )
+      )
+      
+      ;; Bruchkanten
+      (setq props (append props (list (strcat "Bruchkanten: " (itoa (length breaklines))))))
+      (if breaklines
+        (foreach bl breaklines
+          (setq props (append props (list (strcat "  BK: " (itoa (length bl)) " Punkte"))))
+        )
+      )
+      
+      ;; Loecher
+      (setq props (append props (list (strcat "Loecher: " (itoa (length holes))))))
+      
+      ;; Settings
+      (setq props (append props (list "")))
+      (if settings
+        (progn
+          (setq props (append props (list (strcat "Skalierung: " (if (cdr (assoc "SCALE" settings)) (cdr (assoc "SCALE" settings)) "1")))))
+        )
+      )
+      
+      ;; Entities
+      (setq props (append props (list (strcat "Entities: " (itoa (length handles))))))
+      
+      ;; Gesamt-Punkte
+      (setq props (append props (list "")))
+      (setq props (append props (list (strcat "Gesamt: " 
+        (itoa (+ (length boundary) (length inner-pts)
+                 (apply '+ (mapcar 'length breaklines)))) " Punkte"))))
+      
+      props
+    )
+  )
+)
+
+;;; Oeffnet Surface-Manager Dialog
+;;; Kann aus Settings oder standalone aufgerufen werden
+(defun HAFM:show-surface-manager ( / dcl-file dcl-id result surfaces
+                                      sel-idx sel-name props)
+  (HAFM:log-write "INFO" "Surface-Manager geoeffnet")
+  (setq surfaces (HAFM:list-surfaces))
+  
+  (if (null surfaces)
+    (progn
+      (alert "Keine Oberflaechen in dieser Zeichnung.")
+      (HAFM:log-write "INFO" "Surface-Manager: keine Oberflaechen")
+    )
+    (progn
+      ;; DCL schreiben
+      (setq dcl-file (HAFM:write-surface-mgr-dcl))
+      (setq dcl-id (load_dialog dcl-file))
+      
+      (setq result 1)  ;; Start: Dialog aufbauen
+      
+      (while (> result 0)
+        (if (not (new_dialog "hafm_surfmgr" dcl-id))
+          (progn
+            (HAFM:log-write "ERROR" "Surface-Manager DCL Fehler")
+            (setq result 0)
+          )
+          (progn
+            ;; Surfaces aktualisieren
+            (setq surfaces (HAFM:list-surfaces))
+            (if (null surfaces)
+              (progn
+                (alert "Keine Oberflaechen mehr vorhanden.")
+                (setq result 0)
+              )
+              (progn
+                ;; Dropdown befuellen
+                (start_list "surface_list")
+                (foreach s surfaces (add_list s))
+                (end_list)
+                (set_tile "surface_list" "0")
+                
+                ;; Properties der ersten Oberflaeche anzeigen
+                (setq sel-name (car surfaces))
+                (setq props (HAFM:build-surface-props sel-name))
+                (start_list "props")
+                (foreach p props (add_list p))
+                (end_list)
+                
+                ;; Cache fuer action_tile
+                (setq *HAFM:tmp-surfaces* surfaces)
+                
+                ;; Dropdown-Wechsel: Properties aktualisieren
+                (action_tile "surface_list"
+                  (strcat
+                    "(setq *HAFM:tmp-sel-idx* (atoi (get_tile \"surface_list\")))"
+                    "(setq *HAFM:tmp-sel-name* (nth *HAFM:tmp-sel-idx* *HAFM:tmp-surfaces*))"
+                    "(if *HAFM:tmp-sel-name*"
+                    "  (progn"
+                    "    (setq *HAFM:tmp-props* (HAFM:build-surface-props *HAFM:tmp-sel-name*))"
+                    "    (start_list \"props\")"
+                    "    (foreach p *HAFM:tmp-props* (add_list p))"
+                    "    (end_list)"
+                    "  )"
+                    ")"
+                  )
+                )
+                
+                ;; Loeschen-Button
+                (action_tile "btn_delete"
+                  (strcat
+                    "(setq *HAFM:tmp-sel-idx* (atoi (get_tile \"surface_list\")))"
+                    "(setq *HAFM:tmp-sel-name* (nth *HAFM:tmp-sel-idx* *HAFM:tmp-surfaces*))"
+                    "(if *HAFM:tmp-sel-name*"
+                    "  (done_dialog 2)"
+                    ")"
+                  )
+                )
+                
+                ;; Schliessen
+                (action_tile "btn_close" "(done_dialog 0)")
+                
+                ;; Dialog starten
+                (setq result (start_dialog))
+                
+                ;; Auswerten
+                (cond
+                  ;; Loeschen (result = 2)
+                  ((= result 2)
+                   (if *HAFM:tmp-sel-name*
+                     (progn
+                       (HAFM:delete-surface *HAFM:tmp-sel-name*)
+                       (HAFM:log-write "INFO" (strcat "Surface geloescht via Manager: " *HAFM:tmp-sel-name*))
+                       ;; Pruefen ob noch Oberflaechen da sind
+                       (if (HAFM:list-surfaces)
+                         (setq result 1)  ;; Dialog neu oeffnen
+                         (progn
+                           (princ "\n  Alle Oberflaechen geloescht.")
+                           (setq result 0)  ;; Schliessen
+                         )
+                       )
+                     )
+                   )
+                  )
+                  ;; Schliessen (result = 0)
+                  (T nil)
+                )
+              )
+            )
+          )
+        )
+      )
+      
+      ;; Aufraeumen
+      (unload_dialog dcl-id)
+      (vl-file-delete dcl-file)
+      (setq *HAFM:tmp-surfaces* nil)
+      (setq *HAFM:tmp-sel-idx* nil)
+      (setq *HAFM:tmp-sel-name* nil)
+      (setq *HAFM:tmp-props* nil)
+    )
+  )
+  (HAFM:log-write "INFO" "Surface-Manager geschlossen")
+)
+
+
+;;; ============================================================================
 ;;; SETTINGS (DCL Dialog)
 ;;; ============================================================================
 
@@ -3877,6 +4123,16 @@
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
   
+  ;; --- Oberflaechen-Verwaltung ---
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Gespeicherte Oberflaechen\";" fp)
+  (write-line "    : button {" fp)
+  (write-line "      key = \"btn_surfaces\";" fp)
+  (write-line "      label = \"Oberflaechen verwalten...\";" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  
   ;; --- Info ---
   (write-line "  : text {" fp)
   (write-line "    key = \"info\";" fp)
@@ -4026,6 +4282,9 @@
           "(done_dialog 2)"
         )
       )
+      
+      ;; Surface-Manager Button: Einfach schliessen und extern oeffnen
+      (action_tile "btn_surfaces" "(done_dialog 3)")
       
       ;; OK: Werte in globale Vars speichern VOR done_dialog (Sub-Dialog Bug!)
       (action_tile "accept"
@@ -4209,9 +4468,19 @@
           (unload_dialog dcl-id)
           (vl-file-delete dcl-file)
           (manage-block-import "HAFM")
-          ;; Settings erneut oeffnen
-          (HAFM:log-write "INFO" "Settings erneut oeffnen nach Block-Verwaltung")
-          (HAFM:show-settings)
+          ;; KEIN rekursiver show-settings Aufruf!
+          (HAFM:log-write "INFO" "Block-Verwaltung geschlossen, Settings beendet")
+        )
+        
+        ;; Surface-Manager (result = 3)
+        ((= result 3)
+          (HAFM:log-write "INFO" "Surface-Manager geoeffnet aus Settings")
+          (unload_dialog dcl-id)
+          (vl-file-delete dcl-file)
+          (HAFM:show-surface-manager)
+          ;; KEIN rekursiver show-settings Aufruf!
+          ;; User kann HAFMSETTINGS erneut aufrufen wenn noetig
+          (HAFM:log-write "INFO" "Surface-Manager geschlossen, Settings beendet")
         )
         
         ;; Abbrechen (result = 0)
@@ -4221,8 +4490,8 @@
         )
       )
       
-      ;; Aufraeumen (nur wenn nicht schon durch result=2)
-      (if (/= result 2)
+      ;; Aufraeumen (nur wenn nicht schon durch result=2 oder 3)
+      (if (and (/= result 2) (/= result 3))
         (progn
           (unload_dialog dcl-id)
           (vl-file-delete dcl-file)
