@@ -2,7 +2,7 @@
 ;;; Hoeheninterpolation auf einer Flaeche definiert durch 3-4 Eckpunkte
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 2.1.0
+;;; Version: 2.1.1
 ;;; Datum: 2026-03-20
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAF (HoeheAufFlaeche)
@@ -27,7 +27,7 @@
 ;;; KONSTANTEN (Top-Level erlaubt)
 ;;; ============================================================================
 
-(setq *HAF:version* "2.1.0")
+(setq *HAF:version* "2.1.1")
 (setq *HAF:appdata-folder* "HoeheAufFlaeche")
 (setq *HAF:blockname* "BLK_Hoehenkote")
 
@@ -1395,28 +1395,77 @@
 
 ;;; Berechnet Hoehenlinie in einem Dreieck
 ;;; Findet die 2 Kanten die von der Zielhoehe geschnitten werden
-;;;
-;;; Parameter:
-;;;   p1, p2, p3 - Eckpunkte des Dreiecks
-;;;   h1, h2, h3 - Hoehen
-;;;   target-h - Zielhoehe
+;;; Behandelt Spezialfaelle:
+;;;   - Zielhoehe trifft genau einen Eckpunkt (3 Hits → Duplikate entfernen)
+;;;   - Zielhoehe laeuft entlang einer Kante (ha=hb=target)
 ;;;
 ;;; Rueckgabe: Liste (punkt1 punkt2) oder nil wenn kein Schnitt
-(defun HAF:contour-in-triangle (p1 h1 p2 h2 p3 h3 target-h / hit1 hit2 hit3 result)
-  ;; Pruefe alle 3 Kanten
-  (setq hit1 (HAF:edge-height-point p1 p2 h1 h2 target-h))  ;; Kante 1-2
-  (setq hit2 (HAF:edge-height-point p2 p3 h2 h3 target-h))  ;; Kante 2-3
-  (setq hit3 (HAF:edge-height-point p3 p1 h3 h1 target-h))  ;; Kante 3-1
-  ;; Sammle Treffer (genau 2 erwartet, oder 0 wenn Hoehe ausserhalb)
-  (setq result nil)
-  (if hit1 (setq result (cons hit1 result)))
-  (if hit2 (setq result (cons hit2 result)))
-  (if hit3 (setq result (cons hit3 result)))
-  (HAF:debug (strcat "contour-in-triangle: target=" (rtos target-h 2 2)
-                     " hits=" (itoa (length result))))
-  (if (= (length result) 2)
-    result ;; (punkt1 punkt2)
-    nil
+(defun HAF:contour-in-triangle (p1 h1 p2 h2 p3 h3 target-h
+                                 / hit1 hit2 hit3 result eps unique-result
+                                   edge-on-height pa pb)
+  (setq eps 0.001)
+  
+  ;; Spezialfall: Eine ganze Kante liegt auf Zielhoehe
+  ;; (beide Endpunkte haben Zielhoehe → Kante IST die Hoehenlinie)
+  (setq edge-on-height nil)
+  (if (and (< (abs (- h1 target-h)) eps) (< (abs (- h2 target-h)) eps))
+    (setq edge-on-height (list p1 p2))
+  )
+  (if (and (null edge-on-height) (< (abs (- h2 target-h)) eps) (< (abs (- h3 target-h)) eps))
+    (setq edge-on-height (list p2 p3))
+  )
+  (if (and (null edge-on-height) (< (abs (- h3 target-h)) eps) (< (abs (- h1 target-h)) eps))
+    (setq edge-on-height (list p3 p1))
+  )
+  
+  (if edge-on-height
+    (progn
+      (HAF:debug (strcat "contour-in-triangle: Kante auf Hoehe " (rtos target-h 2 2)))
+      edge-on-height
+    )
+    (progn
+      ;; Normale Berechnung: Schnittpunkte auf den 3 Kanten
+      (setq hit1 (HAF:edge-height-point p1 p2 h1 h2 target-h))
+      (setq hit2 (HAF:edge-height-point p2 p3 h2 h3 target-h))
+      (setq hit3 (HAF:edge-height-point p3 p1 h3 h1 target-h))
+      
+      ;; Sammle Treffer
+      (setq result nil)
+      (if hit1 (setq result (cons hit1 result)))
+      (if hit2 (setq result (cons hit2 result)))
+      (if hit3 (setq result (cons hit3 result)))
+      
+      (HAF:debug (strcat "contour-in-triangle: target=" (rtos target-h 2 2)
+                         " hits=" (itoa (length result))))
+      
+      (cond
+        ;; Genau 2 Treffer → normal
+        ((= (length result) 2)
+         result
+        )
+        ;; 3 Treffer → Zielhoehe trifft Eckpunkt (Duplikate entfernen)
+        ((= (length result) 3)
+         ;; Entferne Duplikate (Punkte die < eps auseinander liegen)
+         (setq unique-result (list (car result)))
+         (foreach pt (cdr result)
+           (if (not (vl-some
+                      '(lambda (existing)
+                         (< (distance (list (car pt) (cadr pt))
+                                      (list (car existing) (cadr existing))) eps))
+                      unique-result))
+             (setq unique-result (cons pt unique-result))
+           )
+         )
+         (HAF:debug (strcat "  Nach Duplikat-Entfernung: " (itoa (length unique-result))))
+         (if (= (length unique-result) 2)
+           unique-result
+           nil
+         )
+        )
+        ;; 0 oder 1 Treffer → kein Schnitt
+        (T nil)
+      )
+    )
   )
 )
 
