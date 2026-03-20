@@ -1273,23 +1273,26 @@
 
 ;;; Erstellt die Listbox-Einträge für den DCL-Dialog
 ;;; Rückgabe: Liste von Strings für list_box (oder nil)
-(defun BLI:build-block-list ( / all-paths standard-block entries)
+(defun BLI:build-block-list ( / all-paths standard-block dwg-block entries name marker)
   (setq all-paths (read-all-block-paths))
   (setq standard-block (get-standard-block))
+  (setq dwg-block (BLI:dwg-block-read nil))
   (setq entries '())
 
   (if all-paths
     (foreach pair all-paths
       (if (not (wcmatch (car pair) "*STANDARD*"))
-        (setq entries
-          (append entries
-            (list
-              (strcat (car pair)
-                (if (eq (car pair) standard-block) "  [STANDARD]" "")
-                (if (findfile (cdr pair)) "  OK" "  FEHLT!")
-              )
+        (progn
+          (setq name (car pair))
+          (setq marker
+            (cond
+              ((and (eq name dwg-block) (eq name standard-block)) " [DWG+STD]")
+              ((eq name dwg-block) " [DWG]")
+              ((eq name standard-block) " [STD]")
+              (T "")
             )
           )
+          (setq entries (append entries (list (strcat name marker))))
         )
       )
     )
@@ -1302,8 +1305,8 @@
 (defun BLI:extract-blockname (entry / pos)
   (if entry
     (progn
-      ;; Entferne alles ab erstem doppeltem Leerzeichen
-      (setq pos (vl-string-search "  " entry))
+      ;; Entferne " [...]" Suffix
+      (setq pos (vl-string-search " [" entry))
       (if pos
         (substr entry 1 pos)
         entry
@@ -1374,7 +1377,9 @@
             (setq selected-name (BLI:extract-blockname (car entries)))
             (setq block-path (read-block-path selected-name))
             (set_tile "path_info"
-              (if block-path (strcat "Pfad: " block-path) "Pfad: -"))
+              (if block-path
+                (strcat "Pfad: " block-path (if (findfile block-path) "" "  NICHT GEFUNDEN!"))
+                "Pfad: -"))
           )
           (progn
             (start_list "block_list")
@@ -1402,7 +1407,7 @@
             "(setq *BLI:tmp-sel-idx* (atoi (get_tile \"block_list\")))"
             "(setq *BLI:tmp-sel-name* (BLI:extract-blockname (nth *BLI:tmp-sel-idx* *BLI:tmp-entries*)))"
             "(if *BLI:tmp-sel-name*"
-            "  (set_tile \"path_info\" (strcat \"Pfad: \" (if (read-block-path *BLI:tmp-sel-name*) (read-block-path *BLI:tmp-sel-name*) \"-\")))"
+            "  (progn (setq *BLI:tmp-path* (read-block-path *BLI:tmp-sel-name*)) (set_tile \"path_info\" (if *BLI:tmp-path* (strcat \"Pfad: \" *BLI:tmp-path* (if (findfile *BLI:tmp-path*) \"\" \"  NICHT GEFUNDEN!\")) \"Pfad: -\")))"
             "  (set_tile \"path_info\" \"Pfad: -\")"
             ")"
           )
@@ -1534,9 +1539,10 @@
   (vl-file-delete dcl-file)
 
     ;; Temp-Variablen aufräumen
-  (setq *BLI:tmp-sel-idx* nil)
+    (setq *BLI:tmp-sel-idx* nil)
   (setq *BLI:tmp-sel-name* nil)
   (setq *BLI:tmp-entries* nil)
+  (setq *BLI:tmp-path* nil)
 
   ;; Stelle alten Context wieder her
   (setq *block-import-context* old-context)
