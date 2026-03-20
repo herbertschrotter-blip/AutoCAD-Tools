@@ -2,7 +2,7 @@
 ;;; Hoeheninterpolation auf einer Flaeche definiert durch 3-4 Eckpunkte
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 3.1.0
+;;; Version: 3.1.1
 ;;; Datum: 2026-03-20
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAF (HoeheAufFlaeche)
@@ -27,7 +27,7 @@
 ;;; KONSTANTEN (Top-Level erlaubt)
 ;;; ============================================================================
 
-(setq *HAF:version* "3.1.0")
+(setq *HAF:version* "3.1.1")
 (setq *HAF:appdata-folder* "HoeheAufFlaeche")
 (setq *HAF:blockname* "BLK_Hoehenkote")
 
@@ -1629,19 +1629,27 @@
 )
 
 ;;; Hoehenlinie ueber alle TIN-Dreiecke berechnen
+;;; Nur Dreiecke deren Schwerpunkt innerhalb der Umrandung liegt
 ;;; Rueckgabe: Liste von Segmenten ((p1 p2) ...)
-(defun HAF:contour-tin (pts heights triangles target-h
-                        / tri pa pb pc ha hb hc seg result)
+(defun HAF:contour-tin (pts heights triangles target-h polygon
+                        / tri pa pb pc ha hb hc seg result cx cy)
   (setq result nil)
   (foreach tri triangles
     (setq pa (nth (car tri) pts))
     (setq pb (nth (cadr tri) pts))
     (setq pc (nth (caddr tri) pts))
-    (setq ha (nth (car tri) heights))
-    (setq hb (nth (cadr tri) heights))
-    (setq hc (nth (caddr tri) heights))
-    (setq seg (HAF:contour-in-triangle pa ha pb hb pc hc target-h))
-    (if seg (setq result (cons seg result)))
+    ;; Schwerpunkt pruefen
+    (setq cx (/ (+ (car pa) (car pb) (car pc)) 3.0))
+    (setq cy (/ (+ (cadr pa) (cadr pb) (cadr pc)) 3.0))
+    (if (or (null polygon) (HAF:point-in-polygon (list cx cy) polygon))
+      (progn
+        (setq ha (nth (car tri) heights))
+        (setq hb (nth (cadr tri) heights))
+        (setq hc (nth (caddr tri) heights))
+        (setq seg (HAF:contour-in-triangle pa ha pb hb pc hc target-h))
+        (if seg (setq result (cons seg result)))
+      )
+    )
   )
   (HAF:debug (strcat "contour-tin: " (itoa (length result)) " Segmente bei H=" (rtos target-h 2 2)))
   (if result (reverse result) nil)
@@ -1685,37 +1693,50 @@
 )
 
 ;;; Visualisiert TIN als Linien (Dreieckskanten)
-;;; Zeichnet nur Kanten deren Mittelpunkt innerhalb der Umrandung liegt
+;;; Zeichnet nur Kanten von Dreiecken deren Schwerpunkt innerhalb der Umrandung liegt
+;;; Vermeidet Duplikate durch Kanten-Tracking
 ;;; Rueckgabe: Liste von Entity-Names
 (defun HAF:draw-tin (pts heights triangles polygon
                      / tri pa pb pc ha hb hc entities ent
-                       p1-3d p2-3d p3-3d edges edge)
+                       p1-3d p2-3d p3-3d edges edge
+                       cx cy drawn-edges edge-key)
   (setq entities nil)
+  (setq drawn-edges nil) ;; Vermeidet doppelte Kanten
   (foreach tri triangles
     (setq pa (nth (car tri) pts))
     (setq pb (nth (cadr tri) pts))
     (setq pc (nth (caddr tri) pts))
-    (setq ha (nth (car tri) heights))
-    (setq hb (nth (cadr tri) heights))
-    (setq hc (nth (caddr tri) heights))
-    (setq p1-3d (list (car pa) (cadr pa) ha))
-    (setq p2-3d (list (car pb) (cadr pb) hb))
-    (setq p3-3d (list (car pc) (cadr pc) hc))
-    ;; 3 Kanten pro Dreieck als LINE
-    (setq edges (list (list p1-3d p2-3d)
-                       (list p2-3d p3-3d)
-                       (list p3-3d p1-3d)))
-    (foreach edge edges
-      ;; Nur zeichnen wenn Mittelpunkt innerhalb Umrandung
-      (if (or (null polygon) (HAF:segment-in-polygon edge polygon))
-        (progn
-          (setq ent (entmakex
-            (list '(0 . "LINE") '(100 . "AcDbEntity") '(8 . "0")
-                  (cons 62 *HAF:tin-color*)
-                  '(100 . "AcDbLine")
-                  (cons 10 (car edge))
-                  (cons 11 (cadr edge)))))
-          (if ent (setq entities (cons ent entities)))
+    ;; Schwerpunkt des Dreiecks pruefen
+    (setq cx (/ (+ (car pa) (car pb) (car pc)) 3.0))
+    (setq cy (/ (+ (cadr pa) (cadr pb) (cadr pc)) 3.0))
+    (if (or (null polygon) (HAF:point-in-polygon (list cx cy) polygon))
+      (progn
+        (setq ha (nth (car tri) heights))
+        (setq hb (nth (cadr tri) heights))
+        (setq hc (nth (caddr tri) heights))
+        (setq p1-3d (list (car pa) (cadr pa) ha))
+        (setq p2-3d (list (car pb) (cadr pb) hb))
+        (setq p3-3d (list (car pc) (cadr pc) hc))
+        ;; 3 Kanten pro Dreieck
+        (setq edges (list
+          (list (min (car tri) (cadr tri)) (max (car tri) (cadr tri)) p1-3d p2-3d)
+          (list (min (cadr tri) (caddr tri)) (max (cadr tri) (caddr tri)) p2-3d p3-3d)
+          (list (min (caddr tri) (car tri)) (max (caddr tri) (car tri)) p3-3d p1-3d)))
+        (foreach edge edges
+          ;; Kanten-Key fuer Duplikat-Check (sortierte Indizes)
+          (setq edge-key (strcat (itoa (car edge)) "-" (itoa (cadr edge))))
+          (if (not (member edge-key drawn-edges))
+            (progn
+              (setq drawn-edges (cons edge-key drawn-edges))
+              (setq ent (entmakex
+                (list '(0 . "LINE") '(100 . "AcDbEntity") '(8 . "0")
+                      (cons 62 *HAF:tin-color*)
+                      '(100 . "AcDbLine")
+                      (cons 10 (caddr edge))
+                      (cons 11 (cadddr edge)))))
+              (if ent (setq entities (cons ent entities)))
+            )
+          )
         )
       )
     )
@@ -1934,7 +1955,7 @@
 ;;;   diagonal - "13"/"24" (nur bei 4 Punkten)
 ;;;
 ;;; Rueckgabe: Liste von Liniensegmenten ((p1 p2) ...) oder nil
-(defun HAF:compute-contour (pts heights target-h diagonal / num-pts)
+(defun HAF:compute-contour (pts heights target-h diagonal polygon / num-pts)
   (setq num-pts (length pts))
   (HAF:debug (strcat "compute-contour: " (itoa num-pts) " Punkte, target=" (rtos target-h 2 2)))
   (cond
@@ -1942,7 +1963,7 @@
     ((= num-pts 4) (HAF:contour-4pt pts heights target-h diagonal))
     ((>= num-pts 5)
      (if *HAF:tin-triangles*
-       (HAF:contour-tin pts heights *HAF:tin-triangles* target-h)
+       (HAF:contour-tin pts heights *HAF:tin-triangles* target-h polygon)
        nil))
     (T nil)
   )
@@ -1956,8 +1977,7 @@
   (foreach seg segments
     (setq p1 (car seg))
     (setq p2 (cadr seg))
-    (if (and p1 p2
-             (or (null polygon) (HAF:segment-in-polygon seg polygon)))
+    (if (and p1 p2)
       (progn
         (setq ent (entmakex
           (list '(0 . "LINE") '(100 . "AcDbEntity") '(8 . "0")
@@ -2019,13 +2039,12 @@
                                 " start=" (rtos target-h 2 2)))
   ;; Schleife ueber alle Raster-Niveaus
   (while (<= target-h max-h)
-    (setq segments (HAF:compute-contour pts heights target-h diagonal))
+    (setq segments (HAF:compute-contour pts heights target-h diagonal polygon))
     (if segments
       (progn
         ;; Zeichne Segmente mit Grid-Farbe (nur innerhalb Polygon)
         (foreach seg segments
-          (if (and (car seg) (cadr seg)
-                   (or (null polygon) (HAF:segment-in-polygon seg polygon)))
+          (if (and (car seg) (cadr seg))
             (progn
               (setq entities (entmakex
                 (list '(0 . "LINE") '(100 . "AcDbEntity") '(8 . "0")
@@ -2444,7 +2463,7 @@
              (progn
                (HAF:log-write "INFO" (strcat "Hoehenlinie: H=" (rtos target-h 2 2)))
                (setq segments (HAF:compute-contour corner-points corner-heights
-                                                    target-h use-diagonal))
+                                                    target-h use-diagonal corner-points))
                (if segments
                  (progn
                    (setq contour-entities (HAF:draw-contour segments corner-points))
