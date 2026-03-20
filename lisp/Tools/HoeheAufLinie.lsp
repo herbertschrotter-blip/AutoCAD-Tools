@@ -2,7 +2,7 @@
 ;;; Hoeheninterpolation entlang einer Linie zwischen zwei Fixpunkten
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 2.3.5
+;;; Version: 2.4.0
 ;;; Datum: 2026-03-19
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAL (HoeheAufLinie)
@@ -24,7 +24,7 @@
 ;;; KONSTANTEN (Top-Level erlaubt)
 ;;; ============================================================================
 
-(setq *HAL:version* "2.3.1")
+(setq *HAL:version* "2.4.0")
 (setq *HAL:appdata-folder* "HoeheAufLinie")
 (setq *HAL:blockname* "BLK_Hoehenkote")
 
@@ -279,76 +279,50 @@
   )
 )
 
-(defun HAL:dwg-custom-read (prop-name / si num-props i key val found result)
-  (setq si (vl-catch-all-apply 'vla-get-SummaryInfo
-             (list (vla-get-ActiveDocument (vlax-get-acad-object)))))
-  (if (vl-catch-all-error-p si)
-    (progn (HAL:log-write "ERROR" "SummaryInfo nicht verfuegbar") nil)
-    (progn
-      (setq found nil result nil)
-      (setq num-props (vla-NumCustomInfo si))
-      (if (> num-props 0)
-        (progn
-          (setq i 0)
-          (while (and (< i num-props) (null found))
-            (setq key "" val "")
-            (vl-catch-all-apply
-              '(lambda ()
-                (vla-GetCustomByIndex si i 'key 'val)
-                (setq key (HAL:safe-variant-value key))
-                (setq val (HAL:safe-variant-value val))
-                (if (= (strcase key) (strcase prop-name))
-                  (progn (setq result val) (setq found T))
-                )
-              )
-            )
-            (setq i (1+ i))
-          )
-        )
-      )
-      (HAL:debug (strcat "HAL:dwg-custom-read: " prop-name "=" (if result result "nil")))
-      result
+(defun HAL:dwg-custom-read (prop-name / doc si num-props i key val found result)
+  ;; Direkt aufrufen, NICHT vl-catch-all-apply (Referenz-Problem bei GetCustomByIndex!)
+  (setq doc (vla-get-activedocument (vlax-get-acad-object)))
+  (setq si (vla-get-summaryinfo doc))
+  (setq found nil result nil)
+  (setq num-props (vla-numcustominfo si))
+  (setq i 0)
+  (while (and (< i num-props) (null found))
+    (vla-getcustombyindex si i 'key 'val)
+    (setq key (HAL:safe-variant-value key))
+    (setq val (HAL:safe-variant-value val))
+    (if (and key (= (strcase key) (strcase prop-name)))
+      (progn (setq result val) (setq found T))
     )
+    (setq i (1+ i))
   )
+  (HAL:debug (strcat "HAL:dwg-custom-read: " prop-name "=" (if result result "nil")))
+  result
 )
 
-(defun HAL:dwg-custom-write (prop-name prop-value / si num-props i key val found)
-  (setq si (vl-catch-all-apply 'vla-get-SummaryInfo
-             (list (vla-get-ActiveDocument (vlax-get-acad-object)))))
-  (if (vl-catch-all-error-p si)
-    (progn (HAL:log-write "ERROR" "SummaryInfo nicht verfuegbar") nil)
-    (progn
-      (setq found nil)
-      (setq num-props (vla-NumCustomInfo si))
-      (if (> num-props 0)
-        (progn
-          (setq i 0)
-          (while (and (< i num-props) (null found))
-            (setq key "" val "")
-            (vl-catch-all-apply
-              '(lambda ()
-                (vla-GetCustomByIndex si i 'key 'val)
-                (setq key (HAL:safe-variant-value key))
-                (if (= (strcase key) (strcase prop-name))
-                  (progn
-                    (vla-SetCustomByIndex si i prop-name prop-value)
-                    (setq found T)
-                  )
-                )
-              )
-            )
-            (setq i (1+ i))
-          )
-        )
+(defun HAL:dwg-custom-write (prop-name prop-value / doc si num-props i key val found)
+  ;; Direkt aufrufen, NICHT vl-catch-all-apply (Referenz-Problem bei GetCustomByIndex!)
+  (setq doc (vla-get-activedocument (vlax-get-acad-object)))
+  (setq si (vla-get-summaryinfo doc))
+  (setq found nil)
+  (setq num-props (vla-numcustominfo si))
+  (setq i 0)
+  (while (and (< i num-props) (not found))
+    (vla-getcustombyindex si i 'key 'val)
+    (setq key (HAL:safe-variant-value key))
+    (if (and key (= (strcase key) (strcase prop-name)))
+      (progn
+        (vla-setcustombyindex si i prop-name prop-value)
+        (setq found T)
       )
-      (if (not found)
-        (vl-catch-all-apply 'vla-AddCustomInfo (list si prop-name prop-value))
-      )
-      (HAL:debug (strcat "HAL:dwg-custom-write: " prop-name "=" prop-value))
-      (HAL:log-write "INFO" (strcat "DWG Custom Property: " prop-name "=" prop-value))
-      T
     )
+    (setq i (1+ i))
   )
+  (if (not found)
+    (vla-addcustominfo si prop-name prop-value)
+  )
+  (HAL:debug (strcat "HAL:dwg-custom-write: " prop-name "=" prop-value))
+  (HAL:log-write "INFO" (strcat "DWG Custom Property: " prop-name "=" prop-value))
+  T
 )
 
 (defun HAL:read-dwg-scale ( / val)
@@ -607,7 +581,12 @@
       (set_tile "xline_keep" (if *HAL:xline-keep* "1" "0"))
       (set_tile "debug" (if *HAL:debug-mode* "1" "0"))
       (set_tile "logpath" (strcat "Log: " (HAL:get-appdata-path) "\\Log"))
-      (set_tile "blockname_info" (strcat "Block: " *HAL:blockname*))
+      (setq *block-import-context* "HoeheAufLinie")
+      (set_tile "blockname_info"
+        (strcat "Block: "
+          (if (BLI:resolve-blockname "HoeheAufLinie")
+            (BLI:resolve-blockname "HoeheAufLinie")
+            "(nicht konfiguriert)")))
       (set_tile "info" (strcat "HoeheAufLinie v" *HAL:version*))
       
       ;; Live-Vorschau Layer-Suffix
@@ -1079,9 +1058,15 @@
 ;;; ============================================================================
 
 (defun HAL:insert-block (einfuegepunkt hoehe scale skip-if-exists / blockName heightStr old-attdia block-available importEnt ent attribs insertionPoint hk-layer ent-data)
-    ;; Blockname: DWG Custom Property → Globaler Standard → Fallback auf *HAL:blockname*
+    ;; Blockname aus BlockImport (DWG Property → Globaler Standard)
+  (setq *block-import-context* "HoeheAufLinie")
   (setq blockName (BLI:resolve-blockname "HoeheAufLinie"))
-  (if (null blockName) (setq blockName *HAL:blockname*))
+  (if (null blockName)
+    (progn
+      (HAL:log-write "ERROR" "Kein Block konfiguriert! Oeffne Block-Verwaltung.")
+      (princ "\n*** Kein Block konfiguriert! Verwende HALBlock um einen Block einzurichten. ***")
+    )
+  )
   
   (HAL:debug "=== HAL:insert-block ===")
   (HAL:debug (strcat "  einfuegepunkt=(" (rtos (car einfuegepunkt) 2 4) " " (rtos (cadr einfuegepunkt) 2 4) " " (rtos (caddr einfuegepunkt) 2 4) ")"))
@@ -1097,7 +1082,6 @@
         )
         (progn
           (HAL:debug "  Block wird eingefuegt...")
-          (setq *block-import-context* "HoeheAufLinie")
           (setq block-available (ensure-block-available blockName))
           (HAL:debug (strcat "  ensure-block-available: car=" (if (car block-available) "T" "nil")))
           
