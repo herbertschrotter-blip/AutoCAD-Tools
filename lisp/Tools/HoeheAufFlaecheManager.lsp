@@ -4,7 +4,7 @@
 ;;; Oberflaechenmanager fuer Hoeheninterpolation in AutoCAD
 ;;; Persistente Oberflaechen mit Constrained Delaunay TIN
 ;;;
-;;; Version: 1.1.1
+;;; Version: 1.2.0
 ;;; Datum: 2026-03-20
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAFM (HoeheAufFlaecheManager)
@@ -40,7 +40,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *HAFM:version* "1.1.1")
+(setq *HAFM:version* "1.2.0")
 (setq *HAFM:namespace* "HAFM")
 (setq *HAFM:appdata-folder* "HoeheAufFlaecheManager")
 (setq *HAFM:dict-name* "HAF_Surfaces")  ;; Dictionary-Name in DWG
@@ -97,6 +97,12 @@
 (setq *HAFM:tin-suffix* "TIN")
 (setq *HAFM:tin-own-layer* nil)
 (setq *HAFM:tin-use-layer* nil)
+
+;; Linien-Settings: Offset (Cyan)
+(setq *HAFM:offset-color* 4)
+(setq *HAFM:offset-prefix* "OS")    ;; User-editierbar, Offset-Wert wird angehängt
+(setq *HAFM:offset-own-layer* T)
+(setq *HAFM:offset-use-layer* nil)
 
 ;; TIN Triangles (fuer aktuelle Berechnung)
 (setq *HAFM:tin-triangles* nil)
@@ -370,6 +376,15 @@
   (if val (setq *HAFM:tin-own-layer* (= val "1")))
   (setq val (HAFM:get-config-value "TIN_USE_LAYER"))
   (if val (setq *HAFM:tin-use-layer* (= val "1")))
+  ;; Offset
+  (setq val (HAFM:get-config-value "OFFSET_COLOR"))
+  (if (and val (/= val "")) (setq *HAFM:offset-color* (atoi val)))
+  (setq val (HAFM:get-config-value "OFFSET_PREFIX"))
+  (if (and val (/= val "")) (setq *HAFM:offset-prefix* val))
+  (setq val (HAFM:get-config-value "OFFSET_OWN_LAYER"))
+  (if val (setq *HAFM:offset-own-layer* (= val "1")))
+  (setq val (HAFM:get-config-value "OFFSET_USE_LAYER"))
+  (if val (setq *HAFM:offset-use-layer* (= val "1")))
   ;; Log
   (HAFM:log-write "INFO" (strcat "Config angewendet: Debug=" (if *HAFM:debug-mode* "EIN" "AUS")))
 )
@@ -879,6 +894,95 @@
       )
     )
     pt  ;; Keyword zurueckgeben (String)
+  )
+)
+
+
+;;; ============================================================================
+;;; OFFSET BLOCK + POLYLINIE
+;;; ============================================================================
+
+;;; Fuegt Offset-Block ein auf speziellem Layer
+;;; Layer-Name: <aktuell>_HK_<prefix><offset-wert>
+;;; z.B.: 0_HK_OS-0.30
+(defun HAFM:insert-offset-block (pt height scale offset-value
+                                  / offset-str layer-name ent ent-data)
+  ;; Offset-Wert als String fuer Layer-Name
+  (setq offset-str (rtos offset-value 2 2))
+  ;; Layer-Name zusammenbauen
+  (setq layer-name (strcat (getvar "CLAYER") "_HK_" *HAFM:offset-prefix* offset-str))
+  ;; Layer erstellen falls noetig
+  (if (not (tblsearch "LAYER" layer-name))
+    (progn
+      (entmake (list '(0 . "LAYER") (cons 2 layer-name)
+                     '(6 . "Continuous") (cons 62 *HAFM:offset-color*) '(70 . 0)))
+      (HAFM:log-write "INFO" (strcat "Offset-Layer erstellt: " layer-name))
+    )
+  )
+  ;; Block einfuegen (normale insert-block Funktion)
+  (setq ent (HAFM:insert-block pt height scale nil))
+  ;; Layer umsetzen auf Offset-Layer
+  (if (and ent (entget ent))
+    (progn
+      (setq ent-data (entget ent))
+      (entmod (subst (cons 8 layer-name) (assoc 8 ent-data) ent-data))
+      (HAFM:debug (strcat "Offset-Block auf Layer: " layer-name))
+    )
+  )
+  ent
+)
+
+;;; Zeichnet Offset-Polylinie (3D) aus gesammelten Punkten
+;;; Parameter:
+;;;   pts - Punktliste ((x y h) ...)
+;;;   offset-value - Offset-Wert (fuer Layer-Name)
+;;;   closed - T = geschlossen, nil = offen
+(defun HAFM:draw-offset-polyline (pts offset-value closed
+                                   / offset-str layer-name i pt ent ent-data)
+  (if (and pts (>= (length pts) 2))
+    (progn
+      ;; Layer-Name (gleich wie Block, aber ohne _HK)
+      (setq offset-str (rtos offset-value 2 2))
+      (setq layer-name (strcat (getvar "CLAYER") "_" *HAFM:offset-prefix* offset-str))
+      ;; Layer erstellen falls noetig
+      (if (not (tblsearch "LAYER" layer-name))
+        (entmake (list '(0 . "LAYER") (cons 2 layer-name)
+                       '(6 . "Continuous") (cons 62 *HAFM:offset-color*) '(70 . 0)))
+      )
+      ;; 3D-Polylinie zeichnen
+      (command "_3DPOLY")
+      (setq i 0)
+      (while (< i (length pts))
+        (setq pt (nth i pts))
+        (command (list (car pt) (cadr pt) (caddr pt)))
+        (setq i (1+ i))
+      )
+      ;; Schliessen wenn gewuenscht
+      (if closed
+        (progn
+          (setq pt (nth 0 pts))
+          (command (list (car pt) (cadr pt) (caddr pt)))
+        )
+      )
+      (command "")
+      (setq ent (entlast))
+      ;; Layer + Farbe zuweisen
+      (if ent
+        (progn
+          (setq ent-data (entget ent))
+          (entmod (subst (cons 8 layer-name) (assoc 8 ent-data) ent-data))
+          (if (assoc 62 ent-data)
+            (entmod (subst (cons 62 *HAFM:offset-color*) (assoc 62 ent-data) (entget ent)))
+            (entmod (append (entget ent) (list (cons 62 *HAFM:offset-color*))))
+          )
+        )
+      )
+      (HAFM:log-write "INFO" (strcat "Offset-Polylinie: " (itoa (length pts)) " Punkte"
+                                      (if closed " (geschlossen)" " (offen)")
+                                      " Layer=" layer-name))
+      ent
+    )
+    nil
   )
 )
 
@@ -2262,7 +2366,9 @@
                      inner-count ss-result
                      ;; Allgemein
                      ent ent-data attrib-ent attrib-data block-name
-                     min-dist index dist i last-ent)
+                     min-dist index dist i last-ent
+                     ;; Offset
+                     offset-active offset-value offset-pts offset-height offset-entities)
   
   (HAFM:ensure-init)
   
@@ -2842,8 +2948,10 @@
                   ;; PHASE 3: INTERPOLATION (Punkte setzen, Raster, Hoehenlinien)
                   ;; ============================================================
                   
-                  (princ "\n\n--- Punkte setzen (S/H/R/E, ESC=Ende) ---")
+                  (princ "\n\n--- Punkte setzen (S/H/R/O/E, ESC=Ende) ---")
                   (setq done nil grid-entities nil contour-entities nil use-diagonal nil)
+                  ;; Offset-Status
+                  (setq offset-active nil offset-value 0.0 offset-pts nil offset-entities nil)
                   
                   ;; Alle Hoehen zusammenbauen (gleiche Reihenfolge wie all-pts)
                   (setq all-heights
@@ -2853,9 +2961,19 @@
                             inner-heights))
                   
                   (while (not done)
-                    (initget "Skalierung Hoehenlinie Raster Einstellungen")
-                    (setq pg (getpoint
-                      "\nPunkt waehlen [Skalierung/Hoehenlinie/Raster/Einstellungen]: "))
+                    (if offset-active
+                      (progn
+                        (initget "Skalierung Hoehenlinie Raster Offset Kette Einstellungen")
+                        (setq pg (getpoint
+                          (strcat "\nPunkt [Skalierung/Hoehenlinie/Raster/Offset/Kette/Einstellungen] (OS "
+                                  (rtos offset-value 2 2) "): ")))
+                      )
+                      (progn
+                        (initget "Skalierung Hoehenlinie Raster Offset Einstellungen")
+                        (setq pg (getpoint
+                          "\nPunkt [Skalierung/Hoehenlinie/Raster/Offset/Einstellungen]: "))
+                      )
+                    )
                     
                     (cond
                       ;; Skalierung
@@ -2899,12 +3017,63 @@
                          )
                        )
                       )
-                      ;; Einstellungen (placeholder)
+                      ;; Offset aktivieren/deaktivieren
+                      ((= pg "Offset")
+                       (setq offset-value (getreal (strcat "\nOffset-Wert <"
+                         (if offset-active (rtos offset-value 2 2) "0.00") ">: ")))
+                       (if (null offset-value) (setq offset-value 0.0))
+                       (if (equal offset-value 0.0 0.0001)
+                         (progn
+                           ;; Offset AUS — offene Polylinie abschliessen
+                           (if (and offset-active offset-pts (>= (length offset-pts) 2))
+                             (progn
+                               (HAFM:draw-offset-polyline offset-pts offset-value nil)
+                               (princ (strcat "\n  Offset-Polylinie: " (itoa (length offset-pts)) " Punkte (offen)"))
+                             )
+                           )
+                           (setq offset-active nil offset-pts nil)
+                           (princ "\n  Offset deaktiviert")
+                           (HAFM:log-write "INFO" "Offset deaktiviert")
+                         )
+                         (progn
+                           ;; Neuer Offset — vorherige Polylinie abschliessen
+                           (if (and offset-active offset-pts (>= (length offset-pts) 2))
+                             (progn
+                               (HAFM:draw-offset-polyline offset-pts offset-value nil)
+                               (princ (strcat "\n  Vorherige Offset-Polylinie abgeschlossen (" (itoa (length offset-pts)) " Pkt)"))
+                             )
+                           )
+                           (setq offset-active T offset-pts nil)
+                           (princ (strcat "\n  Offset aktiv: " (rtos offset-value 2 2)))
+                           (HAFM:log-write "INFO" (strcat "Offset aktiviert: " (rtos offset-value 2 2)))
+                         )
+                       )
+                      )
+                      ;; Kette schliessen (nur bei aktivem Offset)
+                      ((= pg "Kette")
+                       (if (and offset-active offset-pts (>= (length offset-pts) 3))
+                         (progn
+                           (HAFM:draw-offset-polyline offset-pts offset-value T)
+                           (princ (strcat "\n  Offset-Polylinie geschlossen (" (itoa (length offset-pts)) " Punkte)"))
+                           (HAFM:log-write "INFO" (strcat "Offset-Kette geschlossen: " (itoa (length offset-pts)) " Pkt"))
+                           (setq offset-active nil offset-pts nil)
+                         )
+                         (princ "\n*** Mindestens 3 Punkte fuer geschlossene Kette noetig ***")
+                       )
+                      )
+                      ;; Einstellungen
                       ((= pg "Einstellungen")
                        (HAFM:show-settings)
                       )
                       ;; ESC / nil = Ende
                       ((null pg)
+                       ;; Offene Offset-Polylinie abschliessen
+                       (if (and offset-active offset-pts (>= (length offset-pts) 2))
+                         (progn
+                           (HAFM:draw-offset-polyline offset-pts offset-value nil)
+                           (princ (strcat "\n  Offset-Polylinie abgeschlossen (" (itoa (length offset-pts)) " Pkt, offen)"))
+                         )
+                       )
                        (setq done T)
                       )
                       ;; Gueltiger Punkt — interpolieren
@@ -2914,13 +3083,33 @@
                          (progn
                            (setq interpolated-height (car result))
                            (setq tri-info (cadr result))
-                           (princ (strcat "\n  Hoehe: " (HAFM:format-height interpolated-height)
-                             " (" tri-info ")"))
-                           ;; Block einfuegen
-                           (HAFM:insert-block pg interpolated-height scale nil)
-                           (HAFM:log-write "INFO" (strcat "Interpolation: ("
-                             (rtos (car pg) 2 3) " " (rtos (cadr pg) 2 3)
-                             ") -> " (rtos interpolated-height 2 4) " (" tri-info ")"))
+                           (if offset-active
+                             ;; OFFSET-MODUS: Nur Offset-Block setzen
+                             (progn
+                               (setq offset-height (+ interpolated-height offset-value))
+                               (princ (strcat "\n  " (HAFM:format-height offset-height)
+                                 " (Offset " (rtos offset-value 2 2) ", " tri-info ")"))
+                               ;; Block auf Offset-Layer einfuegen
+                               (HAFM:insert-offset-block pg offset-height scale offset-value)
+                               ;; Punkt zur Polylinie hinzufuegen
+                               (setq offset-pts (append offset-pts
+                                 (list (list (car pg) (cadr pg) offset-height))))
+                               (HAFM:log-write "INFO" (strcat "Offset: ("
+                                 (rtos (car pg) 2 3) " " (rtos (cadr pg) 2 3)
+                                 ") TIN=" (rtos interpolated-height 2 3)
+                                 " OS=" (rtos offset-value 2 2)
+                                 " -> " (rtos offset-height 2 3)))
+                             )
+                             ;; NORMAL-MODUS
+                             (progn
+                               (princ (strcat "\n  Hoehe: " (HAFM:format-height interpolated-height)
+                                 " (" tri-info ")"))
+                               (HAFM:insert-block pg interpolated-height scale nil)
+                               (HAFM:log-write "INFO" (strcat "Interpolation: ("
+                                 (rtos (car pg) 2 3) " " (rtos (cadr pg) 2 3)
+                                 ") -> " (rtos interpolated-height 2 4) " (" tri-info ")"))
+                             )
+                           )
                          )
                          (princ "\n*** Punkt ausserhalb der Oberflaeche ***")
                        )
@@ -4094,6 +4283,39 @@
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
   
+  ;; --- Offset ---
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Offset (Vouten/Pilzkoepfe)\";" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"offset_own_layer\";" fp)
+  (write-line "        label = \"Eigener Layer\";" fp)
+  (write-line "      }" fp)
+  (write-line "      : edit_box {" fp)
+  (write-line "        key = \"offset_prefix\";" fp)
+  (write-line "        label = \"Prefix:\";" fp)
+  (write-line "        edit_width = 6;" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"offset_bylayer\";" fp)
+  (write-line "        label = \"Layer-Farbe\";" fp)
+  (write-line "      }" fp)
+  (write-line "      : popup_list {" fp)
+  (write-line "        key = \"offset_color\";" fp)
+  (write-line "        label = \"Farbe:\";" fp)
+  (write-line "        list = \"Rot\\nGelb\\nGruen\\nCyan\\nBlau\\nMagenta\\nWeiss\\nGrau\";" fp)
+  (write-line "        width = 12;" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "    : text {" fp)
+  (write-line "      key = \"offset_preview\";" fp)
+  (write-line "      label = \"\";" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  
   ;; --- BlockImport Pfad ---
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"BlockImport.lsp\";" fp)
@@ -4221,6 +4443,18 @@
       (set_tile "tin_color" (itoa (1- *HAFM:tin-color*)))
       (set_tile "tin_suffix" *HAFM:tin-suffix*)
       
+      ;; Offset
+      (set_tile "offset_own_layer" (if *HAFM:offset-own-layer* "1" "0"))
+      (set_tile "offset_bylayer" (if *HAFM:offset-use-layer* "1" "0"))
+      (set_tile "offset_color" (itoa (1- *HAFM:offset-color*)))
+      (set_tile "offset_prefix" *HAFM:offset-prefix*)
+      (set_tile "offset_preview" (strcat "Layer: " (getvar "CLAYER") "_HK_" *HAFM:offset-prefix* "-0.30"))
+      
+      ;; Live-Vorschau Offset-Prefix
+      (action_tile "offset_prefix"
+        "(set_tile \"offset_preview\" (strcat \"Layer: \" (getvar \"CLAYER\") \"_HK_\" (get_tile \"offset_prefix\") \"-0.30\"))"
+      )
+      
       ;; Live-Vorschau Layer-Suffix
       (action_tile "layer_suffix"
         "(set_tile \"layer_preview\" (strcat \"Vorschau: \" (getvar \"CLAYER\") \"_\" (get_tile \"layer_suffix\")))"
@@ -4279,6 +4513,10 @@
           "(setq *HAFM:tmp-tin-bylayer* (get_tile \"tin_bylayer\"))"
           "(setq *HAFM:tmp-tin-color* (get_tile \"tin_color\"))"
           "(setq *HAFM:tmp-tin-suffix* (get_tile \"tin_suffix\"))"
+          "(setq *HAFM:tmp-offset-own-layer* (get_tile \"offset_own_layer\"))"
+          "(setq *HAFM:tmp-offset-bylayer* (get_tile \"offset_bylayer\"))"
+          "(setq *HAFM:tmp-offset-color* (get_tile \"offset_color\"))"
+          "(setq *HAFM:tmp-offset-prefix* (get_tile \"offset_prefix\"))"
           "(done_dialog 2)"
         )
       )
@@ -4321,6 +4559,10 @@
           "(setq *HAFM:tmp-tin-bylayer* (get_tile \"tin_bylayer\"))"
           "(setq *HAFM:tmp-tin-color* (get_tile \"tin_color\"))"
           "(setq *HAFM:tmp-tin-suffix* (get_tile \"tin_suffix\"))"
+          "(setq *HAFM:tmp-offset-own-layer* (get_tile \"offset_own_layer\"))"
+          "(setq *HAFM:tmp-offset-bylayer* (get_tile \"offset_bylayer\"))"
+          "(setq *HAFM:tmp-offset-color* (get_tile \"offset_color\"))"
+          "(setq *HAFM:tmp-offset-prefix* (get_tile \"offset_prefix\"))"
           "(done_dialog 1)"
         )
       )
@@ -4450,6 +4692,17 @@
           (HAFM:set-config-value "TIN_COLOR" (itoa *HAFM:tin-color*))
           (HAFM:set-config-value "TIN_SUFFIX" *HAFM:tin-suffix*)
           
+          ;; Offset
+          (setq *HAFM:offset-own-layer* (= *HAFM:tmp-offset-own-layer* "1"))
+          (setq *HAFM:offset-use-layer* (= *HAFM:tmp-offset-bylayer* "1"))
+          (setq *HAFM:offset-color* (1+ (atoi *HAFM:tmp-offset-color*)))
+          (if (and *HAFM:tmp-offset-prefix* (/= *HAFM:tmp-offset-prefix* ""))
+            (setq *HAFM:offset-prefix* *HAFM:tmp-offset-prefix*))
+          (HAFM:set-config-value "OFFSET_OWN_LAYER" (if *HAFM:offset-own-layer* "1" "0"))
+          (HAFM:set-config-value "OFFSET_USE_LAYER" (if *HAFM:offset-use-layer* "1" "0"))
+          (HAFM:set-config-value "OFFSET_COLOR" (itoa *HAFM:offset-color*))
+          (HAFM:set-config-value "OFFSET_PREFIX" *HAFM:offset-prefix*)
+          
           (HAFM:log-write "INFO" (strcat "Settings: HK=" (if *HAFM:use-layer-suffix* (strcat "_" *HAFM:layer-suffix*) "aus")
                                         " UM=" (if *HAFM:outline-keep* "behalten" "temp") "/" (HAFM:color-name *HAFM:outline-color*)
                                         " BL=" (if *HAFM:breakline-keep* "behalten" "temp") "/" (HAFM:color-name *HAFM:breakline-color*)
@@ -4534,6 +4787,10 @@
   (setq *HAFM:tmp-tin-bylayer* nil)
   (setq *HAFM:tmp-tin-color* nil)
   (setq *HAFM:tmp-tin-suffix* nil)
+  (setq *HAFM:tmp-offset-own-layer* nil)
+  (setq *HAFM:tmp-offset-bylayer* nil)
+  (setq *HAFM:tmp-offset-color* nil)
+  (setq *HAFM:tmp-offset-prefix* nil)
 )
 
 
