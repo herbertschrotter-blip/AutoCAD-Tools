@@ -22,7 +22,7 @@
 ;;; ShowBlockPath     - Zeigt konfigurierte Pfade
 ;;; ResetBlockPath    - Löscht alle Pfade
 ;;;
-;;; Version: 1.8.0
+;;; Version: 1.8.1
 ;;; Datum: 2026-03-19
 ;;; Autor: Herbert Schrotter
 
@@ -528,19 +528,9 @@
                     (progn
                       (princ "\n  ✓ Block-Definition erfolgreich importiert")
 
-                      ;; Block einmal unsichtbar einfügen (nur um Entity zu haben)
-                      (vla-insertblock
-                        (vlax-get-property doc (if (= 1 (getvar 'cvport)) 'paperspace 'modelspace))
-                        (vlax-3D-point '(0 0 0))
-                        blockname
-                        1.0 1.0 1.0
-                        0.0
-                      )
-                      (setq importEnt (entlast))
-
                       (vlax-release-object dbx)
                       (BLI:log-write "INFO" (strcat "Block erfolgreich importiert: " blockname))
-                      importEnt  ;; Rückgabe: Entity des eingefügten Blocks (zum späteren Löschen)
+                      T  ;; Rückgabe: Erfolg (Block-Definition ist in Zeichnung)
                     )
                     (progn
                       (princ "\n  ✗ Block-Definition konnte nicht übertragen werden")
@@ -633,9 +623,9 @@
               (BLI:log-write "WARN" (strcat "Keine Block-Datei ausgewählt für: " actual-blockname))
               (list nil nil)  ;; Fehler: (kein Erfolg, kein importEnt)
             )
-            ;; Versuche zu importieren
-            (if (setq import-result (import-block-from-file block-path actual-blockname))
-              (list T import-result)  ;; Erfolg: (Erfolg, importEnt zum späteren Löschen)
+                        ;; Versuche zu importieren
+            (if (import-block-from-file block-path actual-blockname)
+              (list T nil)  ;; Erfolg: Block-Definition importiert, kein importEnt nötig
               (progn
                 (princ "\n  ✗ Block konnte nicht importiert werden")
                 (BLI:log-write "ERROR" (strcat "Block-Import fehlgeschlagen: " actual-blockname))
