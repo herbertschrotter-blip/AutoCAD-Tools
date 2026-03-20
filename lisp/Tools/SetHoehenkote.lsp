@@ -1334,11 +1334,13 @@
         
         ;; Block-Manager oeffnen (result = 2)
         ((= result 2)
-          ;; Zwischenwerte merken (werden nach Block-Manager Dialog wiederhergestellt)
           (SetHK:log-write "INFO" "Block-Verwaltung geoeffnet aus Settings")
+          (unload_dialog dcl-id)
+          (vl-file-delete dcl-file)
           (manage-block-import *SetHK:block-context*)
-          ;; Nach Block-Manager: Settings nochmal oeffnen
-          (princ "\nBlock-Verwaltung abgeschlossen.")
+          ;; Nach Block-Manager: Settings erneut oeffnen
+          (SetHK:log-write "INFO" "Settings erneut oeffnen nach Block-Verwaltung")
+          (c:HKSETTINGS)
         )
         
         ;; Abbrechen (result = 0)
@@ -1348,9 +1350,13 @@
         )
       )
       
-      ;; Aufraeumen
-      (unload_dialog dcl-id)
-      (vl-file-delete dcl-file)
+      ;; Aufraeumen (nur wenn nicht schon durch result=2 aufgeraeumt)
+      (if (/= result 2)
+        (progn
+          (unload_dialog dcl-id)
+          (vl-file-delete dcl-file)
+        )
+      )
     )
   )
   
