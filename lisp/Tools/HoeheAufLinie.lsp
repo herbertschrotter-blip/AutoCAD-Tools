@@ -1061,10 +1061,14 @@
     ;; Blockname aus BlockImport (DWG Property → Globaler Standard)
   (setq *block-import-context* "HoeheAufLinie")
   (setq blockName (BLI:resolve-blockname "HoeheAufLinie"))
+  ;; Wenn kein Block konfiguriert: Block-Manager automatisch oeffnen
   (if (null blockName)
     (progn
-      (HAL:log-write "ERROR" "Kein Block konfiguriert! Oeffne Block-Verwaltung.")
-      (princ "\n*** Kein Block konfiguriert! Verwende HALBlock um einen Block einzurichten. ***")
+      (HAL:log-write "WARN" "Kein Block konfiguriert - oeffne Block-Verwaltung")
+      (princ "\n*** Kein Block konfiguriert! Block-Verwaltung wird geoeffnet... ***")
+      (manage-block-import "HoeheAufLinie")
+      ;; Nochmal versuchen
+      (setq blockName (BLI:resolve-blockname "HoeheAufLinie"))
     )
   )
   
