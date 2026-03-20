@@ -2,7 +2,7 @@
 ;;; Hoeheninterpolation auf einer Flaeche definiert durch 3-4 Eckpunkte
 ;;; Speziell fuer Leica-Vermessungsarbeiten
 ;;;
-;;; Version: 2.2.1
+;;; Version: 2.3.0
 ;;; Datum: 2026-03-20
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: HAF (HoeheAufFlaeche)
@@ -18,7 +18,7 @@
 ;;; 3. lib/BlockImport.lsp muss im selben Ordner oder Support-Pfad liegen
 ;;;
 ;;; Befehle:
-;;; HoeheAufFlaeche (HAF) - Hoeheninterpolation auf Flaeche (S/Z/E Keywords)
+;;; HoeheAufFlaeche (HAF) - Hoeheninterpolation auf Flaeche (S/Z/B/H/R/E Keywords)
 ;;; HAFSETTINGS           - Einstellungen (Skalierung, Block, Layer, Debug)
 ;;; HAFBLOCK              - Block-Verwaltung
 ;;; HAFDEBUG              - Debug ein/aus
@@ -27,7 +27,7 @@
 ;;; KONSTANTEN (Top-Level erlaubt)
 ;;; ============================================================================
 
-(setq *HAF:version* "2.2.1")
+(setq *HAF:version* "2.3.0")
 (setq *HAF:appdata-folder* "HoeheAufFlaeche")
 (setq *HAF:blockname* "BLK_Hoehenkote")
 
@@ -66,6 +66,14 @@
 (setq *HAF:contour-suffix* "HL")
 (setq *HAF:contour-own-layer* nil)
 (setq *HAF:contour-use-layer* nil)
+
+;; Linien-Settings: Hoehenlinienraster (Grau)
+(setq *HAF:grid-keep* nil)
+(setq *HAF:grid-color* 8)            ; ACI-Farbe (8=Grau)
+(setq *HAF:grid-suffix* "HR")
+(setq *HAF:grid-own-layer* nil)
+(setq *HAF:grid-use-layer* nil)
+(setq *HAF:grid-interval* 1.0)       ; Abstand N in Einheiten
 
 ;;; ============================================================================
 ;;; APPDATA & LOGGING (frueh definieren!)
@@ -320,12 +328,27 @@
   (if val (setq *HAF:contour-own-layer* (= val "1")))
   (setq val (HAF:get-config-value "CONTOUR_USE_LAYER"))
   (if val (setq *HAF:contour-use-layer* (= val "1")))
+  ;; Hoehenlinienraster
+  (setq val (HAF:get-config-value "GRID_KEEP"))
+  (if val (setq *HAF:grid-keep* (= val "1")))
+  (setq val (HAF:get-config-value "GRID_COLOR"))
+  (if (and val (/= val "")) (setq *HAF:grid-color* (atoi val)))
+  (setq val (HAF:get-config-value "GRID_SUFFIX"))
+  (if (and val (/= val "")) (setq *HAF:grid-suffix* val))
+  (setq val (HAF:get-config-value "GRID_OWN_LAYER"))
+  (if val (setq *HAF:grid-own-layer* (= val "1")))
+  (setq val (HAF:get-config-value "GRID_USE_LAYER"))
+  (if val (setq *HAF:grid-use-layer* (= val "1")))
+  (setq val (HAF:get-config-value "GRID_INTERVAL"))
+  (if (and val (/= val "")) (setq *HAF:grid-interval* (atof val)))
   ;; Log
   (HAF:log-write "INFO" (strcat "Config angewendet: Debug=" (if *HAF:debug-mode* "EIN" "AUS")
                                 " HK=" (if *HAF:use-layer-suffix* (strcat "_" *HAF:layer-suffix*) "aus")
                                 " UM=" (if *HAF:outline-keep* "behalten" "temp")
                                 " BL=" (if *HAF:breakline-keep* "behalten" "temp")
-                                " HL=" (if *HAF:contour-keep* "behalten" "temp")))
+                                " HL=" (if *HAF:contour-keep* "behalten" "temp")
+                                " HR=" (if *HAF:grid-keep* "behalten" "temp")
+                                " N=" (rtos *HAF:grid-interval* 2 2)))
 )
 
 ;;; ============================================================================
@@ -794,6 +817,7 @@
     ((= aci 5) "Blau")
     ((= aci 6) "Magenta")
     ((= aci 7) "Weiss")
+    ((= aci 8) "Grau")
     (T (strcat "Farbe " (itoa aci)))
   )
 )
@@ -1584,6 +1608,76 @@
   (HAF:debug (strcat "Contours geloescht: " (itoa (length entities))))
 )
 
+;;; Berechnet und zeichnet Hoehenlinienraster
+;;; Vom tiefsten zum hoechsten Eckpunkt in Schritten von interval
+;;;
+;;; Parameter:
+;;;   pts - 3 oder 4 Punkte
+;;;   heights - Hoehen
+;;;   diagonal - "13"/"24" (nur bei 4 Punkten)
+;;;   interval - Abstand N
+;;;
+;;; Rueckgabe: Liste aller Entity-Names (zum Loeschen/Finalisieren)
+(defun HAF:draw-grid (pts heights diagonal interval
+                      / min-h max-h target-h segments entities all-entities)
+  (setq min-h (apply 'min heights))
+  (setq max-h (apply 'max heights))
+  (setq all-entities nil)
+  ;; Erstes Raster-Niveau: aufrunden vom Minimum auf naechstes Vielfaches von interval
+  (setq target-h (* (1+ (fix (/ min-h interval))) interval))
+  ;; Sonderfall: wenn min-h exakt auf Raster liegt, dort starten
+  (if (equal (rem min-h interval) 0.0 0.001)
+    (setq target-h min-h)
+  )
+  (HAF:log-write "INFO" (strcat "Hoehenraster: min=" (rtos min-h 2 2)
+                                " max=" (rtos max-h 2 2)
+                                " interval=" (rtos interval 2 2)
+                                " start=" (rtos target-h 2 2)))
+  ;; Schleife ueber alle Raster-Niveaus
+  (while (<= target-h max-h)
+    (setq segments (HAF:compute-contour pts heights target-h diagonal))
+    (if segments
+      (progn
+        ;; Zeichne Segmente mit Grid-Farbe
+        (foreach seg segments
+          (if (and (car seg) (cadr seg))
+            (progn
+              (setq entities (entmakex
+                (list '(0 . "LINE") '(100 . "AcDbEntity") '(8 . "0")
+                      (cons 62 *HAF:grid-color*)
+                      '(100 . "AcDbLine")
+                      (cons 10 (trans (car seg) 1 0))
+                      (cons 11 (trans (cadr seg) 1 0)))))
+              (if entities
+                (setq all-entities (cons entities all-entities))
+              )
+            )
+          )
+        )
+      )
+    )
+    (setq target-h (+ target-h interval))
+  )
+  (HAF:log-write "INFO" (strcat "Hoehenraster gezeichnet: " (itoa (length all-entities))
+                                " Linien, Farbe=" (HAF:color-name *HAF:grid-color*)))
+  (if all-entities
+    (princ (strcat "\n  Hoehenraster: " (itoa (length all-entities))
+                   " Linien (N=" (rtos interval 2 2)
+                   ", " (rtos min-h 2 2) " bis " (rtos max-h 2 2) ")"))
+  )
+  all-entities
+)
+
+;;; Loescht Raster-Entities
+(defun HAF:delete-grid (entities / )
+  (foreach ent entities
+    (if (and ent (entget ent))
+      (entdel ent)
+    )
+  )
+  (HAF:debug (strcat "Grid geloescht: " (itoa (length entities))))
+)
+
 ;;; Zeichnet Diagonale/Bruchlinie als 3D-Polylinie
 ;;; Farbe aus *HAF:breakline-color* (konfigurierbar)
 (defun HAF:draw-diagonal (pt1 h1 pt2 h2 / p1-3d p2-3d ent ent-data)
@@ -1684,7 +1778,7 @@
                              num-corners scale pg result interpolated-height tri-info
                              prompt-str pt ht block-ent last-ent
                              diagonal-choice use-diagonal diagonal-ent
-                             contour-entities target-h segments outline-ent
+                             contour-entities target-h segments outline-ent grid-entities
                              p1 h1 p2 h2 p3 h3 p4 h4)
   
   (HAF:ensure-init)
@@ -1717,6 +1811,12 @@
         (HAF:delete-contours contour-entities)
       )
     )
+    (if grid-entities
+      (if *HAF:grid-keep*
+        (foreach e grid-entities (HAF:finalize-line e *HAF:grid-own-layer* *HAF:grid-use-layer* *HAF:grid-suffix*))
+        (HAF:delete-grid grid-entities)
+      )
+    )
     ;; Systemvariablen wiederherstellen
     (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
     (if old-attdia (setvar "ATTDIA" old-attdia))
@@ -1746,7 +1846,7 @@
   
   (setq corner-points nil corner-heights nil corner-entities nil)
   (setq corner-number 1 done nil)
-  (setq contour-entities nil diagonal-ent nil outline-ent nil)
+  (setq contour-entities nil diagonal-ent nil outline-ent nil grid-entities nil)
   
   (while (and (not done) (< corner-number 5))
     ;; Keywords je nach Zustand
@@ -1879,15 +1979,15 @@
       ;; ====================================================================
       
       (princ "\n")
-      (princ "\n--- Punkte setzen (S=Skalierung, B=Bruchlinie, H=Hoehenlinie, E=Einstellungen, ESC=Ende) ---")
+      (princ "\n--- Punkte setzen (S=Skalierung, B=Bruchlinie, H=Hoehenlinie, R=Raster, E=Einstellungen, ESC=Ende) ---")
       
       (if (= num-corners 4)
-        (initget "Skalierung Bruchlinie Hoehenlinie Einstellungen")
-        (initget "Skalierung Hoehenlinie Einstellungen")
+        (initget "Skalierung Bruchlinie Hoehenlinie Raster Einstellungen")
+        (initget "Skalierung Hoehenlinie Raster Einstellungen")
       )
       (setq pg (getpoint (strcat "\nPunkt waehlen [Skalierung"
                                  (if (= num-corners 4) "/Bruchlinie" "")
-                                 "/Hoehenlinie/Einstellungen] <" (rtos scale 2 2) ">: ")))
+                                 "/Hoehenlinie/Raster/Einstellungen] <" (rtos scale 2 2) ">: ")))
       
       (while pg
         (cond
@@ -1937,6 +2037,27 @@
              (princ "\n  Keine Hoehe eingegeben")
            )
           )
+          ;; Raster
+          ((= pg "Raster")
+           ;; Altes Raster loeschen
+           (if grid-entities (HAF:delete-grid grid-entities))
+           (setq grid-entities nil)
+           ;; Abstand abfragen
+           (setq target-h (getreal (strcat "\nRaster-Abstand N <" (rtos *HAF:grid-interval* 2 2) ">: ")))
+           (if (null target-h) (setq target-h *HAF:grid-interval*))
+           (if (> target-h 0.0)
+             (progn
+               (setq *HAF:grid-interval* target-h)
+               (HAF:log-write "INFO" (strcat "Raster: N=" (rtos target-h 2 2)))
+               (setq grid-entities (HAF:draw-grid corner-points corner-heights
+                                                   use-diagonal target-h))
+               (if (null grid-entities)
+                 (princ "\n  Kein Raster moeglich (alle Hoehen gleich?)")
+               )
+             )
+             (princ "\n*** Abstand muss > 0 sein ***")
+           )
+          )
           ;; Gueltiger Punkt — interpolieren
           (T
            (if (HAF:valid-point-p pg)
@@ -1964,12 +2085,12 @@
         
         ;; Naechster Punkt
         (if (= num-corners 4)
-          (initget "Skalierung Bruchlinie Hoehenlinie Einstellungen")
-          (initget "Skalierung Hoehenlinie Einstellungen")
+          (initget "Skalierung Bruchlinie Hoehenlinie Raster Einstellungen")
+          (initget "Skalierung Hoehenlinie Raster Einstellungen")
         )
         (setq pg (getpoint (strcat "\nPunkt waehlen [Skalierung"
                                    (if (= num-corners 4) "/Bruchlinie" "")
-                                   "/Hoehenlinie/Einstellungen] <" (rtos scale 2 2) ">: ")))
+                                   "/Hoehenlinie/Raster/Einstellungen] <" (rtos scale 2 2) ">: ")))
       ) ;; end while Punkte
       
       ;; ====================================================================
@@ -2021,6 +2142,23 @@
           )
         )
         (setq contour-entities nil)
+      )
+      
+      ;; Hoehenlinienraster
+      (if grid-entities
+        (if *HAF:grid-keep*
+          (progn
+            (foreach e grid-entities
+              (HAF:finalize-line e *HAF:grid-own-layer* *HAF:grid-use-layer* *HAF:grid-suffix*)
+            )
+            (HAF:log-write "INFO" (strcat "Hoehenraster beibehalten (Layer _" *HAF:grid-suffix* ")"))
+          )
+          (progn
+            (HAF:delete-grid grid-entities)
+            (HAF:log-write "INFO" "Hoehenraster geloescht (temporaer)")
+          )
+        )
+        (setq grid-entities nil)
       )
       
       (HAF:log-write "INFO" "Befehl HoeheAufFlaeche beendet")
@@ -2211,6 +2349,44 @@
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
   
+  ;; --- Hoehenlinienraster ---
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Hoehenlinienraster\";" fp)
+  (write-line "    : toggle {" fp)
+  (write-line "      key = \"grid_keep\";" fp)
+  (write-line "      label = \"Behalten\";" fp)
+  (write-line "    }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"grid_own_layer\";" fp)
+  (write-line "        label = \"Eigener Layer\";" fp)
+  (write-line "      }" fp)
+  (write-line "      : edit_box {" fp)
+  (write-line "        key = \"grid_suffix\";" fp)
+  (write-line "        label = \"Suffix:\";" fp)
+  (write-line "        edit_width = 6;" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : toggle {" fp)
+  (write-line "        key = \"grid_bylayer\";" fp)
+  (write-line "        label = \"Layer-Farbe\";" fp)
+  (write-line "      }" fp)
+  (write-line "      : popup_list {" fp)
+  (write-line "        key = \"grid_color\";" fp)
+  (write-line "        label = \"Farbe:\";" fp)
+  (write-line "        list = \"Rot\\nGelb\\nGruen\\nCyan\\nBlau\\nMagenta\\nWeiss\\nGrau\";" fp)
+  (write-line "        width = 12;" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "    : edit_box {" fp)
+  (write-line "      key = \"grid_interval\";" fp)
+  (write-line "      label = \"Abstand (N):\";" fp)
+  (write-line "      edit_width = 8;" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  
   ;; --- BlockImport Pfad ---
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"BlockImport.lsp\";" fp)
@@ -2315,6 +2491,13 @@
       (set_tile "contour_bylayer" (if *HAF:contour-use-layer* "1" "0"))
       (set_tile "contour_color" (itoa (1- *HAF:contour-color*)))
       (set_tile "contour_suffix" *HAF:contour-suffix*)
+      ;; Hoehenlinienraster
+      (set_tile "grid_keep" (if *HAF:grid-keep* "1" "0"))
+      (set_tile "grid_own_layer" (if *HAF:grid-own-layer* "1" "0"))
+      (set_tile "grid_bylayer" (if *HAF:grid-use-layer* "1" "0"))
+      (set_tile "grid_color" (itoa (1- *HAF:grid-color*)))
+      (set_tile "grid_suffix" *HAF:grid-suffix*)
+      (set_tile "grid_interval" (rtos *HAF:grid-interval* 2 2))
       
       ;; Live-Vorschau Layer-Suffix
       (action_tile "layer_suffix"
@@ -2363,6 +2546,12 @@
           "(setq *HAF:tmp-contour-bylayer* (get_tile \"contour_bylayer\"))"
           "(setq *HAF:tmp-contour-color* (get_tile \"contour_color\"))"
           "(setq *HAF:tmp-contour-suffix* (get_tile \"contour_suffix\"))"
+          "(setq *HAF:tmp-grid-keep* (get_tile \"grid_keep\"))"
+          "(setq *HAF:tmp-grid-own-layer* (get_tile \"grid_own_layer\"))"
+          "(setq *HAF:tmp-grid-bylayer* (get_tile \"grid_bylayer\"))"
+          "(setq *HAF:tmp-grid-color* (get_tile \"grid_color\"))"
+          "(setq *HAF:tmp-grid-suffix* (get_tile \"grid_suffix\"))"
+          "(setq *HAF:tmp-grid-interval* (get_tile \"grid_interval\"))"
           "(done_dialog 2)"
         )
       )
@@ -2391,6 +2580,12 @@
           "(setq *HAF:tmp-contour-bylayer* (get_tile \"contour_bylayer\"))"
           "(setq *HAF:tmp-contour-color* (get_tile \"contour_color\"))"
           "(setq *HAF:tmp-contour-suffix* (get_tile \"contour_suffix\"))"
+          "(setq *HAF:tmp-grid-keep* (get_tile \"grid_keep\"))"
+          "(setq *HAF:tmp-grid-own-layer* (get_tile \"grid_own_layer\"))"
+          "(setq *HAF:tmp-grid-bylayer* (get_tile \"grid_bylayer\"))"
+          "(setq *HAF:tmp-grid-color* (get_tile \"grid_color\"))"
+          "(setq *HAF:tmp-grid-suffix* (get_tile \"grid_suffix\"))"
+          "(setq *HAF:tmp-grid-interval* (get_tile \"grid_interval\"))"
           "(done_dialog 1)"
         )
       )
@@ -2491,10 +2686,32 @@
           (HAF:set-config-value "CONTOUR_COLOR" (itoa *HAF:contour-color*))
           (HAF:set-config-value "CONTOUR_SUFFIX" *HAF:contour-suffix*)
           
+          ;; Hoehenlinienraster
+          (setq *HAF:grid-keep* (= *HAF:tmp-grid-keep* "1"))
+          (setq *HAF:grid-own-layer* (= *HAF:tmp-grid-own-layer* "1"))
+          (setq *HAF:grid-use-layer* (= *HAF:tmp-grid-bylayer* "1"))
+          (setq *HAF:grid-color* (1+ (atoi *HAF:tmp-grid-color*)))
+          (if (and *HAF:tmp-grid-suffix* (/= *HAF:tmp-grid-suffix* ""))
+            (setq *HAF:grid-suffix* *HAF:tmp-grid-suffix*))
+          (if (and *HAF:tmp-grid-interval* (/= *HAF:tmp-grid-interval* ""))
+            (if (> (atof *HAF:tmp-grid-interval*) 0.0)
+              (setq *HAF:grid-interval* (atof *HAF:tmp-grid-interval*))
+              (HAF:log-write "WARN" "Raster-Abstand muss > 0 sein")
+            )
+          )
+          (HAF:set-config-value "GRID_KEEP" (if *HAF:grid-keep* "1" "0"))
+          (HAF:set-config-value "GRID_OWN_LAYER" (if *HAF:grid-own-layer* "1" "0"))
+          (HAF:set-config-value "GRID_USE_LAYER" (if *HAF:grid-use-layer* "1" "0"))
+          (HAF:set-config-value "GRID_COLOR" (itoa *HAF:grid-color*))
+          (HAF:set-config-value "GRID_SUFFIX" *HAF:grid-suffix*)
+          (HAF:set-config-value "GRID_INTERVAL" (rtos *HAF:grid-interval* 2 2))
+          
           (HAF:log-write "INFO" (strcat "Settings: HK=" (if *HAF:use-layer-suffix* (strcat "_" *HAF:layer-suffix*) "aus")
                                         " UM=" (if *HAF:outline-keep* "behalten" "temp") "/" (HAF:color-name *HAF:outline-color*)
                                         " BL=" (if *HAF:breakline-keep* "behalten" "temp") "/" (HAF:color-name *HAF:breakline-color*)
                                         " HL=" (if *HAF:contour-keep* "behalten" "temp") "/" (HAF:color-name *HAF:contour-color*)
+                                        " HR=" (if *HAF:grid-keep* "behalten" "temp") "/" (HAF:color-name *HAF:grid-color*)
+                                        " N=" (rtos *HAF:grid-interval* 2 2)
                                         " Debug=" (if *HAF:debug-mode* "ein" "aus")))
           (princ "\nEinstellungen gespeichert.")
         )
@@ -2550,6 +2767,12 @@
   (setq *HAF:tmp-contour-bylayer* nil)
   (setq *HAF:tmp-contour-color* nil)
   (setq *HAF:tmp-contour-suffix* nil)
+  (setq *HAF:tmp-grid-keep* nil)
+  (setq *HAF:tmp-grid-own-layer* nil)
+  (setq *HAF:tmp-grid-bylayer* nil)
+  (setq *HAF:tmp-grid-color* nil)
+  (setq *HAF:tmp-grid-suffix* nil)
+  (setq *HAF:tmp-grid-interval* nil)
 )
 
 ;;; Settings-Befehl
