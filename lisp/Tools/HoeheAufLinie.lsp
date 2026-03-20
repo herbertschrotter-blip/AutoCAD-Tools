@@ -1114,7 +1114,9 @@
               (setq old-attdia (getvar "ATTDIA"))
               (setvar "ATTDIA" 0)
               (HAL:debug (strcat "  _-insert: blockName=" blockName " scale=" (rtos scale 2 4)))
-              (command "_-insert" blockName einfuegepunkt scale scale "" "")
+                            ;; Rotation "" + alle Attribut-Prompts dynamisch bestaetigen
+              (command "_-insert" blockName einfuegepunkt scale scale "")
+              (while (> (getvar "CMDACTIVE") 0) (command ""))
               (setq ent (entlast))
               (HAL:debug (strcat "  entlast nach insert: " (if ent (vl-princ-to-string ent) "nil")))
               (if ent (HAL:debug (strcat "  entlast Typ: " (cdr (assoc 0 (entget ent))))))
