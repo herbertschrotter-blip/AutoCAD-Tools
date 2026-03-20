@@ -22,7 +22,7 @@
 ;;; ShowBlockPath     - Zeigt konfigurierte Pfade
 ;;; ResetBlockPath    - Löscht alle Pfade
 ;;;
-;;; Version: 1.8.3
+;;; Version: 1.8.4
 ;;; Datum: 2026-03-19
 ;;; Autor: Herbert Schrotter
 
@@ -1178,8 +1178,9 @@
         (setq result 0)  ;; Abbruch
       )
       (progn
-        ;; --- Liste befüllen ---
+        ;; --- Liste befüllen und cachen ---
         (setq entries (BLI:build-block-list))
+        (setq *BLI:tmp-entries* entries)
         (if entries
           (progn
             (start_list "block_list")
@@ -1210,7 +1211,7 @@
         (action_tile "block_list"
           (strcat
             "(setq *BLI:tmp-sel-idx* (atoi (get_tile \"block_list\")))"
-            "(setq *BLI:tmp-sel-name* (BLI:extract-blockname (nth *BLI:tmp-sel-idx* (BLI:build-block-list))))"
+            "(setq *BLI:tmp-sel-name* (BLI:extract-blockname (nth *BLI:tmp-sel-idx* *BLI:tmp-entries*)))"
             "(if *BLI:tmp-sel-name*"
             "  (set_tile \"path_info\" (strcat \"Pfad: \" (if (read-block-path *BLI:tmp-sel-name*) (read-block-path *BLI:tmp-sel-name*) \"-\")))"
             "  (set_tile \"path_info\" \"Pfad: -\")"
@@ -1222,7 +1223,7 @@
         (action_tile "btn_standard"
           (strcat
             "(setq *BLI:tmp-sel-idx* (atoi (get_tile \"block_list\")))"
-            "(setq *BLI:tmp-sel-name* (BLI:extract-blockname (nth *BLI:tmp-sel-idx* (BLI:build-block-list))))"
+            "(setq *BLI:tmp-sel-name* (BLI:extract-blockname (nth *BLI:tmp-sel-idx* *BLI:tmp-entries*)))"
             "(if *BLI:tmp-sel-name*"
             "  (progn (set-standard-block *BLI:tmp-sel-name*) (done_dialog 1))"
             "  (alert \"Bitte einen Block auswaehlen\")"
@@ -1234,7 +1235,7 @@
         (action_tile "btn_path"
           (strcat
             "(setq *BLI:tmp-sel-idx* (atoi (get_tile \"block_list\")))"
-            "(setq *BLI:tmp-sel-name* (BLI:extract-blockname (nth *BLI:tmp-sel-idx* (BLI:build-block-list))))"
+            "(setq *BLI:tmp-sel-name* (BLI:extract-blockname (nth *BLI:tmp-sel-idx* *BLI:tmp-entries*)))"
             "(if *BLI:tmp-sel-name*"
             "  (progn (done_dialog 3))"  ;; 3 = Pfad ändern
             "  (alert \"Bitte einen Block auswaehlen\")"
@@ -1249,7 +1250,7 @@
         (action_tile "btn_remove"
           (strcat
             "(setq *BLI:tmp-sel-idx* (atoi (get_tile \"block_list\")))"
-            "(setq *BLI:tmp-sel-name* (BLI:extract-blockname (nth *BLI:tmp-sel-idx* (BLI:build-block-list))))"
+            "(setq *BLI:tmp-sel-name* (BLI:extract-blockname (nth *BLI:tmp-sel-idx* *BLI:tmp-entries*)))"
             "(if *BLI:tmp-sel-name*"
             "  (done_dialog 5)"  ;; 5 = Entfernen
             "  (alert \"Bitte einen Block auswaehlen\")"
@@ -1326,9 +1327,10 @@
   (unload_dialog dcl-id)
   (vl-file-delete dcl-file)
 
-  ;; Temp-Variablen aufräumen
+    ;; Temp-Variablen aufräumen
   (setq *BLI:tmp-sel-idx* nil)
   (setq *BLI:tmp-sel-name* nil)
+  (setq *BLI:tmp-entries* nil)
 
   ;; Stelle alten Context wieder her
   (setq *block-import-context* old-context)
@@ -1508,8 +1510,8 @@
 ;; KEIN vl-load-com auf Top-Level! (Lazy-Init: wird von aufrufendem Script geladen)
 
 ;; Lade-Meldung
-(BLI:log-write "INFO" "=== BlockImport.lsp v1.8.3 geladen ===")
-(princ "\nBlockImport.lsp v1.8.3 geladen.")
+(BLI:log-write "INFO" "=== BlockImport.lsp v1.8.4 geladen ===")
+(princ "\nBlockImport.lsp v1.8.4 geladen.")
 (princ "\nBefehle: ManageBlockImport - Block-Verwaltung")
 (princ "\n         ShowBlockPath - Zeigt konfigurierte Pfade")
 (princ "\n         ResetBlockPath - Löscht alle Pfade")
