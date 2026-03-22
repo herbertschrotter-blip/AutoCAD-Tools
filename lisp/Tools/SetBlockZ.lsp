@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.12.0
+;;; Version: 1.12.1
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -35,7 +35,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.12.0")
+(setq *SBZ:version* "1.12.1")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -1089,11 +1089,10 @@
       (SBZ:log-write "INFO" (strcat "Layer erstellt: '" layer-name "'"))
     )
   )
-  ;; Freeze nur setzen wenn Layer NICHT der aktuelle Layer ist
-  ;; (aktuellen Layer kann man nicht einfrieren)
-  (if (and lay-obj (= freeze 1)
-           (/= (strcase layer-name) (strcase (getvar "CLAYER"))))
-    (vl-catch-all-apply 'vla-put-Freeze (list lay-obj :vlax-true))
+  ;; Freeze/Thaw setzen (aktuellen Layer kann man nicht einfrieren)
+  (if (and lay-obj (/= (strcase layer-name) (strcase (getvar "CLAYER"))))
+    (vl-catch-all-apply 'vla-put-Freeze
+      (list lay-obj (if (= freeze 1) :vlax-true :vlax-false)))
   )
   layer-name
 )
@@ -1715,24 +1714,35 @@
   (write-line "  spacer;" fp)
 
   ;; ===== BOX 4: ATTRIBUT =====
+  ;; Schriftart oben, dann pro Attribut: Farbe + Einfrieren
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"Attribut\";" fp)
-  (write-line "    : text { key = \"copyinfo\"; value = \"\"; }" fp)
-  (write-line "    : text { value = \"Einfrieren:\"; }" fp)
-  (write-line "    : row {" fp)
-  (write-line "      : toggle { key = \"freezeabs\"; label = \"Absolut\"; }" fp)
-  (write-line "      : toggle { key = \"freezerel\"; label = \"Relativ\"; }" fp)
-  (write-line "      : toggle { key = \"freezebau0\"; label = \"Bau-0\"; }" fp)
-  (write-line "    }" fp)
-  (write-line "    spacer;" fp)
-  (write-line "    : text { value = \"Farbe:\"; }" fp)
-  (write-line "    : row {" fp)
-  (write-line "      : popup_list { key = \"colorabs\"; label = \"Absolut:\"; width = 14; }" fp)
-  (write-line "      : popup_list { key = \"colorrel\"; label = \"Relativ:\"; width = 14; }" fp)
-  (write-line "      : popup_list { key = \"colorbau0\"; label = \"Bau-0:\"; width = 14; }" fp)
-  (write-line "    }" fp)
-  (write-line "    spacer;" fp)
   (write-line "    : popup_list { key = \"font\"; label = \"Schriftart:\"; width = 22; }" fp)
+  (write-line "    spacer;" fp)
+  ;; Spalten-Header
+  (write-line "    : row {" fp)
+  (write-line "      : text { width = 10; value = \"\"; }" fp)
+  (write-line "      : text { width = 18; value = \"Farbe\"; }" fp)
+  (write-line "      : text { width = 10; value = \"Einfrieren\"; }" fp)
+  (write-line "    }" fp)
+  ;; Zeile: Absolut
+  (write-line "    : row {" fp)
+  (write-line "      : text { width = 10; value = \"Absolut\"; }" fp)
+  (write-line "      : popup_list { key = \"colorabs\"; width = 18; }" fp)
+  (write-line "      : toggle { key = \"freezeabs\"; label = \"\"; width = 10; }" fp)
+  (write-line "    }" fp)
+  ;; Zeile: Relativ
+  (write-line "    : row {" fp)
+  (write-line "      : text { width = 10; value = \"Relativ\"; }" fp)
+  (write-line "      : popup_list { key = \"colorrel\"; width = 18; }" fp)
+  (write-line "      : toggle { key = \"freezerel\"; label = \"\"; width = 10; }" fp)
+  (write-line "    }" fp)
+  ;; Zeile: Bau-0
+  (write-line "    : row {" fp)
+  (write-line "      : text { width = 10; value = \"Bau-0\"; }" fp)
+  (write-line "      : popup_list { key = \"colorbau0\"; width = 18; }" fp)
+  (write-line "      : toggle { key = \"freezebau0\"; label = \"\"; width = 10; }" fp)
+  (write-line "    }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
 
@@ -1842,9 +1852,15 @@
       (set_tile "suffix" suffix)
 
       ;; === BOX 4: Attribut ===
-      ;; Layer-Info Text
-      (set_tile "copyinfo"
-        (strcat "Layer: " *SBZ:cfg-copylayer* "_abs-AttABS, -AttREL, -AttBAU0"))
+      ;; Schriftart
+      (start_list "font")
+      (foreach fn font-names (add_list fn))
+      (end_list)
+      (setq font-idx (vl-position (strcase (SBZ:get-font)) (mapcar 'strcase font-names)))
+      (if font-idx
+        (set_tile "font" (itoa font-idx))
+        (set_tile "font" "0")
+      )
       ;; Freeze Toggles
       (set_tile "freezeabs" (itoa *SBZ:cfg-freeze-abs*))
       (set_tile "freezerel" (itoa *SBZ:cfg-freeze-rel*))
@@ -1862,15 +1878,6 @@
       (foreach c attr-colors (add_list (car c)))
       (end_list)
       (set_tile "colorbau0" (itoa (SBZ:color-to-index *SBZ:cfg-color-bau0* attr-colors)))
-      ;; Schriftart
-      (start_list "font")
-      (foreach fn font-names (add_list fn))
-      (end_list)
-      (setq font-idx (vl-position (strcase (SBZ:get-font)) (mapcar 'strcase font-names)))
-      (if font-idx
-        (set_tile "font" (itoa font-idx))
-        (set_tile "font" "0")
-      )
       ;; Kopie-Block Felder deaktivieren wenn Modus aus
       (SBZ:settings-update-copyblock-state (itoa *SBZ:cfg-copymode*))
 
