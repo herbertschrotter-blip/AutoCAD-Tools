@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.18.5
+;;; Version: 1.19.0
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -35,7 +35,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.18.5")
+(setq *SBZ:version* "1.19.0")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -494,20 +494,30 @@
 
 ;;; ----------------------------------------------------------------------------
 ;;; SBZ:set-xdata
-;;; Schreibt XData mit Gruppenname auf eine Entity
+;;; Schreibt XData mit Gruppenname + Quell-Handle auf eine Entity
 ;;; Parameter:
-;;;   ent        - Entity-Name (ename)
-;;;   group-name - Gruppenname (String)
+;;;   ent          - Entity-Name (ename) des Kopie-Blocks
+;;;   group-name   - Gruppenname (String)
+;;;   source-handle - Handle des Quell-Blocks (String, oder nil)
 ;;; ----------------------------------------------------------------------------
-(defun SBZ:set-xdata (ent group-name / ent-data xdata-list)
+(defun SBZ:set-xdata (ent group-name source-handle / ent-data xdata-list)
   (SBZ:regapp)
   (setq ent-data (entget ent '("SBZ")))
   ;; Alte XData entfernen falls vorhanden
   (if (assoc -3 ent-data)
     (setq ent-data (vl-remove (assoc -3 ent-data) ent-data))
   )
-  ;; Neue XData anhaengen
-  (setq xdata-list (list -3 (list "SBZ" (cons 1000 group-name))))
+  ;; Neue XData: DXF 1000 = Gruppenname, DXF 1005 = Quell-Handle
+  ;; DXF 1005 ist speziell fuer Handles — AutoCAD aktualisiert bei WBLOCK/INSERT!
+  (if (and source-handle (/= source-handle ""))
+    (setq xdata-list
+      (list -3 (list "SBZ"
+        (cons 1000 group-name)
+        (cons 1005 source-handle))))
+    (setq xdata-list
+      (list -3 (list "SBZ"
+        (cons 1000 group-name))))
+  )
   (setq ent-data (append ent-data (list xdata-list)))
   (entmod ent-data)
 )
@@ -527,6 +537,28 @@
       (setq app-data (cdr (assoc "SBZ" (cdr xdata))))
       (if app-data
         (cdr (assoc 1000 app-data))
+        nil
+      )
+    )
+    nil
+  )
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:get-xdata-handle
+;;; Liest das Quell-Block Handle aus XData einer Kopie-Block Entity
+;;; Parameter: ent - Entity-Name (ename)
+;;; Rueckgabe: Handle-String (z.B. "2A3F") oder nil
+;;; ----------------------------------------------------------------------------
+(defun SBZ:get-xdata-handle (ent / ent-data xdata app-data)
+  (setq ent-data (entget ent '("SBZ")))
+  (setq xdata (assoc -3 ent-data))
+  (if xdata
+    (progn
+      (setq app-data (cdr (assoc "SBZ" (cdr xdata))))
+      (if app-data
+        (cdr (assoc 1005 app-data))
         nil
       )
     )
@@ -859,6 +891,64 @@
     )
   )
   count
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:get-source-ss-for-group
+;;; Findet die Quell-Bloecke die zu einer Gruppe gehoeren.
+;;; Methode: Liest Quell-Handle (DXF 1005) aus XData der Kopie-Bloecke,
+;;; dann findet die Quell-Bloecke via handent.
+;;; Ein Quell-Block kann in mehreren Gruppen sein!
+;;; Parameter:
+;;;   group-name  - Gruppenname (String)
+;;;   quell-block - Name des Quell-Blocks (String, nur fuer Logging)
+;;; Rueckgabe: Selection Set der Quell-Bloecke oder nil
+;;; ----------------------------------------------------------------------------
+(defun SBZ:get-source-ss-for-group (group-name quell-block /
+                                     group-ents ent src-handle src-ent
+                                     ss-result handles-found)
+  ;; 1. Alle Kopie-Bloecke der Gruppe finden (via XData Gruppenname)
+  (setq group-ents (SBZ:get-group-entities group-name))
+  (if (not group-ents)
+    (progn
+      (SBZ:log-write "WARN"
+        (strcat "Keine Kopie-Bloecke fuer Gruppe '" group-name "' gefunden"))
+      nil
+    )
+    (progn
+      ;; 2. Quell-Handles aus XData lesen und Quell-Entities sammeln
+      (setq ss-result (ssadd))
+      (setq handles-found 0)
+      (foreach ent group-ents
+        (setq src-handle (SBZ:get-xdata-handle ent))
+        (if src-handle
+          (progn
+            ;; Handle → Entity (handent gibt ename zurueck)
+            (setq src-ent (handent src-handle))
+            (if src-ent
+              (progn
+                (ssadd src-ent ss-result)
+                (setq handles-found (1+ handles-found))
+              )
+              (SBZ:log-write "WARN"
+                (strcat "Handle '" src-handle "' nicht gefunden (Quell-Block geloescht?)"))
+            )
+          )
+          ;; Kein Handle → Fallback auf Position (fuer alte Gruppen ohne Handle)
+          (SBZ:log-write "DEBUG"
+            (strcat "Kopie-Block ohne Quell-Handle (alte Gruppe?)"))
+        )
+      )
+      (SBZ:log-write "INFO"
+        (strcat "Quell-Bloecke via Handle: " (itoa handles-found)
+                " von " (itoa (length group-ents)) " Kopie-Bloecken"))
+      (if (> (sslength ss-result) 0)
+        ss-result
+        nil
+      )
+    )
+  )
 )
 
 
@@ -1346,9 +1436,12 @@
                           (SBZ:insert-copyblock ent copy-blk-name abs-h rel-z ins-z bau0 z-mode))
                         (if new-ent-name
                           (progn
-                            ;; XData mit Gruppenname setzen (falls Gruppe angegeben)
+                            ;; XData mit Gruppenname + Quell-Handle setzen
                             (if (and group-name (/= group-name ""))
-                              (SBZ:set-xdata (vlax-vla-object->ename new-ent-name) group-name)
+                              (SBZ:set-xdata
+                                (vlax-vla-object->ename new-ent-name)
+                                group-name
+                                (cdr (assoc 5 (entget ent))))  ;; DXF 5 = Handle des Quell-Blocks
                             )
                             (setq count-ok (1+ count-ok))
                             (SBZ:log-write "DEBUG"
@@ -2561,7 +2654,7 @@
                          dlg-colorblock dlg-colorabs dlg-colorrel dlg-colorbau0
                          dlg-freezeabs dlg-freezerel dlg-freezebau0
                          dlg-action dlg-group dlg-groupbau0 dlg-usegroupbau0
-                         result count ss blocks blk-def old-copyblock
+                         result count ss ss-work blocks blk-def old-copyblock
                          group-names sel-group sel-group-data bau0-str)
   (SBZ:ensure-init)
   (defun *error* (msg)
@@ -2878,28 +2971,42 @@
                       (SBZ:set-scale (atof dlg-scale)))
                     (if dlg-suffix (SBZ:set-suffix dlg-suffix))
 
-                    ;; 1. Alte Entities dieser Gruppe loeschen
+                    ;; 1. Quell-Bloecke dieser Gruppe finden (via Kopie-Positionen)
+                    ;; MUSS VOR delete-group passieren!
+                    (setq ss-work
+                      (SBZ:get-source-ss-for-group sel-group last-blk))
+
+                    ;; 2. Alte Entities dieser Gruppe loeschen
                     (SBZ:delete-group sel-group)
 
-                    ;; 2. Gruppen-XRecord mit Dialog-Werten speichern
+                    ;; 3. Gruppen-XRecord mit Dialog-Werten speichern
                     (SBZ:save-group sel-group
                       (SBZ:group-data-from-current
                         last-blk last-attr bau0-str
                         (cdr (assoc "ZMODE" sel-group-data))
                         sel-group))
 
-                    ;; 3. Bau-0 fuer process-blocks bestimmen
+                    ;; 4. Bau-0 fuer process-blocks bestimmen
                     (if (and (= dlg-usegroupbau0 "1")
                              dlg-groupbau0 (/= dlg-groupbau0 ""))
                       (setq bau0 (atof (vl-string-subst "." "," dlg-groupbau0)))
                     )
 
-                    ;; 4. Bloecke neu erstellen (nil = alle suchen)
-                    (setq count
-                      (SBZ:process-blocks last-blk last-attr bau0
-                        (cdr (assoc "ZMODE" sel-group-data)) sel-group nil))
-                    (princ (strcat "\n" (itoa count) " Bloecke in Gruppe '"
-                                   sel-group "' neu erstellt."))
+                    ;; 5. Bloecke neu erstellen (NUR die Quell-Bloecke der Gruppe!)
+                    (if ss-work
+                      (progn
+                        (setq count
+                          (SBZ:process-blocks last-blk last-attr bau0
+                            (cdr (assoc "ZMODE" sel-group-data)) sel-group ss-work))
+                        (princ (strcat "\n" (itoa count) " Bloecke in Gruppe '"
+                                       sel-group "' neu erstellt."))
+                      )
+                      (progn
+                        (princ "\nKeine Quell-Bloecke fuer diese Gruppe gefunden.")
+                        (SBZ:log-write "WARN"
+                          (strcat "Aendern: Keine Quell-Bloecke fuer Gruppe '" sel-group "'"))
+                      )
+                    )
 
                     ;; 5. Globale Variablen WIEDERHERSTELLEN
                     (setq *SBZ:cfg-copyblock* old-copyblock)
