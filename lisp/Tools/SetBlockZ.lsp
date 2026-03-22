@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.20.0
+;;; Version: 1.22.1
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -35,7 +35,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.20.0")
+(setq *SBZ:version* "1.22.1")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -1641,7 +1641,7 @@
                         '(1 . "0.000")
                         '(2 . "HOEHE_ABS")
                         '(3 . "Absolute Hoehe")
-                        '(70 . 0)             ;; Flags: sichtbar
+                        '(70 . 16)            ;; Flags: sichtbar + Position gesperrt
                         '(72 . 0)             ;; Horizontale Justierung: Links
                         '(74 . 1)             ;; Vertikale Justierung: Unten
                   ))
@@ -1658,7 +1658,7 @@
                         '(1 . "0.000")
                         '(2 . "HOEHE_REL")
                         '(3 . "Relative Hoehe (nach Bau-0)")
-                        '(70 . 0)
+                        '(70 . 16)            ;; Flags: sichtbar + Position gesperrt
                         '(72 . 0)             ;; Links
                         '(74 . 3)             ;; Oben
                   ))
@@ -1676,7 +1676,7 @@
                         '(1 . "0.000")
                         '(2 . "HOEHE_BAU0")
                         '(3 . "Bau-0-Hoehe")
-                        '(70 . 0)             ;; Flags: sichtbar (Layer steuert Sichtbarkeit)
+                        '(70 . 16)            ;; Flags: sichtbar + Position gesperrt (Layer steuert Sichtbarkeit)
                         '(72 . 0)             ;; Links
                         '(74 . 3)             ;; Oben
                   ))
@@ -1808,7 +1808,7 @@
 ;;; Rueckgabe: VLA-Objekt bei Erfolg, nil bei Fehler
 ;;; ----------------------------------------------------------------------------
 (defun SBZ:insert-copyblock (orig-ent blk-name abs-h rel-z ins-z bau0 z-mode group-name
-                             / orig-data orig-pt ins-pt new-ent attrs
+                             / orig-data orig-pt ins-pt new-ent attrs bks-angle
                                scale suffix copy-layer style-name
                                abs-str rel-str bau0-str tag-str
                                att-ent att-data)
@@ -1825,6 +1825,11 @@
   (setq copy-layer (SBZ:get-copy-layername z-mode bau0 group-name))
   (SBZ:ensure-attr-layers copy-layer)
   ;; Block einfuegen
+  ;; BKS-Rotation berechnen: Winkel der UCS X-Achse im WKS
+  ;; Damit Block-Text parallel zum aktuellen BKS steht
+  (setq bks-angle
+    (angle '(0.0 0.0 0.0) (getvar "UCSXDIR")))
+  ;; Block einfuegen (mit BKS-Rotation)
   (setq new-ent
     (vl-catch-all-apply
       '(lambda ()
@@ -1833,7 +1838,7 @@
           (vlax-3d-point ins-pt)
           blk-name
           scale scale scale
-          0.0
+          bks-angle
         )
       )
     )
@@ -1872,7 +1877,7 @@
         (cond
           ((= tag-str "HOEHE_ABS")
             (setq att-data (subst (cons 1 abs-str) (assoc 1 att-data) att-data))
-            (setq att-data (subst (cons 70 0) (assoc 70 att-data) att-data))
+            (setq att-data (subst (cons 70 16) (assoc 70 att-data) att-data))
             (setq att-data (subst (cons 7 style-name) (assoc 7 att-data) att-data))
             (setq att-data (subst (cons 8 (strcat copy-layer "-AttABS"))
                                   (assoc 8 att-data) att-data))
@@ -1883,7 +1888,7 @@
           )
           ((= tag-str "HOEHE_REL")
             (setq att-data (subst (cons 1 rel-str) (assoc 1 att-data) att-data))
-            (setq att-data (subst (cons 70 0) (assoc 70 att-data) att-data))
+            (setq att-data (subst (cons 70 16) (assoc 70 att-data) att-data))
             (setq att-data (subst (cons 7 style-name) (assoc 7 att-data) att-data))
             (setq att-data (subst (cons 8 (strcat copy-layer "-AttREL"))
                                   (assoc 8 att-data) att-data))
@@ -1893,7 +1898,7 @@
           )
           ((= tag-str "HOEHE_BAU0")
             (setq att-data (subst (cons 1 bau0-str) (assoc 1 att-data) att-data))
-            (setq att-data (subst (cons 70 0) (assoc 70 att-data) att-data))
+            (setq att-data (subst (cons 70 16) (assoc 70 att-data) att-data))
             (setq att-data (subst (cons 7 style-name) (assoc 7 att-data) att-data))
             (setq att-data (subst (cons 8 (strcat copy-layer "-AttBAU0"))
                                   (assoc 8 att-data) att-data))
@@ -2451,6 +2456,12 @@
   (write-line "    : popup_list { key = \"group\"; label = \"Gruppe:\"; }" fp)
   (write-line "    : button { key = \"groupdel\"; label = \"Loeschen\"; width = 8; fixed_width = true; }" fp)
   (write-line "  }" fp)
+  ;; Info-Zeile + Buttons direkt unter Gruppe
+  (write-line "  : text { key = \"groupinfo\"; label = \"\"; }" fp)
+  (write-line "  : row {" fp)
+  (write-line "    : button { key = \"grp_add\"; label = \"Hinzufuegen\"; width = 16; fixed_width = true; }" fp)
+  (write-line "    : button { key = \"grp_remove\"; label = \"Entfernen\"; width = 16; fixed_width = true; }" fp)
+  (write-line "  }" fp)
   (write-line "  spacer;" fp)
 
   ;; ===== BOX 1: ZEICHNUNG =====
@@ -2655,8 +2666,68 @@
       ;; Kopie-Modus immer ein bei Gruppen
       (set_tile "copymode" "1")
       (SBZ:settings-update-copyblock-state "1")
+      ;; Info-Zeile aktualisieren + Buttons aktivieren
+      (SBZ:update-groupinfo group-name)
+      (mode_tile "grp_add" 0)
+      (mode_tile "grp_remove" 0)
       (SBZ:log-write "INFO" (strcat "Gruppe '" group-name "' in Dialog geladen"))
     )
+  )
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:update-groupinfo
+;;; Aktualisiert die Info-Zeile im Dialog mit Anzahl Bloecke in Gruppe
+;;; Parameter: group-name - Gruppenname oder nil
+;;; ----------------------------------------------------------------------------
+(defun SBZ:update-groupinfo (group-name / ents count)
+  (if (and group-name (/= group-name ""))
+    (progn
+      (setq ents (SBZ:get-group-entities group-name))
+      (setq count (if ents (length ents) 0))
+      (set_tile "groupinfo"
+        (strcat (itoa count) " Bloecke in Gruppe '" group-name "'"))
+    )
+    (set_tile "groupinfo" "")
+  )
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:dlg-grp-add
+;;; Hinzufuegen-Button: Dialog verstecken, User waehlt Quell-Bloecke,
+;;; Kopie-Bloecke werden erstellt + XData gesetzt, Dialog zeigen
+;;; Benoetigt Zugriff auf: sel-group, sel-group-data, bau0
+;;; ----------------------------------------------------------------------------
+(defun SBZ:dlg-grp-add ( / dlg-idx)
+  ;; sel-group aus aktuellem Dropdown lesen
+  (setq dlg-idx (atoi (get_tile "group")))
+  (if (and (> dlg-idx 0) group-names)
+    (progn
+      (setq sel-group (nth (1- dlg-idx) group-names))
+      (setq sel-group-data (SBZ:load-group sel-group))
+      (done_dialog 10)
+    )
+    (alert "Zuerst eine Gruppe waehlen.")
+  )
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:dlg-grp-remove
+;;; Entfernen-Button: Dialog verstecken, User waehlt Kopie-Bloecke,
+;;; ausgewaehlte werden geloescht, Dialog zeigen
+;;; ----------------------------------------------------------------------------
+(defun SBZ:dlg-grp-remove ( / dlg-idx)
+  ;; sel-group aus aktuellem Dropdown lesen
+  (setq dlg-idx (atoi (get_tile "group")))
+  (if (and (> dlg-idx 0) group-names)
+    (progn
+      (setq sel-group (nth (1- dlg-idx) group-names))
+      (done_dialog 11)
+    )
+    (alert "Zuerst eine Gruppe waehlen.")
   )
 )
 
@@ -2674,7 +2745,9 @@
                          dlg-freezeabs dlg-freezerel dlg-freezebau0
                          dlg-action dlg-group dlg-groupbau0 dlg-usegroupbau0
                          result count ss ss-work blocks blk-def old-copyblock
-                         group-names sel-group sel-group-data bau0-str)
+                         group-names sel-group sel-group-data bau0-str
+                         ss-add ss-filtered ss-remove ent ent-data i
+                         add-count rem-count copy-blk-name)
   (SBZ:ensure-init)
   (defun *error* (msg)
     (if (not (SBZ:cancel-p msg))
@@ -2706,16 +2779,29 @@
   (setq dcl-file (SBZ:write-settings-dcl))
   (setq dcl-id (load_dialog dcl-file))
 
-  (if (not (new_dialog "sbz_settings" dcl-id))
+  (if (not dcl-id)
     (progn
-      (princ "\nFehler: Settings-Dialog konnte nicht geoeffnet werden.")
-      (SBZ:log-write "ERROR" "Settings-Dialog konnte nicht geoeffnet werden")
-      (if (< 0 dcl-id) (unload_dialog dcl-id))
+      (princ "\nFehler: Settings-DCL konnte nicht geladen werden.")
+      (SBZ:log-write "ERROR" "Settings-DCL load fehlgeschlagen")
       (vl-file-delete dcl-file)
       (princ)
     )
     (progn
+      ;; Dialog-Schleife: wird bei Hinzufuegen/Entfernen wiederholt
+      (setq *SBZ:dlg-running* T)
+      (while *SBZ:dlg-running*
+      ;; dlg-action zuruecksetzen fuer diesen Durchlauf
+      (setq dlg-action nil)
+      ;; === DIALOG OEFFNEN ===
+      (if (not (new_dialog "sbz_settings" dcl-id))
+        (progn
+          (SBZ:log-write "ERROR" "Settings-Dialog Re-Open fehlgeschlagen")
+          (setq *SBZ:dlg-running* nil)
+        )
+        (progn
+
       ;; === GRUPPE: Dropdown befuellen ===
+      (setq group-names (SBZ:get-group-names))
       (start_list "group")
       (add_list "(keine Gruppe)")
       (if group-names
@@ -2723,6 +2809,9 @@
       )
       (end_list)
       (set_tile "group" "0")  ;; Default: keine Gruppe
+      (set_tile "groupinfo" "")
+      (mode_tile "grp_add" 1)     ;; deaktiviert bis Gruppe gewaehlt
+      (mode_tile "grp_remove" 1)  ;; deaktiviert bis Gruppe gewaehlt
 
       ;; === BOX 1: Zeichnung ===
       (set_tile "bau0" (rtos bau0 2 3))
@@ -2811,11 +2900,18 @@
           "      (if group-names (foreach gn group-names (add_list gn)))"
           "      (end_list)"
           "      (set_tile \"group\" \"0\")"
+          "      (SBZ:update-groupinfo nil)"
           "    )"
           "  )"
           ")"
         )
       )
+
+      ;; Bloecke hinzufuegen
+      (action_tile "grp_add" "(SBZ:dlg-grp-add)")
+
+      ;; Bloecke entfernen
+      (action_tile "grp_remove" "(SBZ:dlg-grp-remove)")
 
       ;; Standard: Setzt alle Felder auf Werkseinstellungen
       (action_tile "defaults" "(SBZ:reset-defaults)")
@@ -2859,8 +2955,125 @@
       ;; Schliessen
       (action_tile "close" "(setq dlg-action \"close\")(done_dialog 0)")
 
+      ;; Wenn sel-group bekannt (Re-Open nach Add/Remove), Dropdown setzen
+      (if (and sel-group (/= sel-group "") group-names)
+        (progn
+          (setq *SBZ:dlg-grp-idx*
+            (vl-position sel-group group-names))
+          (if *SBZ:dlg-grp-idx*
+            (progn
+              (set_tile "group" (itoa (1+ *SBZ:dlg-grp-idx*)))
+              (SBZ:load-group-to-dialog sel-group)
+            )
+          )
+        )
+      )
+
       ;; --- Dialog starten ---
       (setq result (start_dialog))
+
+      ;; === HINZUFUEGEN (result=10) ===
+      (cond
+        ((= result 10)
+          ;; Gruppen-Settings laden
+          (if (and sel-group (/= sel-group ""))
+            (progn
+              (setq sel-group-data (SBZ:load-group sel-group))
+              (if sel-group-data
+                (progn
+                  (setq last-blk (cdr (assoc "QUELLBLOCK" sel-group-data)))
+                  (setq last-attr (cdr (assoc "ATTRTAG" sel-group-data)))
+                  (princ (strcat "\nBloecke waehlen ('" last-blk "') um zur Gruppe '"
+                                 sel-group "' hinzuzufuegen:"))
+                  ;; User waehlt interaktiv Quell-Bloecke
+                  (setq ss-add (ssget))
+                  (if ss-add
+                    (progn
+                      ;; Post-Filter: nur passende Bloecke behalten
+                      (setq ss-filtered (ssadd))
+                      (setq i (sslength ss-add))
+                      (while (> (setq i (1- i)) -1)
+                        (setq ent (ssname ss-add i))
+                        (setq ent-data (entget ent))
+                        (if (and (= (cdr (assoc 0 ent-data)) "INSERT")
+                                 (= (strcase (cdr (assoc 2 ent-data))) (strcase last-blk))
+                                 (= (cdr (assoc 410 ent-data)) "Model"))
+                          (ssadd ent ss-filtered)
+                        )
+                      )
+                      (if (> (sslength ss-filtered) 0)
+                        (progn
+                          ;; Gruppen-Settings temporaer laden
+                          (SBZ:apply-group-settings sel-group)
+                          ;; Bau-0 ermitteln
+                          (setq bau0-str (cdr (assoc "BAU0" sel-group-data)))
+                          (if (and bau0-str (/= bau0-str ""))
+                            (setq bau0 (atof bau0-str))
+                            (setq bau0 (SBZ:get-bau0))
+                          )
+                          ;; Bloecke verarbeiten
+                          (setq add-count
+                            (SBZ:process-blocks last-blk last-attr bau0
+                              (cdr (assoc "ZMODE" sel-group-data))
+                              sel-group ss-filtered))
+                          (princ (strcat "\n" (itoa add-count) " Bloecke zu Gruppe '"
+                                         sel-group "' hinzugefuegt."))
+                          (SBZ:log-write "INFO"
+                            (strcat "Hinzufuegen: " (itoa add-count) " Bloecke zu '" sel-group "'"))
+                        )
+                        (princ "\nKeine passenden Bloecke in der Auswahl.")
+                      )
+                    )
+                    (princ "\nKeine Auswahl.")
+                  )
+                )
+              )
+            )
+          )
+        ) ;; end result=10
+
+        ;; === ENTFERNEN (result=11) ===
+        ((= result 11)
+          (if (and sel-group (/= sel-group ""))
+            (progn
+              (setq copy-blk-name (SBZ:build-copyblock-name sel-group))
+              (princ (strcat "\nKopie-Bloecke waehlen ('" copy-blk-name "') zum Entfernen:"))
+              ;; User waehlt interaktiv Kopie-Bloecke
+              (setq ss-remove (ssget))
+              (if ss-remove
+                (progn
+                  (setq rem-count 0)
+                  (setq i (sslength ss-remove))
+                  (while (> (setq i (1- i)) -1)
+                    (setq ent (ssname ss-remove i))
+                    (setq ent-data (entget ent))
+                    ;; Nur Kopie-Bloecke dieser Gruppe entfernen
+                    (if (and (= (cdr (assoc 0 ent-data)) "INSERT")
+                             (= (strcase (cdr (assoc 2 ent-data))) (strcase copy-blk-name))
+                             (= (SBZ:get-xdata ent) sel-group))
+                      (progn
+                        (entdel ent)
+                        (setq rem-count (1+ rem-count))
+                      )
+                    )
+                  )
+                  (princ (strcat "\n" (itoa rem-count) " Bloecke aus Gruppe '"
+                                 sel-group "' entfernt."))
+                  (SBZ:log-write "INFO"
+                    (strcat "Entfernen: " (itoa rem-count) " Bloecke aus '" sel-group "'"))
+                )
+                (princ "\nKeine Auswahl.")
+              )
+            )
+          )
+        ) ;; end result=11
+
+        ;; === NORMAL: Save/Update/Close (result=0,1,3) → Schleife beenden ===
+        (T (setq *SBZ:dlg-running* nil))
+      ) ;; end cond
+
+      )) ;; end progn + if new_dialog
+      ) ;; end while
 
       ;; --- Dialog geschlossen, Werte auswerten ---
       (if (and dlg-action (/= dlg-action "close"))
