@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.17.2
+;;; Version: 1.17.4
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -35,7 +35,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.17.2")
+(setq *SBZ:version* "1.17.4")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -561,36 +561,6 @@
 )
 
 
-;;; ----------------------------------------------------------------------------
-;;; SBZ:get-groups-dict
-;;; Holt oder erstellt das SBZ_Groups Dictionary im Named Object Dictionary
-;;; Rueckgabe: VLA Dictionary-Objekt
-;;; ----------------------------------------------------------------------------
-(defun SBZ:get-groups-dict ( / doc nod dict)
-  (setq doc (vla-get-activedocument (vlax-get-acad-object)))
-  (setq nod (vla-GetExtensionDictionary
-              (vla-get-modelspace doc)))
-  ;; Versuche Dictionary zu holen
-  (if (vl-catch-all-error-p
-        (setq dict (vl-catch-all-apply 'vla-item (list nod "SBZ_Groups"))))
-    ;; Nicht vorhanden → im Named Object Dictionary der Zeichnung erstellen
-    (progn
-      (setq nod (vla-item
-                  (vla-get-dictionaries doc)
-                  "ACAD_GROUP"))
-      ;; Besser: direkt auf der Zeichnung (root NOD)
-      (setq nod (vlax-invoke
-                  (vla-get-activedocument (vlax-get-acad-object))
-                  'GetExtensionDictionary))
-      ;; Alternativer Ansatz: Named Objects Dictionary direkt
-      (setq dict nil)
-    )
-  )
-  ;; Sauberer Ansatz: entget auf NOD Entity
-  dict
-)
-
-
 ;;; Sauberer Ansatz fuer Named Object Dictionary via entget/entmake:
 
 ;;; ----------------------------------------------------------------------------
@@ -662,7 +632,13 @@
       ;; Altes XRecord loeschen falls vorhanden
       (setq old-rec (dictsearch dict-ent group-name))
       (if old-rec
-        (entdel (cdr (assoc -1 old-rec)))
+        (progn
+          ;; Erst aus Dictionary entfernen, DANN Entity loeschen
+          (dictremove dict-ent group-name)
+          (entdel (cdr (assoc -1 old-rec)))
+          (SBZ:log-write "DEBUG"
+            (strcat "Altes XRecord fuer '" group-name "' entfernt"))
+        )
       )
       ;; DXF-Liste aufbauen: XRecord mit DXF 1000 (String) pro Setting
       ;; Format: "KEY=VALUE" pro DXF 1000 Eintrag
@@ -1370,7 +1346,7 @@
         (strcat "Fertig: " (itoa count-ok) " OK, " (itoa count-err) " Fehler"))
       (if (> count-err 0)
         (SBZ:log-write "WARN"
-          (strcat count-err " Bloecke konnten nicht verarbeitet werden (siehe Log)"))
+          (strcat (itoa count-err) " Bloecke konnten nicht verarbeitet werden (siehe Log)"))
       )
       count-ok
     )
@@ -2094,12 +2070,8 @@
                                   (princ (strcat "\n" (itoa count) " Bloecke verarbeitet."))
 
                                   ;; Gruppe als XRecord speichern
-                                  (setq bau0-str
-                                    (if (equal bau0 (SBZ:get-bau0) 0.001)
-                                      ""  ;; Gleich wie DWG-Standard → leer lassen
-                                      (rtos bau0 2 3)  ;; Eigener Wert
-                                    )
-                                  )
+                                  ;; Bau-0 immer als Gruppen-Wert speichern
+                                  (setq bau0-str (rtos bau0 2 3))
                                   (SBZ:save-group group-name
                                     (SBZ:group-data-from-current
                                       blk-name selected-attr bau0-str z-mode group-name))
