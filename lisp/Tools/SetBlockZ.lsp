@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.18.1
+;;; Version: 1.18.2
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -35,7 +35,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.18.1")
+(setq *SBZ:version* "1.18.2")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -2150,6 +2150,8 @@
 
                             ;; --- FENSTER: Crossing-Polygon zeichnen ---
                             ((= sel-mode "Fenster")
+                              ;; initget loeschen (sonst stoert vorheriges Keyword-Menue)
+                              (initget)
                               (setq poly-pts (SBZ:get-polygon-points))
                               (if poly-pts
                                 (progn
@@ -2224,23 +2226,30 @@
                               ;; Pruefen ob Gruppe schon existiert
                               (if (SBZ:load-group group-name)
                                 (progn
-                                  (initget "Ueberschreiben Abbrechen")
+                                  (initget "Ueberschreiben Hinzufuegen Abbrechen")
+                                  (setq confirm nil)
                                   (setq confirm
                                     (getkword
                                       (strcat "\nGruppe '" group-name
-                                              "' existiert bereits. [Ueberschreiben/Abbrechen] <Abbrechen>: ")))
-                                  (if (not confirm) (setq confirm "Abbrechen"))
-                                  (if (= confirm "Abbrechen")
-                                    (progn
+                                              "' existiert. [Ueberschreiben/Hinzufuegen/Abbrechen] <Hinzufuegen>: ")))
+                                  (if (not confirm) (setq confirm "Hinzufuegen"))
+                                  (SBZ:log-write "INFO"
+                                    (strcat "Gruppe existiert → User: " confirm))
+                                  (cond
+                                    ((= confirm "Abbrechen")
                                       (princ "\nAbgebrochen.")
-                                      (SBZ:log-write "INFO"
-                                        (strcat "Gruppe '" group-name "' existiert, Abbruch"))
                                       (setq group-name nil)
                                     )
-                                    (progn
+                                    ((= confirm "Ueberschreiben")
+                                      ;; Alte Gruppe komplett loeschen
                                       (SBZ:log-write "INFO"
                                         (strcat "Gruppe '" group-name "' wird ueberschrieben"))
                                       (SBZ:delete-group group-name)
+                                    )
+                                    ((= confirm "Hinzufuegen")
+                                      ;; Bestehende Bloecke bleiben, neue werden hinzugefuegt
+                                      (SBZ:log-write "INFO"
+                                        (strcat "Bloecke werden zu Gruppe '" group-name "' hinzugefuegt"))
                                     )
                                   )
                                 )
