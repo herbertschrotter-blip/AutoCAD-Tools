@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.1.0
+;;; Version: 1.1.1
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -34,7 +34,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.1.0")
+(setq *SBZ:version* "1.1.1")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -782,15 +782,20 @@
                          '(10 0.0 0.0 0.0)
                          '(70 . 2)))    ;; Bit 2 = hat Attribute
         (progn
-          ;; Punkt-Marker (Kreuz)
-          (entmake (list '(0 . "LINE") '(8 . "0") '(62 . 256)
+          ;; Punkt-Marker (Kreuz) — alles "Von Block"
+          ;; DXF 62=0 (Farbe ByBlock), DXF 6="ByBlock" (Linientyp), DXF 370=-2 (Linienstaerke ByBlock)
+          (entmake (list '(0 . "LINE") '(8 . "0")
+                        '(62 . 0) '(6 . "ByBlock") '(370 . -2)
                         '(10 -0.5 0.0 0.0) '(11 0.5 0.0 0.0)))
-          (entmake (list '(0 . "LINE") '(8 . "0") '(62 . 256)
+          (entmake (list '(0 . "LINE") '(8 . "0")
+                        '(62 . 0) '(6 . "ByBlock") '(370 . -2)
                         '(10 0.0 -0.5 0.0) '(11 0.0 0.5 0.0)))
           ;; ATTDEF: HOEHE_ABS (absolut) — sichtbar, rechts vom Marker
           (entmake (list '(0 . "ATTDEF")
                         '(8 . "0")
-                        '(62 . 256)           ;; Farbe ByBlock
+                        '(62 . 0)              ;; Farbe ByBlock
+                        '(6 . "ByBlock")       ;; Linientyp ByBlock
+                        '(370 . -2)            ;; Linienstaerke ByBlock
                         '(10 0.8 0.3 0.0)     ;; Position rechts oben
                         '(40 . 0.5)           ;; Texthoehe
                         '(1 . "0.000")        ;; Default-Wert
@@ -802,7 +807,9 @@
           ;; ATTDEF: HOEHE_REL (relativ) — sichtbar, rechts unter ABS
           (entmake (list '(0 . "ATTDEF")
                         '(8 . "0")
-                        '(62 . 256)
+                        '(62 . 0)
+                        '(6 . "ByBlock")
+                        '(370 . -2)
                         '(10 0.8 -0.4 0.0)    ;; Position rechts unten
                         '(40 . 0.5)
                         '(1 . "0.000")
