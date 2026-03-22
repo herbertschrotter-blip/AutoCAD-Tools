@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.12.1
+;;; Version: 1.13.0
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -35,7 +35,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.12.1")
+(setq *SBZ:version* "1.13.0")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -578,6 +578,39 @@
 ;;; BLOCK-VERARBEITUNG
 ;;; ============================================================================
 
+;;; --- Font-Anzeigename → TTF-Dateiname ---
+(defun SBZ:font-to-ttf (font-name / )
+  (cond
+    ((= font-name "Arial") "arial.ttf")
+    ((= font-name "Arial Bold") "arialbd.ttf")
+    ((= font-name "Arial Italic") "ariali.ttf")
+    ((= font-name "Arial Bold Italic") "arialbi.ttf")
+    ((= font-name "Calibri") "calibri.ttf")
+    ((= font-name "Calibri Bold") "calibrib.ttf")
+    ((= font-name "Calibri Light") "calibril.ttf")
+    ((= font-name "Cambria") "cambria.ttc")
+    ((= font-name "Consolas") "consola.ttf")
+    ((= font-name "Courier New") "cour.ttf")
+    ((= font-name "Courier New Bold") "courbd.ttf")
+    ((= font-name "Georgia") "georgia.ttf")
+    ((= font-name "Impact") "impact.ttf")
+    ((= font-name "Microsoft Sans Serif") "micross.ttf")
+    ((= font-name "Palatino Linotype") "pala.ttf")
+    ((= font-name "Segoe UI") "segoeui.ttf")
+    ((= font-name "Segoe UI Bold") "segoeuib.ttf")
+    ((= font-name "Tahoma") "tahoma.ttf")
+    ((= font-name "Tahoma Bold") "tahomabd.ttf")
+    ((= font-name "Times New Roman") "times.ttf")
+    ((= font-name "Times New Roman Bold") "timesbd.ttf")
+    ((= font-name "Trebuchet MS") "trebuc.ttf")
+    ((= font-name "Trebuchet MS Bold") "trebucbd.ttf")
+    ((= font-name "Verdana") "verdana.ttf")
+    ((= font-name "Verdana Bold") "verdanab.ttf")
+    (T (strcat font-name ".ttf"))  ;; Fallback
+  )
+)
+
+
 ;;; ----------------------------------------------------------------------------
 ;;; SBZ:ensure-textstyle
 ;;; Erstellt einen Text Style fuer die angegebene TTF-Schriftart
@@ -597,7 +630,7 @@
       (setq style-obj (vla-add styles style-name))
       ;; TTF-Dateiname setzen (AutoCAD sucht automatisch in Fonts-Ordner)
       (vl-catch-all-apply 'vla-put-fontFile
-        (list style-obj (strcat font-name ".ttf")))
+        (list style-obj (SBZ:font-to-ttf font-name)))
       (SBZ:log-write "INFO"
         (strcat "Text Style erstellt: '" style-name
                 "' → " font-name ".ttf"))
@@ -1603,31 +1636,31 @@
 ;;; Rueckgabe: Liste von Font-Namen (ohne .ttf Extension)
 (defun SBZ:get-font-list ( / )
   (list
-    "arial"
-    "arialbd"
-    "ariali"
-    "arialbi"
-    "calibri"
-    "calibrib"
-    "calibril"
-    "cambria"
-    "consola"
-    "cour"
-    "courbd"
-    "georgia"
-    "impact"
-    "micross"
-    "pala"
-    "segoeui"
-    "segoeuib"
-    "tahoma"
-    "tahomab"
-    "times"
-    "timesbd"
-    "trebuc"
-    "trebucbd"
-    "verdana"
-    "verdanab"
+    "Arial"
+    "Arial Bold"
+    "Arial Italic"
+    "Arial Bold Italic"
+    "Calibri"
+    "Calibri Bold"
+    "Calibri Light"
+    "Cambria"
+    "Consolas"
+    "Courier New"
+    "Courier New Bold"
+    "Georgia"
+    "Impact"
+    "Microsoft Sans Serif"
+    "Palatino Linotype"
+    "Segoe UI"
+    "Segoe UI Bold"
+    "Tahoma"
+    "Tahoma Bold"
+    "Times New Roman"
+    "Times New Roman Bold"
+    "Trebuchet MS"
+    "Trebuchet MS Bold"
+    "Verdana"
+    "Verdana Bold"
   )
 )
 
@@ -1694,30 +1727,32 @@
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"Modus\";" fp)
   (write-line "    : toggle { key = \"copymode\"; label = \"Kopie-Block einfuegen (Original bleibt auf Z=0)\"; }" fp)
-  (write-line "    : toggle { key = \"byblock\"; label = \"Farbe auf Von Block setzen\"; }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
 
   ;; ===== BOX 3: BLOCK =====
+  ;; Zeile 1: Name (volle Breite)
+  ;; Zeile 2: Basis-Layer + Suffix (gleich gross)
+  ;; Zeile 3: Farbe + Skalierung (gleich gross)
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"Block\";" fp)
-  (write-line "    : popup_list { key = \"colorblock\"; label = \"Farbe:\"; width = 22; }" fp)
+  (write-line "    : edit_box { key = \"copyblock\"; label = \"Name:\"; }" fp)
   (write-line "    : row {" fp)
-  (write-line "      : edit_box { key = \"copyblock\"; label = \"Name:\"; edit_width = 16; }" fp)
   (write-line "      : edit_box { key = \"copylayer\"; label = \"Basis-Layer:\"; edit_width = 10; }" fp)
+  (write-line "      : edit_box { key = \"suffix\"; label = \"Suffix:\"; edit_width = 10; }" fp)
   (write-line "    }" fp)
   (write-line "    : row {" fp)
-  (write-line "      : edit_box { key = \"scale\"; label = \"Skalierung:\"; edit_width = 8; }" fp)
-  (write-line "      : edit_box { key = \"suffix\"; label = \"Suffix (abs):\"; edit_width = 12; }" fp)
+  (write-line "      : popup_list { key = \"colorblock\"; label = \"Farbe:\"; }" fp)
+  (write-line "      : edit_box { key = \"scale\"; label = \"Skalierung:\"; edit_width = 10; }" fp)
   (write-line "    }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
 
   ;; ===== BOX 4: ATTRIBUT =====
-  ;; Schriftart oben, dann pro Attribut: Farbe + Einfrieren
+  ;; Schriftart oben, dann Tabelle: pro Attribut Farbe + Einfrieren
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"Attribut\";" fp)
-  (write-line "    : popup_list { key = \"font\"; label = \"Schriftart:\"; width = 22; }" fp)
+  (write-line "    : popup_list { key = \"font\"; label = \"Schriftart:\"; }" fp)
   (write-line "    spacer;" fp)
   ;; Spalten-Header
   (write-line "    : row {" fp)
@@ -1725,19 +1760,19 @@
   (write-line "      : text { width = 18; value = \"Farbe\"; }" fp)
   (write-line "      : text { width = 10; value = \"Einfrieren\"; }" fp)
   (write-line "    }" fp)
-  ;; Zeile: Absolut
+  ;; Absolut
   (write-line "    : row {" fp)
   (write-line "      : text { width = 10; value = \"Absolut\"; }" fp)
   (write-line "      : popup_list { key = \"colorabs\"; width = 18; }" fp)
   (write-line "      : toggle { key = \"freezeabs\"; label = \"\"; width = 10; }" fp)
   (write-line "    }" fp)
-  ;; Zeile: Relativ
+  ;; Relativ
   (write-line "    : row {" fp)
   (write-line "      : text { width = 10; value = \"Relativ\"; }" fp)
   (write-line "      : popup_list { key = \"colorrel\"; width = 18; }" fp)
   (write-line "      : toggle { key = \"freezerel\"; label = \"\"; width = 10; }" fp)
   (write-line "    }" fp)
-  ;; Zeile: Bau-0
+  ;; Bau-0
   (write-line "    : row {" fp)
   (write-line "      : text { width = 10; value = \"Bau-0\"; }" fp)
   (write-line "      : popup_list { key = \"colorbau0\"; width = 18; }" fp)
@@ -1746,7 +1781,7 @@
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
 
-  ;; ===== BUTTONS =====
+  ;; ===== BUTTONS: Aendern | Speichern | Schliessen =====
   (write-line "  : row {" fp)
   (write-line "    : button { key = \"update\"; label = \"Aendern\"; width = 12; fixed_width = true; }" fp)
   (write-line "    : spacer { width = 1; }" fp)
@@ -1784,7 +1819,7 @@
                          font-names font-idx
                          block-colors attr-colors
                          last-blk last-attr
-                         dlg-bau0 dlg-byblock
+                         dlg-bau0
                          dlg-copymode dlg-copyblock dlg-scale dlg-suffix
                          dlg-copylayer dlg-font
                          dlg-colorblock dlg-colorabs dlg-colorrel dlg-colorbau0
@@ -1836,7 +1871,6 @@
 
       ;; === BOX 2: Modus ===
       (set_tile "copymode" (itoa *SBZ:cfg-copymode*))
-      (set_tile "byblock" (itoa *SBZ:cfg-byblock*))
 
       ;; === BOX 3: Block ===
       ;; Block-Farbe Popup
@@ -1889,7 +1923,7 @@
       (setq *SBZ:dlg-get-all*
         (strcat
           "(setq dlg-bau0 (get_tile \"bau0\"))"
-          "(setq dlg-byblock (get_tile \"byblock\"))"
+          
           "(setq dlg-copymode (get_tile \"copymode\"))"
           "(setq dlg-copyblock (get_tile \"copyblock\"))"
           "(setq dlg-copylayer (get_tile \"copylayer\"))"
@@ -1929,7 +1963,6 @@
           (setq bau0 (atof (vl-string-subst "." "," dlg-bau0)))
           (SBZ:set-bau0 bau0)
           ;; Toggles
-          (setq *SBZ:cfg-byblock* (atoi dlg-byblock))
           (setq *SBZ:cfg-copymode* (atoi dlg-copymode))
           ;; Block-Settings
           (if (and dlg-copyblock (/= dlg-copyblock ""))
