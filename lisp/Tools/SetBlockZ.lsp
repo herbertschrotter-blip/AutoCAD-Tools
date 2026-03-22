@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.17.7
+;;; Version: 1.18.0
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -35,7 +35,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.17.7")
+(setq *SBZ:version* "1.18.0")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -1270,15 +1270,17 @@
 
 ;;; ----------------------------------------------------------------------------
 ;;; SBZ:process-blocks
-;;; Kernfunktion: Verarbeitet alle Blockinstanzen
+;;; Kernfunktion: Verarbeitet Blockinstanzen
 ;;; Parameter:
-;;;   blk-name  - Blockname (String)
-;;;   attr-tag  - Attribut-Tag fuer Hoehe (String)
-;;;   bau0      - Bau-0-Hoehe (Real)
-;;;   z-mode    - "ABS" oder "REL" (Z-Koordinate fuer Kopie-Block)
+;;;   blk-name   - Blockname (String)
+;;;   attr-tag   - Attribut-Tag fuer Hoehe (String)
+;;;   bau0       - Bau-0-Hoehe (Real)
+;;;   z-mode     - "ABS" oder "REL" (Z-Koordinate fuer Kopie-Block)
+;;;   group-name - Gruppenname (String oder nil)
+;;;   sel-set    - Selection Set (ssget Ergebnis, oder nil = alle suchen)
 ;;; Rueckgabe: Anzahl verarbeiteter Bloecke (Integer)
 ;;; ----------------------------------------------------------------------------
-(defun SBZ:process-blocks (blk-name attr-tag bau0 z-mode group-name
+(defun SBZ:process-blocks (blk-name attr-tag bau0 z-mode group-name sel-set
                            / ss i ent val-str abs-h rel-z ins-z count-ok count-err
                              copy-mode copy-blk-name copy-def-ok target-layer new-ent-name)
   (setq count-ok 0)
@@ -1295,8 +1297,9 @@
   (setq target-layer (if (and (= *SBZ:cfg-movelayer* 1)
                                (/= *SBZ:cfg-target-layer* ""))
                        *SBZ:cfg-target-layer* ""))
-  ;; Alle Bloecke mit dem Namen im Modelspace suchen
-  (setq ss (ssget "X" (list (cons 2 blk-name) (cons 410 "Model"))))
+  ;; Selection Set: uebergeben oder alle suchen
+  (setq ss (if sel-set sel-set
+    (ssget "X" (list (cons 2 blk-name) (cons 410 "Model")))))
   (if (and ss (> (sslength ss) 0))
     (progn
       (SBZ:log-write "INFO"
@@ -1912,6 +1915,63 @@
 ;;; ============================================================================
 
 ;;; ----------------------------------------------------------------------------
+;;; SBZ:get-polygon-points
+;;; Sammelt Punkte vom User fuer ein Crossing-Polygon (Fenster-Modus)
+;;; User klickt Punkte, Enter beendet die Eingabe
+;;; Rueckgabe: Liste von 2D-Punkten oder nil
+;;; ----------------------------------------------------------------------------
+(defun SBZ:get-polygon-points ( / pt pts)
+  (setq pts nil)
+  (while (setq pt (getpoint
+    (if pts
+      (strcat "\nNaechster Punkt (Enter = schliessen, " (itoa (length pts)) " Punkte): ")
+      "\nErster Punkt des Auswahlbereichs: ")))
+    (setq pts (cons (list (car pt) (cadr pt)) pts))
+  )
+  (if (and pts (>= (length pts) 3))
+    (reverse pts)
+    (progn
+      (if pts (princ "\nMindestens 3 Punkte noetig."))
+      nil
+    )
+  )
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:select-by-polygon
+;;; Laesst User ein Polygon zeichnen und waehlt alle Bloecke innerhalb
+;;; Verwendet ssget "CP" (Crossing Polygon)
+;;; Parameter: blk-name - Blockname fuer Filter (String)
+;;; Rueckgabe: Selection Set oder nil
+;;; ----------------------------------------------------------------------------
+(defun SBZ:select-by-polygon (blk-name / pts pt-list ss)
+  (setq pts (SBZ:get-polygon-points))
+  (if pts
+    (progn
+      ;; Punkte als flache Liste fuer ssget "CP"
+      ;; ssget "CP" erwartet eine Punktliste
+      (setq ss (ssget "CP" pts
+        (list (cons 0 "INSERT") (cons 2 blk-name) (cons 410 "Model"))))
+      (if (and ss (> (sslength ss) 0))
+        (progn
+          (SBZ:log-write "INFO"
+            (strcat "Polygon-Auswahl: " (itoa (sslength ss))
+                    " Bloecke in " (itoa (length pts)) "-Punkt Polygon"))
+          ss
+        )
+        (progn
+          (SBZ:log-write "INFO" "Polygon-Auswahl: Keine Bloecke im Polygon")
+          nil
+        )
+      )
+    )
+    nil
+  )
+)
+
+
+;;; ----------------------------------------------------------------------------
 ;;; c:SETBLOCKZ - Hauptbefehl
 ;;; Workflow:
 ;;;   1. Block anklicken → Blockname + Attribute ermitteln
@@ -1922,7 +1982,8 @@
 ;;; ----------------------------------------------------------------------------
 (defun c:SETBLOCKZ ( / *error* old-cmdecho
                        sel blk-ent blk-name attr-tags selected-attr
-                       bau0 bau0-input bau0-str dwg-bau0 ss-preview num-found confirm
+                       bau0 bau0-input bau0-str dwg-bau0 ss-preview ss-work
+                       num-found confirm sel-mode
                        z-mode count group-name)
   (SBZ:ensure-init)
   ;; Lokaler Error-Handler
@@ -2042,37 +2103,91 @@
                     )
                   )
 
-                  ;; --- Schritt 5: Vorschau + Bestaetigung ---
+                  ;; --- Schritt 5: Auswahl-Modus ---
                   (if bau0
                     (progn
-                      ;; Alle Bloecke mit dem Namen im Modelspace suchen
+                      ;; Zuerst alle zaehlen (fuer Anzeige)
                       (setq ss-preview (ssget "X" (list (cons 2 blk-name) (cons 410 "Model"))))
-                      (if (and ss-preview (> (sslength ss-preview) 0))
-                        (progn
-                          (setq num-found (sslength ss-preview))
-                          ;; Bloecke visuell markieren (blaue Griffe)
-                          (sssetfirst nil ss-preview)
-                          (SBZ:log-write "INFO"
-                            (strcat (itoa num-found) " Bloecke '" blk-name "' gefunden, Vorschau angezeigt"))
+                      (setq num-found (if (and ss-preview (> (sslength ss-preview) 0))
+                                        (sslength ss-preview) 0))
+                      (sssetfirst nil nil) ;; Keine Markierung vorab
 
-                          ;; User bestaetigen lassen
-                          (initget "Ja Nein")
-                          (setq confirm
+                      (if (= num-found 0)
+                        (progn
+                          (princ (strcat "\nKeine Bloecke '" blk-name "' im Modelspace gefunden."))
+                          (SBZ:log-write "WARN" (strcat "Keine Bloecke '" blk-name "' im Modelspace"))
+                        )
+                        (progn
+                          (SBZ:log-write "INFO"
+                            (strcat (itoa num-found) " Bloecke '" blk-name "' im Modelspace"))
+
+                          ;; Auswahl-Modus abfragen
+                          (initget "Fortfahren Waehlen Fenster Abbruch")
+                          (setq sel-mode
                             (getkword
                               (strcat "\n" (itoa num-found) " Bloecke '" blk-name
-                                      "' gefunden (markiert). Fortfahren? [Ja/Nein] <Ja>: ")))
-                          ;; nil (Enter) = Ja (Default)
-                          (if (or (not confirm) (= confirm "Ja"))
-                            (progn
-                              ;; Markierung aufheben
-                              (sssetfirst nil nil)
+                                      "' gefunden. [Fortfahren/Waehlen/Fenster/Abbruch] <Fortfahren>: ")))
+                          (if (not sel-mode) (setq sel-mode "Fortfahren"))
+                          (SBZ:log-write "INFO" (strcat "Auswahl-Modus: " sel-mode))
 
-                              ;; Z-Koordinate waehlen: Absolut oder Relativ
-                              ;; Bei Bau-0=0 sind beide gleich → automatisch ABS
+                          ;; Selection Set je nach Modus erstellen
+                          (setq ss-work nil)
+                          (cond
+                            ;; --- FORTFAHREN: Alle Bloecke ---
+                            ((= sel-mode "Fortfahren")
+                              (setq ss-work ss-preview)
+                            )
+
+                            ;; --- WAEHLEN: User waehlt einzeln oder Fenster ---
+                            ((= sel-mode "Waehlen")
+                              (princ "\nBloecke waehlen (Klick oder Fenster, Enter zum Beenden): ")
+                              (setq ss-work
+                                (ssget (list (cons 0 "INSERT") (cons 2 blk-name) (cons 410 "Model"))))
+                              (if (not ss-work)
+                                (progn
+                                  (princ "\nKeine Bloecke gewaehlt.")
+                                  (SBZ:log-write "INFO" "Waehlen: Keine Auswahl")
+                                )
+                              )
+                            )
+
+                            ;; --- FENSTER: Crossing-Polygon zeichnen ---
+                            ((= sel-mode "Fenster")
+                              (princ "\nPunkte fuer Auswahlbereich klicken (Enter zum Schliessen): ")
+                              (setq ss-work
+                                (ssget "_CP"
+                                  (SBZ:get-polygon-points)
+                                  (list (cons 0 "INSERT") (cons 2 blk-name) (cons 410 "Model"))))
+                              (if (not ss-work)
+                                (progn
+                                  (princ "\nKeine Bloecke im Bereich gefunden.")
+                                  (SBZ:log-write "INFO" "Fenster: Keine Bloecke im Bereich")
+                                )
+                              )
+                            )
+
+                            ;; --- ABBRUCH ---
+                            ((= sel-mode "Abbruch")
+                              (princ "\nAbgebrochen.")
+                              (SBZ:log-write "INFO" "Auswahl abgebrochen")
+                            )
+                          )
+
+                          ;; --- Schritt 6: Verarbeitung (wenn Selection Set vorhanden) ---
+                          (if (and ss-work (> (sslength ss-work) 0))
+                            (progn
+                              ;; Markieren
+                              (setq num-found (sslength ss-work))
+                              (sssetfirst nil ss-work)
+                              (princ (strcat "\n" (itoa num-found) " Bloecke ausgewaehlt."))
+                              (SBZ:log-write "INFO"
+                                (strcat (itoa num-found) " Bloecke ausgewaehlt"))
+
+                              ;; Z-Koordinate waehlen
                               (if (equal bau0 0.0 0.001)
                                 (progn
                                   (setq z-mode "ABS")
-                                  (SBZ:log-write "INFO" "Z-Modus: ABS (Bau-0=0, kein Unterschied)")
+                                  (SBZ:log-write "INFO" "Z-Modus: ABS (Bau-0=0)")
                                 )
                                 (progn
                                   (initget "Absolut Relativ")
@@ -2084,13 +2199,15 @@
                                 )
                               )
 
-                              ;; Blockname + Attribut in DWG Custom Properties merken
+                              ;; Markierung aufheben
+                              (sssetfirst nil nil)
+
+                              ;; Blockname + Attribut merken
                               (SBZ:set-last-blockname blk-name)
                               (SBZ:set-last-attrtag selected-attr)
-                              ;; Toggles speichern (AppData)
                               (SBZ:save-config)
 
-                              ;; --- Schritt 6: Gruppenname abfragen ---
+                              ;; --- Schritt 7: Gruppenname abfragen ---
                               (setq group-name
                                 (getstring T
                                   (strcat "\nGruppenname eingeben <" blk-name ">: ")))
@@ -2110,10 +2227,9 @@
                                     (progn
                                       (princ "\nAbgebrochen.")
                                       (SBZ:log-write "INFO"
-                                        (strcat "Gruppe '" group-name "' existiert, User hat abgebrochen"))
+                                        (strcat "Gruppe '" group-name "' existiert, Abbruch"))
                                       (setq group-name nil)
                                     )
-                                    ;; Ueberschreiben: Alte Bloecke dieser Gruppe loeschen
                                     (progn
                                       (SBZ:log-write "INFO"
                                         (strcat "Gruppe '" group-name "' wird ueberschrieben"))
@@ -2123,21 +2239,21 @@
                                 )
                               )
 
-                              ;; --- Schritt 7: Verarbeitung ---
+                              ;; --- Schritt 8: Verarbeitung ---
                               (if group-name
                                 (progn
                                   (SBZ:log-write "INFO"
                                     (strcat "Gruppe: '" group-name "'"))
                                   (setq count
-                                    (SBZ:process-blocks blk-name selected-attr bau0 z-mode group-name))
+                                    (SBZ:process-blocks blk-name selected-attr bau0
+                                      z-mode group-name ss-work))
                                   (princ (strcat "\n" (itoa count) " Bloecke verarbeitet."))
 
                                   ;; Gruppe als XRecord speichern
-                                  ;; Bau-0: nur als Gruppen-Wert wenn anders als DWG-Standard
                                   (setq bau0-str
                                     (if (equal bau0 dwg-bau0 0.001)
-                                      ""  ;; Gleich wie DWG-Standard → leer
-                                      (rtos bau0 2 3)  ;; Eigener Wert
+                                      ""
+                                      (rtos bau0 2 3)
                                     )
                                   )
                                   (SBZ:save-group group-name
@@ -2147,18 +2263,7 @@
                                 )
                               )
                             )
-                            ;; Nein → Abbruch
-                            (progn
-                              (sssetfirst nil nil)
-                              (princ "\nAbgebrochen.")
-                              (SBZ:log-write "INFO" "User hat Verarbeitung abgelehnt")
-                            )
                           )
-                        )
-                        ;; Keine Bloecke gefunden
-                        (progn
-                          (princ (strcat "\nKeine Bloecke '" blk-name "' im Modelspace gefunden."))
-                          (SBZ:log-write "WARN" (strcat "Keine Bloecke '" blk-name "' im Modelspace"))
                         )
                       )
                     )
@@ -2389,13 +2494,12 @@
 ;;; Wird vom "Standard" Button aufgerufen
 ;;; Benoetigt font-names, block-colors, attr-colors als globale Variablen im Dialog-Scope
 (defun SBZ:reset-defaults ( / idx)
-  ;; Zeichnung
+  ;; Zeichnung (Gruppen-Bau0 zuruecksetzen, DWG Bau-0 bleibt)
   (set_tile "bau0" "0.000")
   (set_tile "groupbau0" "")
   (set_tile "usegroupbau0" "0")
   (mode_tile "groupbau0" 1)
-  ;; Gruppe: zurueck auf "(keine Gruppe)"
-  (set_tile "group" "0")
+  ;; Gruppe: BLEIBT gewaehlt (User will Gruppe auf Standard setzen)
   ;; Modus
   (set_tile "copymode" "1")
   ;; Block
@@ -2830,10 +2934,10 @@
                       (setq bau0 (atof (vl-string-subst "." "," dlg-groupbau0)))
                     )
 
-                    ;; 4. Bloecke neu erstellen
+                    ;; 4. Bloecke neu erstellen (nil = alle suchen)
                     (setq count
                       (SBZ:process-blocks last-blk last-attr bau0
-                        (cdr (assoc "ZMODE" sel-group-data)) sel-group))
+                        (cdr (assoc "ZMODE" sel-group-data)) sel-group nil))
                     (princ (strcat "\n" (itoa count) " Bloecke in Gruppe '"
                                    sel-group "' neu erstellt."))
 
