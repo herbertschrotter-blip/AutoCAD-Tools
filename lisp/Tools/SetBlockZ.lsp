@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.13.0
+;;; Version: 1.13.3
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -35,7 +35,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.13.0")
+(setq *SBZ:version* "1.13.3")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -1713,6 +1713,7 @@
   (setq fp (open dcl-file "w"))
   (write-line "sbz_settings : dialog {" fp)
   (write-line "  label = \"SetBlockZ - Einstellungen\";" fp)
+  (write-line "  width = 55;" fp)
   (write-line "  spacer;" fp)
 
   ;; ===== BOX 1: ZEICHNUNG =====
@@ -1731,19 +1732,17 @@
   (write-line "  spacer;" fp)
 
   ;; ===== BOX 3: BLOCK =====
-  ;; Zeile 1: Name (volle Breite)
-  ;; Zeile 2: Basis-Layer + Suffix (gleich gross)
-  ;; Zeile 3: Farbe + Skalierung (gleich gross)
+  ;; Labels gepadded: linke Spalte 7 Zeichen, rechte Spalte 12 Zeichen
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"Block\";" fp)
   (write-line "    : edit_box { key = \"copyblock\"; label = \"Name:\"; }" fp)
   (write-line "    : row {" fp)
-  (write-line "      : edit_box { key = \"copylayer\"; label = \"Basis-Layer:\"; edit_width = 10; }" fp)
-  (write-line "      : edit_box { key = \"suffix\"; label = \"Suffix:\"; edit_width = 10; }" fp)
+  (write-line "      : edit_box { key = \"copylayer\"; label = \"Layer: \"; edit_width = 12; }" fp)
+  (write-line "      : edit_box { key = \"suffix\"; label = \"Suffix:     \"; edit_width = 12; }" fp)
   (write-line "    }" fp)
   (write-line "    : row {" fp)
-  (write-line "      : popup_list { key = \"colorblock\"; label = \"Farbe:\"; }" fp)
-  (write-line "      : edit_box { key = \"scale\"; label = \"Skalierung:\"; edit_width = 10; }" fp)
+  (write-line "      : popup_list { key = \"colorblock\"; label = \"Farbe: \"; width = 12; }" fp)
+  (write-line "      : edit_box { key = \"scale\"; label = \"Skalierung:\"; edit_width = 12; }" fp)
   (write-line "    }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
