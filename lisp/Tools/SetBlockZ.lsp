@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.9.2
+;;; Version: 1.10.0
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -34,7 +34,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.9.2")
+(setq *SBZ:version* "1.10.0")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -67,6 +67,12 @@
 (setq *SBZ:cfg-freeze-rel* 0)       ;; AttREL Layer einfrieren (0=sichtbar, 1=gefroren)
 (setq *SBZ:cfg-freeze-bau0* 1)      ;; AttBAU0 Layer einfrieren (0=sichtbar, 1=gefroren)
 (setq *SBZ:cfg-font* "Arial")       ;; Schriftart fuer Attribute (TTF-Name)
+;; Farben: ACI-Index (1=Rot,2=Gelb,3=Gruen,4=Cyan,5=Blau,6=Magenta,7=Weiss,256=VonLayer)
+;; Attribut-Farbe 0 = Von Block (ByBlock)
+(setq *SBZ:cfg-color-block* 7)      ;; Block-Symbol Farbe (ACI, Default: Weiss)
+(setq *SBZ:cfg-color-abs* 0)        ;; HOEHE_ABS Attribut-Farbe (0=Von Block)
+(setq *SBZ:cfg-color-rel* 0)        ;; HOEHE_REL Attribut-Farbe (0=Von Block)
+(setq *SBZ:cfg-color-bau0* 0)       ;; HOEHE_BAU0 Attribut-Farbe (0=Von Block)
 
 
 ;;; ============================================================================
@@ -200,6 +206,10 @@
               ((= key "FREEZEREL") (setq *SBZ:cfg-freeze-rel* (atoi val)))
               ((= key "FREEZEBAU0")(setq *SBZ:cfg-freeze-bau0* (atoi val)))
               ((= key "FONT")      (setq *SBZ:cfg-font* val))
+              ((= key "COLORBLOCK")(setq *SBZ:cfg-color-block* (atoi val)))
+              ((= key "COLORABS")  (setq *SBZ:cfg-color-abs* (atoi val)))
+              ((= key "COLORREL")  (setq *SBZ:cfg-color-rel* (atoi val)))
+              ((= key "COLORBAU0") (setq *SBZ:cfg-color-bau0* (atoi val)))
             )
           )
         )
@@ -234,6 +244,10 @@
       (write-line (strcat "FREEZEREL=" (itoa *SBZ:cfg-freeze-rel*)) fp)
       (write-line (strcat "FREEZEBAU0=" (itoa *SBZ:cfg-freeze-bau0*)) fp)
       (write-line (strcat "FONT=" *SBZ:cfg-font*) fp)
+      (write-line (strcat "COLORBLOCK=" (itoa *SBZ:cfg-color-block*)) fp)
+      (write-line (strcat "COLORABS=" (itoa *SBZ:cfg-color-abs*)) fp)
+      (write-line (strcat "COLORREL=" (itoa *SBZ:cfg-color-rel*)) fp)
+      (write-line (strcat "COLORBAU0=" (itoa *SBZ:cfg-color-bau0*)) fp)
       (close fp)
       (SBZ:log-write "INFO" (strcat "Config gespeichert: " cfg-path))
     )
@@ -1210,6 +1224,9 @@
             (setq att-data (subst (cons 7 style-name) (assoc 7 att-data) att-data))
             (setq att-data (subst (cons 8 (strcat copy-layer "-AttABS"))
                                   (assoc 8 att-data) att-data))
+            ;; Farbe: 0=ByBlock (Default), sonst ACI-Code
+            (if (/= *SBZ:cfg-color-abs* 0)
+              (setq att-data (subst (cons 62 *SBZ:cfg-color-abs*) (assoc 62 att-data) att-data)))
             (entmod att-data) (entupd att-ent)
           )
           ((= tag-str "HOEHE_REL")
@@ -1218,6 +1235,8 @@
             (setq att-data (subst (cons 7 style-name) (assoc 7 att-data) att-data))
             (setq att-data (subst (cons 8 (strcat copy-layer "-AttREL"))
                                   (assoc 8 att-data) att-data))
+            (if (/= *SBZ:cfg-color-rel* 0)
+              (setq att-data (subst (cons 62 *SBZ:cfg-color-rel*) (assoc 62 att-data) att-data)))
             (entmod att-data) (entupd att-ent)
           )
           ((= tag-str "HOEHE_BAU0")
@@ -1226,12 +1245,16 @@
             (setq att-data (subst (cons 7 style-name) (assoc 7 att-data) att-data))
             (setq att-data (subst (cons 8 (strcat copy-layer "-AttBAU0"))
                                   (assoc 8 att-data) att-data))
+            (if (/= *SBZ:cfg-color-bau0* 0)
+              (setq att-data (subst (cons 62 *SBZ:cfg-color-bau0*) (assoc 62 att-data) att-data)))
             (entmod att-data) (entupd att-ent)
           )
         )
       )
       ;; Block-Symbol auf Kopie-Layer
       (vl-catch-all-apply 'vla-put-Layer (list new-ent copy-layer))
+      ;; Block-Farbe setzen (ACI-Code)
+      (vl-catch-all-apply 'vla-put-Color (list new-ent *SBZ:cfg-color-block*))
       (SBZ:log-write "DEBUG"
         (strcat "Kopie-Block: ABS='" abs-str "' REL='" rel-str
                 "' Layer='" copy-layer "'"))
@@ -1503,6 +1526,47 @@
 )
 
 
+;;; --- ACI-Farbliste fuer Block (ohne "Von Block") ---
+;;; Rueckgabe: Assoziationsliste ((label . aci-code) ...)
+(defun SBZ:get-block-color-list ( / )
+  (list
+    '("1 - Rot" . 1)
+    '("2 - Gelb" . 2)
+    '("3 - Gruen" . 3)
+    '("4 - Cyan" . 4)
+    '("5 - Blau" . 5)
+    '("6 - Magenta" . 6)
+    '("7 - Weiss" . 7)
+    '("256 - VonLayer" . 256)
+  )
+)
+
+;;; --- ACI-Farbliste fuer Attribute (mit "Von Block" am Anfang) ---
+(defun SBZ:get-attr-color-list ( / )
+  (list
+    '("Von Block" . 0)
+    '("1 - Rot" . 1)
+    '("2 - Gelb" . 2)
+    '("3 - Gruen" . 3)
+    '("4 - Cyan" . 4)
+    '("5 - Blau" . 5)
+    '("6 - Magenta" . 6)
+    '("7 - Weiss" . 7)
+    '("256 - VonLayer" . 256)
+  )
+)
+
+;;; --- ACI-Code → Index in Farbliste finden ---
+(defun SBZ:color-to-index (aci-code color-list / idx i)
+  (setq idx 0 i 0)
+  (foreach item color-list
+    (if (= (cdr item) aci-code) (setq idx i))
+    (setq i (1+ i))
+  )
+  idx
+)
+
+
 ;;; --- DCL schreiben (Embedded, Temp-Datei) ---
 ;;; Layout: 3 Boxen (Zeichnung, Modus, Kopie-Block) + Buttons
 (defun SBZ:write-settings-dcl ( / dcl-file fp)
@@ -1591,6 +1655,29 @@
   (write-line "      width = 25;" fp)
   (write-line "    }" fp)
   (write-line "    spacer;" fp)
+  (write-line "    : popup_list {" fp)
+  (write-line "      key = \"colorblock\";" fp)
+  (write-line "      label = \"Block-Farbe:\";" fp)
+  (write-line "      width = 20;" fp)
+  (write-line "    }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : popup_list {" fp)
+  (write-line "        key = \"colorabs\";" fp)
+  (write-line "        label = \"Absolut:\";" fp)
+  (write-line "        width = 16;" fp)
+  (write-line "      }" fp)
+  (write-line "      : popup_list {" fp)
+  (write-line "        key = \"colorrel\";" fp)
+  (write-line "        label = \"Relativ:\";" fp)
+  (write-line "        width = 16;" fp)
+  (write-line "      }" fp)
+  (write-line "      : popup_list {" fp)
+  (write-line "        key = \"colorbau0\";" fp)
+  (write-line "        label = \"Bau-0:\";" fp)
+  (write-line "        width = 16;" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "    spacer;" fp)
   (write-line "    : text { value = \"Attribut-Layer einfrieren:\"; }" fp)
   (write-line "    : row {" fp)
   (write-line "      : toggle { key = \"freezeabs\"; label = \"Absolut\"; }" fp)
@@ -1649,6 +1736,10 @@
   (mode_tile "scale" mode)
   (mode_tile "suffix" mode)
   (mode_tile "font" mode)
+  (mode_tile "colorblock" mode)
+  (mode_tile "colorabs" mode)
+  (mode_tile "colorrel" mode)
+  (mode_tile "colorbau0" mode)
   (mode_tile "copylayer" mode)
   (mode_tile "freezeabs" mode)
   (mode_tile "freezerel" mode)
@@ -1660,10 +1751,13 @@
 (defun c:SBZSETTINGS ( / *error* dcl-file dcl-id
                          bau0 scale suffix layer-names layer-idx
                          font-names font-idx
+                         block-colors attr-colors
                          last-blk last-attr
                          dlg-bau0 dlg-byblock dlg-movelayer dlg-layer-idx
                          dlg-copymode dlg-copyblock dlg-scale dlg-suffix
-                         dlg-copylayer dlg-font dlg-freezeabs dlg-freezerel dlg-freezebau0
+                         dlg-copylayer dlg-font
+                         dlg-colorblock dlg-colorabs dlg-colorrel dlg-colorbau0
+                         dlg-freezeabs dlg-freezerel dlg-freezebau0
                          dlg-action result count)
   (SBZ:ensure-init)
   (defun *error* (msg)
@@ -1694,6 +1788,10 @@
 
   ;; Font-Liste aufbauen
   (setq font-names (SBZ:get-font-list))
+
+  ;; Farblisten aufbauen
+  (setq block-colors (SBZ:get-block-color-list))
+  (setq attr-colors (SBZ:get-attr-color-list))
 
   ;; DCL schreiben und laden
   (setq dcl-file (SBZ:write-settings-dcl))
@@ -1752,8 +1850,28 @@
       (setq font-idx (vl-position (strcase (SBZ:get-font)) (mapcar 'strcase font-names)))
       (if font-idx
         (set_tile "font" (itoa font-idx))
-        (set_tile "font" "0")  ;; Default: erstes Element (arial)
+        (set_tile "font" "0")
       )
+      ;; Farb-Popups fuellen und vorselektieren
+      ;; Block-Farbe (ohne "Von Block")
+      (start_list "colorblock")
+      (foreach c block-colors (add_list (car c)))
+      (end_list)
+      (set_tile "colorblock" (itoa (SBZ:color-to-index *SBZ:cfg-color-block* block-colors)))
+      ;; Attribut-Farben (mit "Von Block" am Anfang)
+      (start_list "colorabs")
+      (foreach c attr-colors (add_list (car c)))
+      (end_list)
+      (set_tile "colorabs" (itoa (SBZ:color-to-index *SBZ:cfg-color-abs* attr-colors)))
+      (start_list "colorrel")
+      (foreach c attr-colors (add_list (car c)))
+      (end_list)
+      (set_tile "colorrel" (itoa (SBZ:color-to-index *SBZ:cfg-color-rel* attr-colors)))
+      (start_list "colorbau0")
+      (foreach c attr-colors (add_list (car c)))
+      (end_list)
+      (set_tile "colorbau0" (itoa (SBZ:color-to-index *SBZ:cfg-color-bau0* attr-colors)))
+      ;; Freeze-Toggles
       (set_tile "freezeabs" (itoa *SBZ:cfg-freeze-abs*))
       (set_tile "freezerel" (itoa *SBZ:cfg-freeze-rel*))
       (set_tile "freezebau0" (itoa *SBZ:cfg-freeze-bau0*))
@@ -1784,6 +1902,10 @@
           
           "(setq dlg-font (get_tile \"font\"))"
           "(setq dlg-copylayer (get_tile \"copylayer\"))"
+          "(setq dlg-colorblock (get_tile \"colorblock\"))"
+          "(setq dlg-colorabs (get_tile \"colorabs\"))"
+          "(setq dlg-colorrel (get_tile \"colorrel\"))"
+          "(setq dlg-colorbau0 (get_tile \"colorbau0\"))"
           "(setq dlg-freezeabs (get_tile \"freezeabs\"))"
           "(setq dlg-freezerel (get_tile \"freezerel\"))"
           "(setq dlg-freezebau0 (get_tile \"freezebau0\"))"
@@ -1806,6 +1928,10 @@
           
           "(setq dlg-font (get_tile \"font\"))"
           "(setq dlg-copylayer (get_tile \"copylayer\"))"
+          "(setq dlg-colorblock (get_tile \"colorblock\"))"
+          "(setq dlg-colorabs (get_tile \"colorabs\"))"
+          "(setq dlg-colorrel (get_tile \"colorrel\"))"
+          "(setq dlg-colorbau0 (get_tile \"colorbau0\"))"
           "(setq dlg-freezeabs (get_tile \"freezeabs\"))"
           "(setq dlg-freezerel (get_tile \"freezerel\"))"
           "(setq dlg-freezebau0 (get_tile \"freezebau0\"))"
@@ -1875,6 +2001,15 @@
           (if (and dlg-copylayer (/= dlg-copylayer ""))
             (setq *SBZ:cfg-copylayer* dlg-copylayer)
           )
+          ;; Farben: Index → ACI-Code auflösen
+          (if dlg-colorblock
+            (setq *SBZ:cfg-color-block* (cdr (nth (atoi dlg-colorblock) block-colors))))
+          (if dlg-colorabs
+            (setq *SBZ:cfg-color-abs* (cdr (nth (atoi dlg-colorabs) attr-colors))))
+          (if dlg-colorrel
+            (setq *SBZ:cfg-color-rel* (cdr (nth (atoi dlg-colorrel) attr-colors))))
+          (if dlg-colorbau0
+            (setq *SBZ:cfg-color-bau0* (cdr (nth (atoi dlg-colorbau0) attr-colors))))
           ;; Attribut-Sichtbarkeit speichern
           (setq *SBZ:cfg-freeze-abs* (atoi dlg-freezeabs))
           (setq *SBZ:cfg-freeze-rel* (atoi dlg-freezerel))
