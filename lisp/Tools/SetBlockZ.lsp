@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.4.1
+;;; Version: 1.5.1
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -34,7 +34,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.4.1")
+(setq *SBZ:version* "1.5.1")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -693,10 +693,11 @@
 ;;;   blk-name  - Blockname (String)
 ;;;   attr-tag  - Attribut-Tag fuer Hoehe (String)
 ;;;   bau0      - Bau-0-Hoehe (Real)
+;;;   z-mode    - "ABS" oder "REL" (Z-Koordinate fuer Kopie-Block)
 ;;; Rueckgabe: Anzahl verarbeiteter Bloecke (Integer)
 ;;; ----------------------------------------------------------------------------
-(defun SBZ:process-blocks (blk-name attr-tag bau0
-                           / ss i ent val-str abs-h rel-z count-ok count-err
+(defun SBZ:process-blocks (blk-name attr-tag bau0 z-mode
+                           / ss i ent val-str abs-h rel-z ins-z count-ok count-err
                              copy-mode copy-blk-name copy-def-ok target-layer)
   (setq count-ok 0)
   (setq count-err 0)
@@ -745,15 +746,18 @@
                   (progn
                     ;; Relative Hoehe berechnen (absolut minus Bau-0)
                     (setq rel-z (- abs-h bau0))
+                    ;; Z-Koordinate fuer Kopie je nach Modus
+                    (setq ins-z (if (= z-mode "ABS") abs-h rel-z))
                     (if copy-mode
                       ;; === KOPIE-MODUS: Original beibehalten, Kopie-Block einfuegen ===
-                      (if (SBZ:insert-copyblock ent copy-blk-name abs-h rel-z target-layer)
+                      (if (SBZ:insert-copyblock ent copy-blk-name abs-h rel-z ins-z target-layer)
                         (progn
                           (setq count-ok (1+ count-ok))
                           (SBZ:log-write "DEBUG"
                             (strcat "Block " (itoa (1+ i)) ": Kopie eingefuegt"
                                     " ABS=" (rtos abs-h 2 3)
-                                    " REL=" (rtos rel-z 2 3)))
+                                    " REL=" (rtos rel-z 2 3)
+                                    " Z=" (rtos ins-z 2 3) " (" z-mode ")"))
                         )
                         (progn
                           (setq count-err (1+ count-err))
@@ -762,13 +766,14 @@
                         )
                       )
                       ;; === STANDARD-MODUS: Original verschieben ===
-                      (if (SBZ:set-block-z ent rel-z)
+                      (if (SBZ:set-block-z ent ins-z)
                         (progn
                           (setq count-ok (1+ count-ok))
                           (SBZ:log-write "DEBUG"
                             (strcat "Block " (itoa (1+ i)) ": Attr='" val-str
                                     "' abs=" (rtos abs-h 2 3)
-                                    " rel=" (rtos rel-z 2 3) " → Z gesetzt"))
+                                    " rel=" (rtos rel-z 2 3)
+                                    " Z=" (rtos ins-z 2 3) " (" z-mode ") → verschoben"))
                           ;; Layer verschieben (nur Standard-Modus)
                           (if (/= target-layer "")
                             (vl-catch-all-apply 'vla-put-Layer
@@ -971,18 +976,19 @@
 ;;; Parameter:
 ;;;   orig-ent  - Entity-Name des Original-Blocks (ename)
 ;;;   blk-name  - Name des Kopie-Blocks (String)
-;;;   abs-h     - Absolute Hoehe (Real)
-;;;   rel-z     - Relative Hoehe nach Bau-0 (Real)
+;;;   abs-h     - Absolute Hoehe (Real, fuer Attribut-Text)
+;;;   rel-z     - Relative Hoehe nach Bau-0 (Real, fuer Attribut-Text)
+;;;   ins-z     - Z-Koordinate fuer Block-Insert (Real, ABS oder REL je nach Modus)
 ;;;   layer     - Ziel-Layer (String, "" = aktueller Layer)
 ;;; Rueckgabe: T bei Erfolg, nil bei Fehler
 ;;; ----------------------------------------------------------------------------
-(defun SBZ:insert-copyblock (orig-ent blk-name abs-h rel-z layer
+(defun SBZ:insert-copyblock (orig-ent blk-name abs-h rel-z ins-z layer
                              / orig-data orig-pt ins-pt new-ent attrs
-                               scale th suffix abs-str rel-str sign)
-  ;; XY vom Original, Z = relative Hoehe
+                               scale th suffix abs-str rel-str)
+  ;; XY vom Original, Z = je nach Modus (ABS oder REL)
   (setq orig-data (entget orig-ent))
   (setq orig-pt (cdr (assoc 10 orig-data)))
-  (setq ins-pt (list (car orig-pt) (cadr orig-pt) rel-z))
+  (setq ins-pt (list (car orig-pt) (cadr orig-pt) ins-z))
   ;; Einstellungen aus DWG Custom Properties lesen
   (setq scale (SBZ:get-scale))
   (setq th (SBZ:get-textheight))
@@ -1070,7 +1076,7 @@
 ;;; ----------------------------------------------------------------------------
 (defun c:SETBLOCKZ ( / *error* old-cmdecho
                        sel blk-ent blk-name attr-tags selected-attr
-                       bau0 bau0-input ss-preview num-found confirm count)
+                       bau0 bau0-input ss-preview num-found confirm z-mode count)
   (SBZ:ensure-init)
   ;; Lokaler Error-Handler
   (defun *error* (msg)
@@ -1212,6 +1218,15 @@
                               ;; Markierung aufheben
                               (sssetfirst nil nil)
 
+                              ;; Im Kopie-Modus: Z-Koordinate waehlen
+                              ;; Z-Koordinate waehlen: Absolut oder Relativ
+                              (initget "Absolut Relativ")
+                              (setq z-mode
+                                (getkword "\nZ-Koordinate? [Absolut/Relativ] <Relativ>: "))
+                              (if (not z-mode) (setq z-mode "Relativ"))
+                              (setq z-mode (if (= z-mode "Absolut") "ABS" "REL"))
+                              (SBZ:log-write "INFO" (strcat "Z-Modus: " z-mode))
+
                               ;; Blockname + Attribut in DWG Custom Properties merken
                               (SBZ:set-last-blockname blk-name)
                               (SBZ:set-last-attrtag selected-attr)
@@ -1219,7 +1234,7 @@
                               (SBZ:save-config)
 
                               ;; --- Schritt 6: Verarbeitung ---
-                              (setq count (SBZ:process-blocks blk-name selected-attr bau0))
+                              (setq count (SBZ:process-blocks blk-name selected-attr bau0 z-mode))
                               (princ (strcat "\n" (itoa count) " Bloecke verarbeitet."))
                               (if (and (= *SBZ:cfg-movelayer* 1)
                                        (/= *SBZ:cfg-target-layer* ""))
@@ -1625,7 +1640,7 @@
                           "' Attr='" last-attr
                           "' Bau-0=" (rtos bau0 2 3)))
                 (setq count
-                  (SBZ:process-blocks last-blk last-attr bau0))
+                  (SBZ:process-blocks last-blk last-attr bau0 "REL"))
                 (princ (strcat "\nNeuberechnung: " (itoa count) " Bloecke verarbeitet."))
               )
               (progn
