@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.0.0
+;;; Version: 1.0.1
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -34,7 +34,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.0.0")
+(setq *SBZ:version* "1.0.1")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -550,22 +550,42 @@
 
 ;;; ----------------------------------------------------------------------------
 ;;; SBZ:set-block-z
-;;; Setzt die Z-Koordinate eines Blocks via entmod
+;;; Setzt die Z-Koordinate eines Blocks via vla-Move
+;;; vla-Move verschiebt den INSERT INKLUSIVE aller Attribute!
+;;; (entmod auf DXF 10 verschiebt nur den Einfuegepunkt, nicht die ATTRIBs)
 ;;; Parameter:
 ;;;   blk-ent - Entity-Name (ename) eines INSERT
 ;;;   new-z   - Neue Z-Koordinate (Real)
 ;;; Rueckgabe: T bei Erfolg, nil bei Fehler
 ;;; ----------------------------------------------------------------------------
-(defun SBZ:set-block-z (blk-ent new-z / ent-data ins-pt new-pt new-data)
-  (setq ent-data (entget blk-ent))
-  (setq ins-pt (cdr (assoc 10 ent-data)))
+(defun SBZ:set-block-z (blk-ent new-z / blk-ref ins-pt old-z delta result)
+  (setq blk-ref (vlax-ename->vla-object blk-ent))
+  (setq ins-pt (vlax-get blk-ref 'InsertionPoint))
   (if ins-pt
     (progn
-      (setq new-pt (list (car ins-pt) (cadr ins-pt) new-z))
-      (setq new-data (subst (cons 10 new-pt) (assoc 10 ent-data) ent-data))
-      (if (entmod new-data)
-        T
-        nil
+      (setq old-z (caddr ins-pt))
+      (setq delta (- new-z old-z))
+      ;; Nur verschieben wenn tatsaechlich eine Aenderung
+      (if (not (equal delta 0.0 1e-6))
+        (progn
+          (setq result
+            (vl-catch-all-apply 'vla-Move
+              (list blk-ref
+                (vlax-3d-point 0.0 0.0 0.0)
+                (vlax-3d-point 0.0 0.0 delta)
+              )
+            )
+          )
+          (if (vl-catch-all-error-p result)
+            (progn
+              (SBZ:log-write "ERROR"
+                (strcat "vla-Move fehlgeschlagen: " (vl-catch-all-error-message result)))
+              nil
+            )
+            T
+          )
+        )
+        T ;; Kein Delta = bereits auf richtiger Hoehe
       )
     )
     nil
