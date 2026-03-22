@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.15.1
+;;; Version: 1.16.0
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -35,7 +35,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.15.1")
+(setq *SBZ:version* "1.16.0")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -62,7 +62,7 @@
 (setq *SBZ:cfg-movelayer* 0)        ;; Block auf Ziel-Layer verschieben (0/1)
 (setq *SBZ:cfg-target-layer* "")    ;; Ziel-Layer Name
 (setq *SBZ:cfg-copymode* 1)         ;; Kopie-Modus: Standard EIN (0/1)
-(setq *SBZ:cfg-copyblock* "VermesserGOK") ;; Blockname fuer Kopie-Block
+(setq *SBZ:cfg-copyblock* "VM_Hoehe") ;; Blockname fuer Kopie-Block
 (setq *SBZ:cfg-copylayer* "GOK")    ;; Basis-Layername fuer Kopie-Block (Suffix wird angehaengt)
 (setq *SBZ:cfg-freeze-abs* 0)       ;; AttABS Layer einfrieren (0=sichtbar, 1=gefroren)
 (setq *SBZ:cfg-freeze-rel* 0)       ;; AttREL Layer einfrieren (0=sichtbar, 1=gefroren)
@@ -380,12 +380,12 @@
   (SBZ:log-write "INFO" (strcat "Skalierung gespeichert: " (rtos scale 2 4)))
 )
 
-;;; Suffix lesen (String, Default "m ue. A.")
+;;; Suffix lesen (String, Default "m ü. A.")
 (defun SBZ:get-suffix ( / val)
   (setq val (SBZ:get-custom-prop *SBZ:cp-suffix*))
   (if (and val (/= val ""))
     val
-    "m ue. A."
+    "m ü. A."
   )
 )
 
@@ -1720,7 +1720,6 @@
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"Zeichnung\";" fp)
   (write-line "    : edit_box { key = \"bau0\"; label = \"Bau-0-Hoehe (m):\"; edit_width = 12; }" fp)
-  (write-line "    : text { key = \"last_info\"; value = \"\"; }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
 
@@ -1732,48 +1731,59 @@
   (write-line "  spacer;" fp)
 
   ;; ===== BOX 3: BLOCK =====
+  ;; concatenation mit 2 gleich breiten columns
+  ;; Labels gepadded: links 7 Zeichen, rechts 12 Zeichen
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"Block\";" fp)
-  (write-line "    : edit_box { key = \"copyblock\"; label = \"Name:\"; }" fp)
-  (write-line "    : row {" fp)
-  (write-line "      : edit_box { key = \"copylayer\"; label = \"Layer:\"; edit_width = 10; }" fp)
-  (write-line "      : edit_box { key = \"scale\"; label = \"Skalierung:\"; edit_width = 10; }" fp)
+  (write-line "    : concatenation {" fp)
+  (write-line "      : column { fixed_width = true; width = 23;" fp)
+  (write-line "        : edit_box { key = \"copyblock\"; label = \"Name:  \"; }" fp)
+  (write-line "        : popup_list { key = \"colorblock\"; label = \"Farbe: \"; }" fp)
+  (write-line "      }" fp)
+  (write-line "      : column { fixed_width = true; width = 23;" fp)
+  (write-line "        : edit_box { key = \"copylayer\"; label = \"Layer:      \"; }" fp)
+  (write-line "        : edit_box { key = \"scale\"; label = \"Skalierung:\"; }" fp)
+  (write-line "      }" fp)
   (write-line "    }" fp)
-  (write-line "    : popup_list { key = \"colorblock\"; label = \"Farbe:\"; }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
 
   ;; ===== BOX 4: ATTRIBUT =====
-  ;; Schriftart oben, dann Tabelle (Farbe + Frieren + Suffix in Absolut-Zeile)
+  ;; Schriftart oben, dann 4-Spalten Tabelle mit concatenation
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"Attribut\";" fp)
   (write-line "    : popup_list { key = \"font\"; label = \"Schriftart:\"; }" fp)
   (write-line "    spacer;" fp)
-  ;; Spalten-Header
-  (write-line "    : row {" fp)
-  (write-line "      : text { width = 8; value = \"\"; }" fp)
-  (write-line "      : text { width = 14; value = \"Farbe\"; }" fp)
-  (write-line "      : text { width = 6; value = \"Frieren\"; }" fp)
-  (write-line "      : text { width = 14; value = \"Suffix\"; }" fp)
-  (write-line "    }" fp)
-  ;; Absolut (mit Suffix)
-  (write-line "    : row {" fp)
-  (write-line "      : text { width = 8; value = \"Absolut\"; }" fp)
-  (write-line "      : popup_list { key = \"colorabs\"; width = 14; }" fp)
-  (write-line "      : toggle { key = \"freezeabs\"; label = \"\"; width = 6; }" fp)
-  (write-line "      : edit_box { key = \"suffix\"; label = \"\"; edit_width = 10; }" fp)
-  (write-line "    }" fp)
-  ;; Relativ
-  (write-line "    : row {" fp)
-  (write-line "      : text { width = 8; value = \"Relativ\"; }" fp)
-  (write-line "      : popup_list { key = \"colorrel\"; width = 14; }" fp)
-  (write-line "      : toggle { key = \"freezerel\"; label = \"\"; width = 6; }" fp)
-  (write-line "    }" fp)
-  ;; Bau-0
-  (write-line "    : row {" fp)
-  (write-line "      : text { width = 8; value = \"Bau-0\"; }" fp)
-  (write-line "      : popup_list { key = \"colorbau0\"; width = 14; }" fp)
-  (write-line "      : toggle { key = \"freezebau0\"; label = \"\"; width = 6; }" fp)
+  ;; concatenation: 4 Spalten vertikal ausgerichtet
+  (write-line "    : concatenation {" fp)
+  ;; Spalte 1: Labels
+  (write-line "      : column { fixed_width = true; width = 8;" fp)
+  (write-line "        : text { value = \"\"; }" fp)
+  (write-line "        : text { value = \"Absolut\"; }" fp)
+  (write-line "        : text { value = \"Relativ\"; }" fp)
+  (write-line "        : text { value = \"Bau-0\"; }" fp)
+  (write-line "      }" fp)
+  ;; Spalte 2: Farbe
+  (write-line "      : column { fixed_width = true; width = 16;" fp)
+  (write-line "        : text { value = \"Farbe\"; }" fp)
+  (write-line "        : popup_list { key = \"colorabs\"; }" fp)
+  (write-line "        : popup_list { key = \"colorrel\"; }" fp)
+  (write-line "        : popup_list { key = \"colorbau0\"; }" fp)
+  (write-line "      }" fp)
+  ;; Spalte 3: Frieren
+  (write-line "      : column { fixed_width = true; width = 6;" fp)
+  (write-line "        : text { value = \"Frieren\"; }" fp)
+  (write-line "        : toggle { key = \"freezeabs\"; label = \"\"; }" fp)
+  (write-line "        : toggle { key = \"freezerel\"; label = \"\"; }" fp)
+  (write-line "        : toggle { key = \"freezebau0\"; label = \"\"; }" fp)
+  (write-line "      }" fp)
+  ;; Spalte 4: Suffix (nur Absolut hat edit_box, Rest = popup_list als Platzhalter)
+  (write-line "      : column { fixed_width = true; width = 14;" fp)
+  (write-line "        : text { value = \"Suffix\"; }" fp)
+  (write-line "        : edit_box { key = \"suffix\"; label = \"\"; edit_width = 8; }" fp)
+  (write-line "        : popup_list { key = \"dummy1\"; label = \"\"; }" fp)
+  (write-line "        : popup_list { key = \"dummy2\"; label = \"\"; }" fp)
+  (write-line "      }" fp)
   (write-line "    }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
@@ -1820,9 +1830,9 @@
   ;; Modus
   (set_tile "copymode" "1")
   ;; Block
-  (set_tile "copyblock" "VermesserGOK")
+  (set_tile "copyblock" "VM_Hoehe")
   (set_tile "copylayer" "GOK")
-  (set_tile "suffix" "m ue. A.")
+  (set_tile "suffix" "m ü. A.")
   (set_tile "scale" "1.0000")
   ;; Block-Farbe: 7 = Weiss
   (setq idx (SBZ:color-to-index 7 block-colors))
@@ -1856,7 +1866,7 @@
                          dlg-copylayer dlg-font
                          dlg-colorblock dlg-colorabs dlg-colorrel dlg-colorbau0
                          dlg-freezeabs dlg-freezerel dlg-freezebau0
-                         dlg-action result count ss blocks blk-def)
+                         dlg-action result count ss blocks blk-def old-copyblock)
   (SBZ:ensure-init)
   (defun *error* (msg)
     (if (not (SBZ:cancel-p msg))
@@ -1896,10 +1906,6 @@
     (progn
       ;; === BOX 1: Zeichnung ===
       (set_tile "bau0" (rtos bau0 2 3))
-      (if (and last-blk last-attr)
-        (set_tile "last_info" (strcat "Letzter Lauf: " last-blk " / " last-attr))
-        (set_tile "last_info" "Noch nicht ausgefuehrt")
-      )
 
       ;; === BOX 2: Modus ===
       (set_tile "copymode" (itoa *SBZ:cfg-copymode*))
@@ -1944,6 +1950,9 @@
       (foreach c attr-colors (add_list (car c)))
       (end_list)
       (set_tile "colorbau0" (itoa (SBZ:color-to-index *SBZ:cfg-color-bau0* attr-colors)))
+      ;; Dummy popup_lists (Platzhalter in Suffix-Spalte) initialisieren + deaktivieren
+      (start_list "dummy1") (add_list "") (end_list) (mode_tile "dummy1" 1)
+      (start_list "dummy2") (add_list "") (end_list) (mode_tile "dummy2" 1)
       ;; Kopie-Block Felder deaktivieren wenn Modus aus
       (SBZ:settings-update-copyblock-state (itoa *SBZ:cfg-copymode*))
 
@@ -1995,6 +2004,9 @@
       ;; --- Dialog geschlossen, Werte auswerten ---
       (if (and dlg-action (/= dlg-action "close"))
         (progn
+          ;; ALTEN Blocknamen merken BEVOR er ueberschrieben wird
+          ;; Noetig damit Aendern die alten Bloecke mit altem Namen findet
+          (setq old-copyblock *SBZ:cfg-copyblock*)
           ;; Bau-0
           (setq bau0 (atof (vl-string-subst "." "," dlg-bau0)))
           (SBZ:set-bau0 bau0)
@@ -2047,25 +2059,53 @@
                 (SBZ:log-write "INFO"
                   (strcat "Aendern: Loesche + Neu erstellen mit Block='"
                           last-blk "' Attr='" last-attr "'"))
-                ;; 1. Alte Kopie-Bloecke loeschen
+                ;; 1. Alte Kopie-Bloecke loeschen (mit ALTEM Blocknamen!)
                 (setq count 0)
-                (setq ss (ssget "X" (list (cons 2 *SBZ:cfg-copyblock*) (cons 410 "Model"))))
+                (setq ss (ssget "X" (list (cons 2 old-copyblock) (cons 410 "Model"))))
                 (if (and ss (> (sslength ss) 0))
                   (progn
                     (setq count (sslength ss))
                     (command "._erase" ss "")
-                    (SBZ:log-write "INFO" (strcat (itoa count) " alte Kopie-Bloecke geloescht"))
+                    (SBZ:log-write "INFO" (strcat (itoa count) " alte '" old-copyblock "' Bloecke geloescht"))
                   )
                 )
-                ;; 2. Block-Definition purgen (damit neue Settings wirken)
+                ;; Falls Blockname geaendert: auch neue Instanzen loeschen (falls vorhanden)
+                (if (/= (strcase old-copyblock) (strcase *SBZ:cfg-copyblock*))
+                  (progn
+                    (setq ss (ssget "X" (list (cons 2 *SBZ:cfg-copyblock*) (cons 410 "Model"))))
+                    (if (and ss (> (sslength ss) 0))
+                      (progn
+                        (command "._erase" ss "")
+                        (SBZ:log-write "INFO"
+                          (strcat (itoa (sslength ss)) " '" *SBZ:cfg-copyblock* "' Bloecke geloescht"))
+                      )
+                    )
+                  )
+                )
+                ;; 2. Block-Definitionen purgen (alt + neu)
                 (setq blocks (vla-get-blocks
                   (vla-get-activedocument (vlax-get-acad-object))))
+                ;; Alte Definition loeschen
                 (if (not (vl-catch-all-error-p
                       (setq blk-def (vl-catch-all-apply 'vla-item
-                        (list blocks *SBZ:cfg-copyblock*)))))
-                  (vl-catch-all-apply 'vla-delete (list blk-def))
+                        (list blocks old-copyblock)))))
+                  (progn
+                    (vl-catch-all-apply 'vla-delete (list blk-def))
+                    (SBZ:log-write "INFO" (strcat "Block-Definition '" old-copyblock "' geloescht"))
+                  )
                 )
-                ;; 3. Neu erstellen mit process-blocks
+                ;; Neue Definition loeschen (falls schon vorhanden, damit frisch erstellt wird)
+                (if (/= (strcase old-copyblock) (strcase *SBZ:cfg-copyblock*))
+                  (if (not (vl-catch-all-error-p
+                        (setq blk-def (vl-catch-all-apply 'vla-item
+                          (list blocks *SBZ:cfg-copyblock*)))))
+                    (progn
+                      (vl-catch-all-apply 'vla-delete (list blk-def))
+                      (SBZ:log-write "INFO" (strcat "Block-Definition '" *SBZ:cfg-copyblock* "' geloescht"))
+                    )
+                  )
+                )
+                ;; 3. Neu erstellen mit process-blocks (verwendet neuen Blocknamen)
                 (setq count (SBZ:process-blocks last-blk last-attr bau0 "REL"))
                 (princ (strcat "\n" (itoa count) " Bloecke neu erstellt."))
               )
