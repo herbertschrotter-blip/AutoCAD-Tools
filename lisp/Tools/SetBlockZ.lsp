@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.19.1
+;;; Version: 1.20.0
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -35,7 +35,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.19.1")
+(setq *SBZ:version* "1.20.0")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -63,7 +63,7 @@
 (setq *SBZ:cfg-target-layer* "")    ;; Ziel-Layer Name
 (setq *SBZ:cfg-copymode* 1)         ;; Kopie-Modus: Standard EIN (0/1)
 (setq *SBZ:cfg-copyblock* "VM_Hoehe") ;; Blockname fuer Kopie-Block
-(setq *SBZ:cfg-copylayer* "GOK")    ;; Basis-Layername fuer Kopie-Block (Suffix wird angehaengt)
+(setq *SBZ:cfg-copylayer* "HP")     ;; Gegenstandsgruppe: HP=Hoehenpunkt, GP=Grenzpunkt, GE=Gelaende, FP=Festpunkt
 (setq *SBZ:cfg-freeze-abs* 0)       ;; AttABS Layer einfrieren (0=sichtbar, 1=gefroren)
 (setq *SBZ:cfg-freeze-rel* 0)       ;; AttREL Layer einfrieren (0=sichtbar, 1=gefroren)
 (setq *SBZ:cfg-freeze-bau0* 1)      ;; AttBAU0 Layer einfrieren (0=sichtbar, 1=gefroren)
@@ -640,7 +640,7 @@
 ;;;     ("BAU0"       . "320.390")     ;; "" = DWG-Standard verwenden
 ;;;     ("ZMODE"      . "REL")
 ;;;     ("COPYBLOCK"  . "VM_Hoehe_STAB137")
-;;;     ("COPYLAYER"  . "GOK")
+;;;     ("COPYLAYER"  . "HP")
 ;;;     ("SCALE"      . "10.0000")
 ;;;     ("SUFFIX"     . "m ue. A.")
 ;;;     ("FONT"       . "Arial")
@@ -787,11 +787,11 @@
   (if (not base-layer) (setq base-layer ""))
   (if (= base-layer "") nil
     (progn
-      ;; V_<Layer>_<Gruppenname> + Attribut-Sub-Layer
+      ;; VM_<Gruppe>_<Gruppenname> + Attribut-Sub-Layer (aktuell)
       (setq vlay
         (if (and group-name (/= group-name ""))
-          (strcat "V_" base-layer "_" group-name)
-          (strcat "V_" base-layer)
+          (strcat "VM_" base-layer "_" group-name)
+          (strcat "VM_" base-layer)
         )
       )
       (setq layer-names
@@ -800,7 +800,17 @@
           (strcat vlay "-AttABS")
           (strcat vlay "-AttREL")
           (strcat vlay "-AttBAU0")
-          ;; Auch alte Layer-Formate aufraeumen (vor v1.19.1)
+          ;; Alte V_ Layer-Formate aufraeumen (vor v1.20.0)
+          (if (and group-name (/= group-name ""))
+            (strcat "V_" base-layer "_" group-name)
+            (strcat "V_" base-layer))
+          (if (and group-name (/= group-name ""))
+            (strcat "V_" base-layer "_" group-name "-AttABS") "")
+          (if (and group-name (/= group-name ""))
+            (strcat "V_" base-layer "_" group-name "-AttREL") "")
+          (if (and group-name (/= group-name ""))
+            (strcat "V_" base-layer "_" group-name "-AttBAU0") "")
+          ;; Noch aeltere Formate (vor v1.19.1)
           base-layer
           (strcat base-layer "_abs")
           (strcat base-layer "_rel")
@@ -1743,7 +1753,7 @@
 ;;; Erstellt die 3 Attribut-Sub-Layer fuer einen Block-Layer
 ;;; Layer-Schema: <base>-AttABS, <base>-AttREL, <base>-AttBAU0
 ;;; Setzt Initial-Freeze je nach Config-Toggles
-;;; Parameter: base-layer - Basis-Layername (z.B. "GOK_abs")
+;;; Parameter: base-layer - Basis-Layername (z.B. "VM_HP_STAB137")
 ;;; ----------------------------------------------------------------------------
 (defun SBZ:ensure-attr-layers (base-layer / )
   ;; Basis-Layer (fuer Block-Symbol)
@@ -1766,18 +1776,19 @@
 ;;; ----------------------------------------------------------------------------
 ;;; SBZ:get-copy-layername
 ;;; Berechnet den Layer-Namen fuer Vermessungs-Hoehenpunkte
-;;; Format: V_<Layer>_<Gruppenname>
+;;; Format: VM_<Gruppe>_<Gruppenname>  (ÖNORM A 6241 angelehnt)
+;;; VM = Vermessung (Fachbereich), Gruppe = HP/GP/GE/FP (Gegenstandsgruppe)
 ;;; Parameter:
-;;;   z-mode     - "ABS" oder "REL" (nicht mehr fuer Layer-Name verwendet)
-;;;   bau0       - Bau-0-Hoehe (Real, nicht mehr fuer Layer-Name verwendet)
+;;;   z-mode     - "ABS" oder "REL" (nicht fuer Layer-Name verwendet)
+;;;   bau0       - Bau-0-Hoehe (Real, nicht fuer Layer-Name verwendet)
 ;;;   group-name - Gruppenname (String, oder nil)
-;;; Rueckgabe: Layer-Name (z.B. "V_GOK_STAB137")
+;;; Rueckgabe: Layer-Name (z.B. "VM_HP_STAB137")
 ;;; ----------------------------------------------------------------------------
-(defun SBZ:get-copy-layername (z-mode bau0 group-name / base)
-  (setq base *SBZ:cfg-copylayer*)
+(defun SBZ:get-copy-layername (z-mode bau0 group-name / grp)
+  (setq grp *SBZ:cfg-copylayer*)
   (if (and group-name (/= group-name ""))
-    (strcat "V_" base "_" group-name)
-    (strcat "V_" base)
+    (strcat "VM_" grp "_" group-name)
+    (strcat "VM_" grp)
   )
 )
 
@@ -2565,7 +2576,7 @@
   (set_tile "copymode" "1")
   ;; Block
   (set_tile "copyblock" "VM_Hoehe")
-  (set_tile "copylayer" "GOK")
+  (set_tile "copylayer" "HP")
   (set_tile "suffix" "m ü. A.")
   (set_tile "scale" "1.0000")
   ;; Block-Farbe: 7 = Weiss
