@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.7.2
+;;; Version: 1.7.3
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -34,7 +34,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.7.2")
+(setq *SBZ:version* "1.7.3")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -1054,7 +1054,7 @@
                              / orig-data orig-pt ins-pt new-ent attrs
                                scale th suffix copy-layer
                                abs-str rel-str bau0-str tag-str
-                               att-ent att-data att-y)
+                               att-ent att-data att-x att-y att-pos)
   ;; XY vom Original, Z = je nach Modus (ABS oder REL)
   (setq orig-data (entget orig-ent))
   (setq orig-pt (cdr (assoc 10 orig-data)))
@@ -1106,16 +1106,18 @@
       ;; Bau-0 Zeile: "±rel = abs suffix" z.B. "±0.02 = 320.73 m ü. A."
       (setq bau0-str (strcat rel-str " = " abs-str))
       ;; Attribute setzen + Sichtbarkeit + dynamische Position
-      ;; Positionen relativ zur Mittellinie, proportional zur Texthoehe:
-      ;;   gap = Abstand Mittellinie↔Text (th * 0.15)
-      ;;   X = Radius + Abstand (0.06 Block-Einheiten)
-      ;;   ABS: Y = +gap  (Links Unten → waechst nach oben)
-      ;;   REL: Y = -gap  (Links Oben → waechst nach unten)
-      ;;   BAU0: Y = REL.Y - th*1.3 (voller Texthoehe-Abstand unter REL)
       ;;
-      ;; ENTMOD auf DXF-Ebene: setzt Code 10, 11, 40, 1 direkt
-      ;; VLA TextAlignmentPoint wirft "Not applicable" bei bestimmten
-      ;; Alignment-Typen (Community-bestaetigter Bug) → entmod ist zuverlaessiger
+      ;; ATTRIB DXF-Code 10/11 sind in WCS (nicht Block-Koordinaten!)
+      ;; Position = Block-Einfuegepunkt + Offset * Scale
+      ;; Offsets relativ zum Block-Zentrum, proportional zur Texthoehe:
+      ;;   X-Offset = 0.06 (rechts vom Kreisrand)
+      ;;   ABS: Y-Offset = +th * 0.15
+      ;;   REL: Y-Offset = -th * 0.15
+      ;;   BAU0: Y-Offset = REL - th * 1.3
+      ;; Texthoehe in DXF = th (wird NICHT durch Scale beeinflusst bei ATTRIB)
+      ;;
+      ;; ENTMOD statt VLA: VLA TextAlignmentPoint wirft "Not applicable"
+      ;; bei BottomLeft/TopLeft Alignments (Community-bestaetigter Bug)
       (setq attrs (vlax-invoke new-ent 'GetAttributes))
       (foreach attr attrs
         (setq tag-str (strcase (vla-get-TagString attr)))
@@ -1123,13 +1125,14 @@
         (setq att-data (entget att-ent))
         (cond
           ((= tag-str "HOEHE_ABS")
-            (setq att-y (* th 0.15))
+            (setq att-x (+ (car ins-pt) (* 0.06 scale)))
+            (setq att-y (+ (cadr ins-pt) (* th 0.15 scale)))
+            (setq att-pos (list att-x att-y (caddr ins-pt)))
             (setq att-data (subst (cons 1 abs-str) (assoc 1 att-data) att-data))
             (setq att-data (subst (cons 40 th) (assoc 40 att-data) att-data))
-            (setq att-data (subst (cons 10 (list 0.06 att-y 0.0)) (assoc 10 att-data) att-data))
+            (setq att-data (subst (cons 10 att-pos) (assoc 10 att-data) att-data))
             (if (assoc 11 att-data)
-              (setq att-data (subst (cons 11 (list 0.06 att-y 0.0)) (assoc 11 att-data) att-data)))
-            ;; Sichtbarkeit: DXF 70 Bit 1 = Invisible
+              (setq att-data (subst (cons 11 att-pos) (assoc 11 att-data) att-data)))
             (setq att-data (subst
               (cons 70 (if (= *SBZ:cfg-show-abs* 1) 0 1))
               (assoc 70 att-data) att-data))
@@ -1137,12 +1140,14 @@
             (entupd att-ent)
           )
           ((= tag-str "HOEHE_REL")
-            (setq att-y (* th -0.15))
+            (setq att-x (+ (car ins-pt) (* 0.06 scale)))
+            (setq att-y (- (cadr ins-pt) (* th 0.15 scale)))
+            (setq att-pos (list att-x att-y (caddr ins-pt)))
             (setq att-data (subst (cons 1 rel-str) (assoc 1 att-data) att-data))
             (setq att-data (subst (cons 40 th) (assoc 40 att-data) att-data))
-            (setq att-data (subst (cons 10 (list 0.06 att-y 0.0)) (assoc 10 att-data) att-data))
+            (setq att-data (subst (cons 10 att-pos) (assoc 10 att-data) att-data))
             (if (assoc 11 att-data)
-              (setq att-data (subst (cons 11 (list 0.06 att-y 0.0)) (assoc 11 att-data) att-data)))
+              (setq att-data (subst (cons 11 att-pos) (assoc 11 att-data) att-data)))
             (setq att-data (subst
               (cons 70 (if (= *SBZ:cfg-show-rel* 1) 0 1))
               (assoc 70 att-data) att-data))
@@ -1150,12 +1155,14 @@
             (entupd att-ent)
           )
           ((= tag-str "HOEHE_BAU0")
-            (setq att-y (- (* th -0.15) (* th 1.3)))
+            (setq att-x (+ (car ins-pt) (* 0.06 scale)))
+            (setq att-y (- (cadr ins-pt) (* scale (+ (* th 0.15) (* th 1.3)))))
+            (setq att-pos (list att-x att-y (caddr ins-pt)))
             (setq att-data (subst (cons 1 bau0-str) (assoc 1 att-data) att-data))
             (setq att-data (subst (cons 40 th) (assoc 40 att-data) att-data))
-            (setq att-data (subst (cons 10 (list 0.06 att-y 0.0)) (assoc 10 att-data) att-data))
+            (setq att-data (subst (cons 10 att-pos) (assoc 10 att-data) att-data))
             (if (assoc 11 att-data)
-              (setq att-data (subst (cons 11 (list 0.06 att-y 0.0)) (assoc 11 att-data) att-data)))
+              (setq att-data (subst (cons 11 att-pos) (assoc 11 att-data) att-data)))
             (setq att-data (subst
               (cons 70 (if (= *SBZ:cfg-show-bau0* 1) 0 1))
               (assoc 70 att-data) att-data))
