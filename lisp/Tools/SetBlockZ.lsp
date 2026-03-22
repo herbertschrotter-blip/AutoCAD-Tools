@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.1.1
+;;; Version: 1.4.0
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -34,7 +34,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.1.1")
+(setq *SBZ:version* "1.4.0")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -43,6 +43,9 @@
 ;; Custom Property fuer letzten Blockname und Attribut-Tag (pro DWG!)
 (setq *SBZ:cp-blockname* "SetBlockZ_BlockName")
 (setq *SBZ:cp-attrtag* "SetBlockZ_AttrTag")
+(setq *SBZ:cp-scale* "SetBlockZ_Scale")
+(setq *SBZ:cp-textheight* "SetBlockZ_TextHeight")
+(setq *SBZ:cp-suffix* "SetBlockZ_Suffix")
 
 
 ;;; ============================================================================
@@ -330,6 +333,51 @@
 ;;; Letztes Attribut-Tag schreiben
 (defun SBZ:set-last-attrtag (tag)
   (SBZ:set-custom-prop *SBZ:cp-attrtag* tag)
+)
+
+;;; Block-Skalierung lesen (Real, Default 1.0)
+(defun SBZ:get-scale ( / val)
+  (setq val (SBZ:get-custom-prop *SBZ:cp-scale*))
+  (if (and val (/= val ""))
+    (atof val)
+    1.0
+  )
+)
+
+;;; Block-Skalierung schreiben
+(defun SBZ:set-scale (scale)
+  (SBZ:set-custom-prop *SBZ:cp-scale* (rtos scale 2 4))
+  (SBZ:log-write "INFO" (strcat "Skalierung gespeichert: " (rtos scale 2 4)))
+)
+
+;;; Texthoehe lesen (Real, Default 0.5)
+(defun SBZ:get-textheight ( / val)
+  (setq val (SBZ:get-custom-prop *SBZ:cp-textheight*))
+  (if (and val (/= val ""))
+    (atof val)
+    0.5
+  )
+)
+
+;;; Texthoehe schreiben
+(defun SBZ:set-textheight (h)
+  (SBZ:set-custom-prop *SBZ:cp-textheight* (rtos h 2 4))
+  (SBZ:log-write "INFO" (strcat "Texthoehe gespeichert: " (rtos h 2 4)))
+)
+
+;;; Suffix lesen (String, Default "m ue. A.")
+(defun SBZ:get-suffix ( / val)
+  (setq val (SBZ:get-custom-prop *SBZ:cp-suffix*))
+  (if (and val (/= val ""))
+    val
+    "m ue. A."
+  )
+)
+
+;;; Suffix schreiben
+(defun SBZ:set-suffix (s)
+  (SBZ:set-custom-prop *SBZ:cp-suffix* s)
+  (SBZ:log-write "INFO" (strcat "Suffix gespeichert: '" s "'"))
 )
 
 
@@ -756,6 +804,41 @@
 ;;; ============================================================================
 
 ;;; ----------------------------------------------------------------------------
+;;; SBZ:make-filled-quarter
+;;; Erstellt gefuellte Viertelkreis-Segmente als SOLID-Faecher innerhalb
+;;; einer laufenden Block-Definition (zwischen BLOCK und ENDBLK).
+;;; Verwendet Pizza-Slice SOLIDs vom Mittelpunkt zum Kreisrand.
+;;; Parameter:
+;;;   blk-name   - Blockname (nur fuer Logging)
+;;;   radius     - Kreisradius (Real)
+;;;   ang-start  - Startwinkel in Radians
+;;;   ang-end    - Endwinkel in Radians
+;;;   segments   - Anzahl Segmente (8 = gute Approximation)
+;;; ----------------------------------------------------------------------------
+(defun SBZ:make-filled-quarter (blk-name radius ang-start ang-end segments
+                                / i ang-step a1 a2 p1 p2)
+  (setq ang-step (/ (- ang-end ang-start) (float segments)))
+  (setq i 0)
+  (repeat segments
+    (setq a1 (+ ang-start (* i ang-step)))
+    (setq a2 (+ ang-start (* (1+ i) ang-step)))
+    (setq p1 (list (* radius (cos a1)) (* radius (sin a1)) 0.0))
+    (setq p2 (list (* radius (cos a2)) (* radius (sin a2)) 0.0))
+    ;; SOLID: Dreieck vom Mittelpunkt zu zwei Kreisrand-Punkten
+    ;; DXF 10=Ecke1, 11=Ecke2, 12=Ecke3, 13=Ecke4 (=Ecke3 fuer Dreieck)
+    (entmake (list '(0 . "SOLID") '(8 . "0")
+                   '(62 . 0) '(6 . "ByBlock") '(370 . -2)
+                   '(10 0.0 0.0 0.0)     ;; Mittelpunkt
+                   (cons 11 p1)           ;; Kreisrand 1
+                   (cons 12 p2)           ;; Kreisrand 2
+                   (cons 13 p2)           ;; = Ecke3 (Dreieck)
+             ))
+    (setq i (1+ i))
+  )
+)
+
+
+;;; ----------------------------------------------------------------------------
 ;;; SBZ:ensure-copyblock-def
 ;;; Erstellt die Block-Definition fuer den Kopie-Block falls nicht vorhanden.
 ;;; Block enthaelt: Punkt-Marker + 2 Attribute (HOEHE_ABS, HOEHE_REL)
@@ -782,41 +865,65 @@
                          '(10 0.0 0.0 0.0)
                          '(70 . 2)))    ;; Bit 2 = hat Attribute
         (progn
-          ;; Punkt-Marker (Kreuz) — alles "Von Block"
-          ;; DXF 62=0 (Farbe ByBlock), DXF 6="ByBlock" (Linientyp), DXF 370=-2 (Linienstaerke ByBlock)
+          ;; === Vermessungspunkt: Schachbrett mit Fadenkreuz ===
+          ;; Radius 0.05m (Durchmesser 0.1m), Einfuegepunkt = Mitte
+          ;; ByBlock Properties fuer alle Entities
+          ;; DXF 62=0, DXF 6="ByBlock", DXF 370=-2
+
+          ;; --- Gefuellte Viertelkreise (Schachbrett) ---
+          ;; Oben-links (Q2) und unten-rechts (Q4) gefuellt
+          ;; Approximiert mit SOLID-Faechern (8 Segmente pro Viertel)
+          (SBZ:make-filled-quarter blk-name 0.05  (/ pi 2) pi       8) ;; Q2: oben-links
+          (SBZ:make-filled-quarter blk-name 0.05  (* pi 1.5) (* pi 2) 8) ;; Q4: unten-rechts
+
+          ;; --- Kreisumriss ---
+          (entmake (list '(0 . "CIRCLE") '(8 . "0")
+                        '(62 . 0) '(6 . "ByBlock") '(370 . -2)
+                        '(10 0.0 0.0 0.0) '(40 . 0.05)))
+
+          ;; --- Fadenkreuz (ragt ueber Kreis hinaus) ---
           (entmake (list '(0 . "LINE") '(8 . "0")
                         '(62 . 0) '(6 . "ByBlock") '(370 . -2)
-                        '(10 -0.5 0.0 0.0) '(11 0.5 0.0 0.0)))
+                        '(10 -0.08 0.0 0.0) '(11 0.08 0.0 0.0)))
           (entmake (list '(0 . "LINE") '(8 . "0")
                         '(62 . 0) '(6 . "ByBlock") '(370 . -2)
-                        '(10 0.0 -0.5 0.0) '(11 0.0 0.5 0.0)))
+                        '(10 0.0 -0.08 0.0) '(11 0.0 0.08 0.0)))
+
+          ;; --- Trennlinien (horizontale und vertikale Achse im Kreis) ---
+          ;; Nicht noetig — Fadenkreuz + Kreis reichen als Trennung
+
           ;; ATTDEF: HOEHE_ABS (absolut) — sichtbar, rechts vom Marker
+          ;; Justierung: Links Unten (72=0, 74=1) → Text waechst nach oben
+          ;; DXF 10 = Startpunkt, DXF 11 = Ausrichtungspunkt (bei Justierung)
+          ;; Position: rechts vom Kreis, leicht ueber Mittellinie
           (entmake (list '(0 . "ATTDEF")
                         '(8 . "0")
-                        '(62 . 0)              ;; Farbe ByBlock
-                        '(6 . "ByBlock")       ;; Linientyp ByBlock
-                        '(370 . -2)            ;; Linienstaerke ByBlock
-                        '(10 0.8 0.3 0.0)     ;; Position rechts oben
-                        '(40 . 0.5)           ;; Texthoehe
-                        '(1 . "0.000")        ;; Default-Wert
-                        '(2 . "HOEHE_ABS")    ;; Tag
-                        '(3 . "Absolute Hoehe") ;; Prompt
+                        '(62 . 0) '(6 . "ByBlock") '(370 . -2)
+                        '(10 0.1 0.01 0.0)    ;; Startpunkt
+                        '(11 0.1 0.01 0.0)    ;; Ausrichtungspunkt
+                        '(40 . 0.03)          ;; Texthoehe (wird beim Insert skaliert)
+                        '(1 . "0.000")
+                        '(2 . "HOEHE_ABS")
+                        '(3 . "Absolute Hoehe")
                         '(70 . 0)             ;; Flags: sichtbar
-                        '(72 . 0)             ;; Horizontale Justierung
+                        '(72 . 0)             ;; Horizontale Justierung: Links
+                        '(74 . 1)             ;; Vertikale Justierung: Unten
                   ))
-          ;; ATTDEF: HOEHE_REL (relativ) — sichtbar, rechts unter ABS
+          ;; ATTDEF: HOEHE_REL (relativ) — sichtbar, rechts vom Marker
+          ;; Justierung: Links Oben (72=0, 74=3) → Text waechst nach unten
+          ;; Position: rechts vom Kreis, leicht unter Mittellinie
           (entmake (list '(0 . "ATTDEF")
                         '(8 . "0")
-                        '(62 . 0)
-                        '(6 . "ByBlock")
-                        '(370 . -2)
-                        '(10 0.8 -0.4 0.0)    ;; Position rechts unten
-                        '(40 . 0.5)
+                        '(62 . 0) '(6 . "ByBlock") '(370 . -2)
+                        '(10 0.1 -0.01 0.0)
+                        '(11 0.1 -0.01 0.0)
+                        '(40 . 0.03)
                         '(1 . "0.000")
                         '(2 . "HOEHE_REL")
                         '(3 . "Relative Hoehe (nach Bau-0)")
                         '(70 . 0)
-                        '(72 . 0)
+                        '(72 . 0)             ;; Links
+                        '(74 . 3)             ;; Oben
                   ))
           ;; ENDBLK
           (if (entmake '((0 . "ENDBLK")))
@@ -852,12 +959,17 @@
 ;;; Rueckgabe: T bei Erfolg, nil bei Fehler
 ;;; ----------------------------------------------------------------------------
 (defun SBZ:insert-copyblock (orig-ent blk-name abs-h rel-z layer
-                             / orig-data orig-pt ins-pt new-ent blk-ref attrs)
+                             / orig-data orig-pt ins-pt new-ent attrs
+                               scale th suffix abs-str rel-str sign)
   ;; XY vom Original, Z = relative Hoehe
   (setq orig-data (entget orig-ent))
   (setq orig-pt (cdr (assoc 10 orig-data)))
   (setq ins-pt (list (car orig-pt) (cadr orig-pt) rel-z))
-  ;; Block einfuegen via command (zuverlaessig fuer Attribut-Bloecke)
+  ;; Einstellungen aus DWG Custom Properties lesen
+  (setq scale (SBZ:get-scale))
+  (setq th (SBZ:get-textheight))
+  (setq suffix (SBZ:get-suffix))
+  ;; Block einfuegen
   (setq new-ent
     (vl-catch-all-apply
       '(lambda ()
@@ -865,8 +977,8 @@
           (vla-get-modelspace (vla-get-activedocument (vlax-get-acad-object)))
           (vlax-3d-point ins-pt)
           blk-name
-          1.0 1.0 1.0  ;; Scale X Y Z
-          0.0           ;; Rotation
+          scale scale scale  ;; Scale X Y Z
+          0.0                ;; Rotation
         )
       )
     )
@@ -878,15 +990,35 @@
       nil
     )
     (progn
+      ;; Absolut-Hoehe: Wert + Suffix (z.B. "320.180 m ue. A.")
+      (setq abs-str (strcat (rtos abs-h 2 3)
+                            (if (and suffix (/= suffix ""))
+                              (strcat " " suffix) "")))
+      ;; Relativ-Hoehe: Vorzeichen + Wert
+      ;; Positiv = "+", Negativ = "-" (kommt automatisch), Null = "%%P" (Plus-Minus)
+      (cond
+        ((> rel-z 0.001)
+          (setq rel-str (strcat "+" (rtos rel-z 2 3)))
+        )
+        ((< rel-z -0.001)
+          (setq rel-str (rtos rel-z 2 3))  ;; Minus kommt automatisch von rtos
+        )
+        (T
+          (setq rel-str (strcat "%%P" (rtos (abs rel-z) 2 3)))
+        )
+      )
       ;; Attribute setzen
       (setq attrs (vlax-invoke new-ent 'GetAttributes))
       (foreach attr attrs
         (cond
           ((= (strcase (vla-get-TagString attr)) "HOEHE_ABS")
-            (vla-put-TextString attr (rtos abs-h 2 3))
+            (vla-put-TextString attr abs-str)
+            ;; Texthoehe setzen (skaliert mit Block, also Basis-Wert)
+            (vl-catch-all-apply 'vla-put-Height (list attr th))
           )
           ((= (strcase (vla-get-TagString attr)) "HOEHE_REL")
-            (vla-put-TextString attr (rtos rel-z 2 3))
+            (vla-put-TextString attr rel-str)
+            (vl-catch-all-apply 'vla-put-Height (list attr th))
           )
         )
       )
@@ -895,10 +1027,8 @@
         (vl-catch-all-apply 'vla-put-Layer (list new-ent layer))
       )
       (SBZ:log-write "DEBUG"
-        (strcat "Kopie-Block eingefuegt bei "
-                (rtos (car ins-pt) 2 3) "," (rtos (cadr ins-pt) 2 3)
-                ",Z=" (rtos rel-z 2 3)
-                " ABS=" (rtos abs-h 2 3) " REL=" (rtos rel-z 2 3)))
+        (strcat "Kopie-Block: ABS='" abs-str "' REL='" rel-str
+                "' Scale=" (rtos scale 2 2) " TH=" (rtos th 2 3)))
       T
     )
   )
@@ -1167,7 +1297,24 @@
   (write-line "      label = \"Kopie-Blockname:\";" fp)
   (write-line "      edit_width = 25;" fp)
   (write-line "    }" fp)
-  (write-line "    : text { key = \"copyinfo\"; value = \"(Block mit HOEHE_ABS + HOEHE_REL Attributen)\"; }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : edit_box {" fp)
+  (write-line "        key = \"scale\";" fp)
+  (write-line "        label = \"Skalierung:\";" fp)
+  (write-line "        edit_width = 10;" fp)
+  (write-line "      }" fp)
+  (write-line "      : edit_box {" fp)
+  (write-line "        key = \"textheight\";" fp)
+  (write-line "        label = \"Texthoehe:\";" fp)
+  (write-line "        edit_width = 10;" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
+  (write-line "    : edit_box {" fp)
+  (write-line "      key = \"suffix\";" fp)
+  (write-line "      label = \"Suffix Absoluthoehe:\";" fp)
+  (write-line "      edit_width = 20;" fp)
+  (write-line "    }" fp)
+  (write-line "    : text { key = \"copyinfo\"; value = \"Relativ: +/- automatisch, %%P bei 0\"; }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
   ;; --- Letzte Verarbeitung ---
@@ -1225,19 +1372,23 @@
   (mode_tile "layerlist" (if (= toggle-val "1") 0 1))
 )
 
-;;; --- Kopie-Blockname enabled/disabled je nach Toggle ---
-(defun SBZ:settings-update-copyblock-state (toggle-val / )
-  (mode_tile "copyblock" (if (= toggle-val "1") 0 1))
+;;; --- Kopie-Blockname + Skalierung + Text enabled/disabled je nach Toggle ---
+(defun SBZ:settings-update-copyblock-state (toggle-val / mode)
+  (setq mode (if (= toggle-val "1") 0 1))
+  (mode_tile "copyblock" mode)
+  (mode_tile "scale" mode)
+  (mode_tile "textheight" mode)
+  (mode_tile "suffix" mode)
 )
 
 
 ;;; --- Hauptfunktion SBZSETTINGS ---
 (defun c:SBZSETTINGS ( / *error* dcl-file dcl-id
-                         bau0 layer-names layer-idx
+                         bau0 scale th suffix layer-names layer-idx
                          last-blk last-attr
                          ;; Werte die aus Dialog gelesen werden (vor done_dialog!)
                          dlg-bau0 dlg-byblock dlg-movelayer dlg-layer-idx
-                         dlg-copymode dlg-copyblock
+                         dlg-copymode dlg-copyblock dlg-scale dlg-textheight dlg-suffix
                          dlg-action result count)
   (SBZ:ensure-init)
   (defun *error* (msg)
@@ -1306,6 +1457,13 @@
       ;; Kopie-Modus
       (set_tile "copymode" (itoa *SBZ:cfg-copymode*))
       (set_tile "copyblock" *SBZ:cfg-copyblock*)
+      ;; Skalierung, Texthoehe, Suffix aus DWG Custom Properties
+      (setq scale (SBZ:get-scale))
+      (setq th (SBZ:get-textheight))
+      (setq suffix (SBZ:get-suffix))
+      (set_tile "scale" (rtos scale 2 4))
+      (set_tile "textheight" (rtos th 2 4))
+      (set_tile "suffix" suffix)
       (SBZ:settings-update-copyblock-state (itoa *SBZ:cfg-copymode*))
 
       ;; Letzte Verarbeitung (aus DWG Custom Properties)
@@ -1342,6 +1500,9 @@
           "(setq dlg-layer-idx (get_tile \"layerlist\"))"
           "(setq dlg-copymode (get_tile \"copymode\"))"
           "(setq dlg-copyblock (get_tile \"copyblock\"))"
+          "(setq dlg-scale (get_tile \"scale\"))"
+          "(setq dlg-textheight (get_tile \"textheight\"))"
+          "(setq dlg-suffix (get_tile \"suffix\"))"
           "(setq dlg-action \"save\")"
           "(done_dialog 1)"
         )
@@ -1356,6 +1517,9 @@
           "(setq dlg-layer-idx (get_tile \"layerlist\"))"
           "(setq dlg-copymode (get_tile \"copymode\"))"
           "(setq dlg-copyblock (get_tile \"copyblock\"))"
+          "(setq dlg-scale (get_tile \"scale\"))"
+          "(setq dlg-textheight (get_tile \"textheight\"))"
+          "(setq dlg-suffix (get_tile \"suffix\"))"
           "(setq dlg-action \"recalc\")"
           "(done_dialog 2)"
         )
@@ -1397,9 +1561,36 @@
           (if (and dlg-copyblock (/= dlg-copyblock ""))
             (setq *SBZ:cfg-copyblock* dlg-copyblock)
           )
+          ;; Skalierung in DWG Custom Property speichern
+          (if (and dlg-scale (/= dlg-scale ""))
+            (progn
+              (setq scale (atof dlg-scale))
+              (if (> scale 0.0)
+                (SBZ:set-scale scale)
+                (SBZ:log-write "WARN" (strcat "Ungueltige Skalierung: " dlg-scale))
+              )
+            )
+          )
+          ;; Texthoehe in DWG Custom Property speichern
+          (if (and dlg-textheight (/= dlg-textheight ""))
+            (progn
+              (setq th (atof dlg-textheight))
+              (if (> th 0.0)
+                (SBZ:set-textheight th)
+                (SBZ:log-write "WARN" (strcat "Ungueltige Texthoehe: " dlg-textheight))
+              )
+            )
+          )
+          ;; Suffix in DWG Custom Property speichern
+          (if dlg-suffix
+            (SBZ:set-suffix dlg-suffix)
+          )
           (SBZ:log-write "INFO"
             (strcat "Settings: CopyMode=" dlg-copymode
-                    " CopyBlock='" *SBZ:cfg-copyblock* "'"))
+                    " CopyBlock='" *SBZ:cfg-copyblock*
+                    "' Scale=" (rtos (SBZ:get-scale) 2 4)
+                    " TH=" (rtos (SBZ:get-textheight) 2 4)
+                    " Suffix='" (SBZ:get-suffix) "'"))
 
           ;; Config schreiben
           (SBZ:save-config)
