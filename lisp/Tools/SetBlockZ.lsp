@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.7.3
+;;; Version: 1.8.0
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -34,7 +34,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.7.3")
+(setq *SBZ:version* "1.8.0")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -44,7 +44,6 @@
 (setq *SBZ:cp-blockname* "SetBlockZ_BlockName")
 (setq *SBZ:cp-attrtag* "SetBlockZ_AttrTag")
 (setq *SBZ:cp-scale* "SetBlockZ_Scale")
-(setq *SBZ:cp-textheight* "SetBlockZ_TextHeight")
 (setq *SBZ:cp-suffix* "SetBlockZ_Suffix")
 
 
@@ -63,9 +62,9 @@
 (setq *SBZ:cfg-copymode* 0)         ;; Kopie-Modus: Original beibehalten + Kopie-Block (0/1)
 (setq *SBZ:cfg-copyblock* "VermesserGOK") ;; Blockname fuer Kopie-Block
 (setq *SBZ:cfg-copylayer* "GOK")    ;; Basis-Layername fuer Kopie-Block (Suffix wird angehaengt)
-(setq *SBZ:cfg-show-abs* 1)         ;; Attribut HOEHE_ABS sichtbar (0/1)
-(setq *SBZ:cfg-show-rel* 1)         ;; Attribut HOEHE_REL sichtbar (0/1)
-(setq *SBZ:cfg-show-bau0* 0)        ;; Attribut HOEHE_BAU0 sichtbar (0/1)
+(setq *SBZ:cfg-freeze-abs* 0)       ;; AttABS Layer einfrieren (0=sichtbar, 1=gefroren)
+(setq *SBZ:cfg-freeze-rel* 0)       ;; AttREL Layer einfrieren (0=sichtbar, 1=gefroren)
+(setq *SBZ:cfg-freeze-bau0* 1)      ;; AttBAU0 Layer einfrieren (0=sichtbar, 1=gefroren)
 
 
 ;;; ============================================================================
@@ -195,9 +194,9 @@
               ((= key "COPYMODE")   (setq *SBZ:cfg-copymode* (atoi val)))
               ((= key "COPYBLOCK")  (setq *SBZ:cfg-copyblock* val))
               ((= key "COPYLAYER")  (setq *SBZ:cfg-copylayer* val))
-              ((= key "SHOWABS")    (setq *SBZ:cfg-show-abs* (atoi val)))
-              ((= key "SHOWREL")    (setq *SBZ:cfg-show-rel* (atoi val)))
-              ((= key "SHOWBAU0")   (setq *SBZ:cfg-show-bau0* (atoi val)))
+              ((= key "FREEZEABS") (setq *SBZ:cfg-freeze-abs* (atoi val)))
+              ((= key "FREEZEREL") (setq *SBZ:cfg-freeze-rel* (atoi val)))
+              ((= key "FREEZEBAU0")(setq *SBZ:cfg-freeze-bau0* (atoi val)))
             )
           )
         )
@@ -228,9 +227,9 @@
       (write-line (strcat "COPYMODE=" (itoa *SBZ:cfg-copymode*)) fp)
       (write-line (strcat "COPYBLOCK=" *SBZ:cfg-copyblock*) fp)
       (write-line (strcat "COPYLAYER=" *SBZ:cfg-copylayer*) fp)
-      (write-line (strcat "SHOWABS=" (itoa *SBZ:cfg-show-abs*)) fp)
-      (write-line (strcat "SHOWREL=" (itoa *SBZ:cfg-show-rel*)) fp)
-      (write-line (strcat "SHOWBAU0=" (itoa *SBZ:cfg-show-bau0*)) fp)
+      (write-line (strcat "FREEZEABS=" (itoa *SBZ:cfg-freeze-abs*)) fp)
+      (write-line (strcat "FREEZEREL=" (itoa *SBZ:cfg-freeze-rel*)) fp)
+      (write-line (strcat "FREEZEBAU0=" (itoa *SBZ:cfg-freeze-bau0*)) fp)
       (close fp)
       (SBZ:log-write "INFO" (strcat "Config gespeichert: " cfg-path))
     )
@@ -360,21 +359,6 @@
 (defun SBZ:set-scale (scale)
   (SBZ:set-custom-prop *SBZ:cp-scale* (rtos scale 2 4))
   (SBZ:log-write "INFO" (strcat "Skalierung gespeichert: " (rtos scale 2 4)))
-)
-
-;;; Texthoehe lesen (Real, Default 0.5)
-(defun SBZ:get-textheight ( / val)
-  (setq val (SBZ:get-custom-prop *SBZ:cp-textheight*))
-  (if (and val (/= val ""))
-    (atof val)
-    0.5
-  )
-)
-
-;;; Texthoehe schreiben
-(defun SBZ:set-textheight (h)
-  (SBZ:set-custom-prop *SBZ:cp-textheight* (rtos h 2 4))
-  (SBZ:log-write "INFO" (strcat "Texthoehe gespeichert: " (rtos h 2 4)))
 )
 
 ;;; Suffix lesen (String, Default "m ue. A.")
@@ -973,7 +957,7 @@
                         '(1 . "0.000")
                         '(2 . "HOEHE_BAU0")
                         '(3 . "Bau-0-Hoehe")
-                        '(70 . 1)             ;; Flags: Bit 1 = Invisible
+                        '(70 . 0)             ;; Flags: sichtbar (Layer steuert Sichtbarkeit)
                         '(72 . 0)             ;; Links
                         '(74 . 3)             ;; Oben
                   ))
@@ -1019,6 +1003,59 @@
 
 
 ;;; ----------------------------------------------------------------------------
+;;; SBZ:ensure-layer-with-freeze
+;;; Erstellt Layer falls nicht vorhanden und setzt Freeze-Status
+;;; Parameter:
+;;;   layer-name - Layername (String)
+;;;   freeze     - 0 = thawed (sichtbar), 1 = frozen (unsichtbar)
+;;; ----------------------------------------------------------------------------
+(defun SBZ:ensure-layer-with-freeze (layer-name freeze / doc layers lay-obj)
+  (setq doc (vla-get-activedocument (vlax-get-acad-object)))
+  (setq layers (vla-get-layers doc))
+  ;; Layer erstellen falls nicht vorhanden
+  (if (vl-catch-all-error-p
+        (setq lay-obj (vl-catch-all-apply 'vla-item (list layers layer-name))))
+    (progn
+      (setq lay-obj (vla-add layers layer-name))
+      (SBZ:log-write "INFO" (strcat "Layer erstellt: '" layer-name "'"))
+    )
+  )
+  ;; Freeze nur setzen wenn Layer NICHT der aktuelle Layer ist
+  ;; (aktuellen Layer kann man nicht einfrieren)
+  (if (and lay-obj (= freeze 1)
+           (/= (strcase layer-name) (strcase (getvar "CLAYER"))))
+    (vl-catch-all-apply 'vla-put-Freeze (list lay-obj :vlax-true))
+  )
+  layer-name
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:ensure-attr-layers
+;;; Erstellt die 3 Attribut-Sub-Layer fuer einen Block-Layer
+;;; Layer-Schema: <base>-AttABS, <base>-AttREL, <base>-AttBAU0
+;;; Setzt Initial-Freeze je nach Config-Toggles
+;;; Parameter: base-layer - Basis-Layername (z.B. "GOK_abs")
+;;; ----------------------------------------------------------------------------
+(defun SBZ:ensure-attr-layers (base-layer / )
+  ;; Basis-Layer (fuer Block-Symbol)
+  (SBZ:ensure-layer base-layer)
+  ;; Attribut-Sub-Layer mit Freeze-Status
+  (SBZ:ensure-layer-with-freeze
+    (strcat base-layer "-AttABS") *SBZ:cfg-freeze-abs*)
+  (SBZ:ensure-layer-with-freeze
+    (strcat base-layer "-AttREL") *SBZ:cfg-freeze-rel*)
+  (SBZ:ensure-layer-with-freeze
+    (strcat base-layer "-AttBAU0") *SBZ:cfg-freeze-bau0*)
+  (SBZ:log-write "INFO"
+    (strcat "Attribut-Layer erstellt: " base-layer
+            "-AttABS(" (if (= *SBZ:cfg-freeze-abs* 1) "frozen" "thawed") ")"
+            " -AttREL(" (if (= *SBZ:cfg-freeze-rel* 1) "frozen" "thawed") ")"
+            " -AttBAU0(" (if (= *SBZ:cfg-freeze-bau0* 1) "frozen" "thawed") ")"))
+)
+
+
+;;; ----------------------------------------------------------------------------
 ;;; SBZ:get-copy-layername
 ;;; Berechnet den Layer-Namen mit Suffix je nach Z-Modus
 ;;; Parameter:
@@ -1052,20 +1089,19 @@
 ;;; ----------------------------------------------------------------------------
 (defun SBZ:insert-copyblock (orig-ent blk-name abs-h rel-z ins-z bau0 z-mode
                              / orig-data orig-pt ins-pt new-ent attrs
-                               scale th suffix copy-layer
+                               scale suffix copy-layer
                                abs-str rel-str bau0-str tag-str
-                               att-ent att-data att-x att-y att-pos)
+                               att-ent att-data)
   ;; XY vom Original, Z = je nach Modus (ABS oder REL)
   (setq orig-data (entget orig-ent))
   (setq orig-pt (cdr (assoc 10 orig-data)))
   (setq ins-pt (list (car orig-pt) (cadr orig-pt) ins-z))
-  ;; Einstellungen aus DWG Custom Properties lesen
+  ;; Einstellungen lesen
   (setq scale (SBZ:get-scale))
-  (setq th (SBZ:get-textheight))
   (setq suffix (SBZ:get-suffix))
-  ;; Layer mit Suffix berechnen und sicherstellen
+  ;; Layer + Attribut-Sub-Layer erstellen
   (setq copy-layer (SBZ:get-copy-layername z-mode bau0))
-  (SBZ:ensure-layer copy-layer)
+  (SBZ:ensure-attr-layers copy-layer)
   ;; Block einfuegen
   (setq new-ent
     (vl-catch-all-apply
@@ -1087,37 +1123,21 @@
       nil
     )
     (progn
-      ;; Absolut-Hoehe: Wert + Suffix (z.B. "320.18 m ue. A.")
+      ;; Absolut-Hoehe: Wert + Suffix
       (setq abs-str (strcat (SBZ:rtos-fixed abs-h 2)
                             (if (and suffix (/= suffix ""))
                               (strcat " " suffix) "")))
       ;; Relativ-Hoehe: Vorzeichen + Wert
       (cond
-        ((> rel-z 0.001)
-          (setq rel-str (strcat "+" (SBZ:rtos-fixed rel-z 2)))
-        )
-        ((< rel-z -0.001)
-          (setq rel-str (SBZ:rtos-fixed rel-z 2))
-        )
-        (T
-          (setq rel-str (strcat "%%P" (SBZ:rtos-fixed (abs rel-z) 2)))
-        )
+        ((> rel-z 0.001)  (setq rel-str (strcat "+" (SBZ:rtos-fixed rel-z 2))))
+        ((< rel-z -0.001) (setq rel-str (SBZ:rtos-fixed rel-z 2)))
+        (T                (setq rel-str (strcat "%%P" (SBZ:rtos-fixed (abs rel-z) 2))))
       )
-      ;; Bau-0 Zeile: "±rel = abs suffix" z.B. "±0.02 = 320.73 m ü. A."
+      ;; Bau-0 Zeile
       (setq bau0-str (strcat rel-str " = " abs-str))
-      ;; Attribute setzen + Sichtbarkeit + dynamische Position
-      ;;
-      ;; ATTRIB DXF-Code 10/11 sind in WCS (nicht Block-Koordinaten!)
-      ;; Position = Block-Einfuegepunkt + Offset * Scale
-      ;; Offsets relativ zum Block-Zentrum, proportional zur Texthoehe:
-      ;;   X-Offset = 0.06 (rechts vom Kreisrand)
-      ;;   ABS: Y-Offset = +th * 0.15
-      ;;   REL: Y-Offset = -th * 0.15
-      ;;   BAU0: Y-Offset = REL - th * 1.3
-      ;; Texthoehe in DXF = th (wird NICHT durch Scale beeinflusst bei ATTRIB)
-      ;;
-      ;; ENTMOD statt VLA: VLA TextAlignmentPoint wirft "Not applicable"
-      ;; bei BottomLeft/TopLeft Alignments (Community-bestaetigter Bug)
+      ;; Attribute: Text setzen + Layer per entmod (DXF 8)
+      ;; Positionen bleiben aus Block-Definition (Skalierung regelt Groesse)
+      ;; Sichtbarkeit ueber Layer Freeze/Thaw, nicht Invisible-Flag
       (setq attrs (vlax-invoke new-ent 'GetAttributes))
       (foreach attr attrs
         (setq tag-str (strcase (vla-get-TagString attr)))
@@ -1125,53 +1145,29 @@
         (setq att-data (entget att-ent))
         (cond
           ((= tag-str "HOEHE_ABS")
-            (setq att-x (+ (car ins-pt) (* 0.06 scale)))
-            (setq att-y (+ (cadr ins-pt) (* th 0.15 scale)))
-            (setq att-pos (list att-x att-y (caddr ins-pt)))
             (setq att-data (subst (cons 1 abs-str) (assoc 1 att-data) att-data))
-            (setq att-data (subst (cons 40 th) (assoc 40 att-data) att-data))
-            (setq att-data (subst (cons 10 att-pos) (assoc 10 att-data) att-data))
-            (if (assoc 11 att-data)
-              (setq att-data (subst (cons 11 att-pos) (assoc 11 att-data) att-data)))
-            (setq att-data (subst
-              (cons 70 (if (= *SBZ:cfg-show-abs* 1) 0 1))
-              (assoc 70 att-data) att-data))
-            (entmod att-data)
-            (entupd att-ent)
+            (setq att-data (subst (cons 70 0) (assoc 70 att-data) att-data))
+            (setq att-data (subst (cons 8 (strcat copy-layer "-AttABS"))
+                                  (assoc 8 att-data) att-data))
+            (entmod att-data) (entupd att-ent)
           )
           ((= tag-str "HOEHE_REL")
-            (setq att-x (+ (car ins-pt) (* 0.06 scale)))
-            (setq att-y (- (cadr ins-pt) (* th 0.15 scale)))
-            (setq att-pos (list att-x att-y (caddr ins-pt)))
             (setq att-data (subst (cons 1 rel-str) (assoc 1 att-data) att-data))
-            (setq att-data (subst (cons 40 th) (assoc 40 att-data) att-data))
-            (setq att-data (subst (cons 10 att-pos) (assoc 10 att-data) att-data))
-            (if (assoc 11 att-data)
-              (setq att-data (subst (cons 11 att-pos) (assoc 11 att-data) att-data)))
-            (setq att-data (subst
-              (cons 70 (if (= *SBZ:cfg-show-rel* 1) 0 1))
-              (assoc 70 att-data) att-data))
-            (entmod att-data)
-            (entupd att-ent)
+            (setq att-data (subst (cons 70 0) (assoc 70 att-data) att-data))
+            (setq att-data (subst (cons 8 (strcat copy-layer "-AttREL"))
+                                  (assoc 8 att-data) att-data))
+            (entmod att-data) (entupd att-ent)
           )
           ((= tag-str "HOEHE_BAU0")
-            (setq att-x (+ (car ins-pt) (* 0.06 scale)))
-            (setq att-y (- (cadr ins-pt) (* scale (+ (* th 0.15) (* th 1.3)))))
-            (setq att-pos (list att-x att-y (caddr ins-pt)))
             (setq att-data (subst (cons 1 bau0-str) (assoc 1 att-data) att-data))
-            (setq att-data (subst (cons 40 th) (assoc 40 att-data) att-data))
-            (setq att-data (subst (cons 10 att-pos) (assoc 10 att-data) att-data))
-            (if (assoc 11 att-data)
-              (setq att-data (subst (cons 11 att-pos) (assoc 11 att-data) att-data)))
-            (setq att-data (subst
-              (cons 70 (if (= *SBZ:cfg-show-bau0* 1) 0 1))
-              (assoc 70 att-data) att-data))
-            (entmod att-data)
-            (entupd att-ent)
+            (setq att-data (subst (cons 70 0) (assoc 70 att-data) att-data))
+            (setq att-data (subst (cons 8 (strcat copy-layer "-AttBAU0"))
+                                  (assoc 8 att-data) att-data))
+            (entmod att-data) (entupd att-ent)
           )
         )
       )
-      ;; Block auf Kopie-Layer setzen
+      ;; Block-Symbol auf Kopie-Layer
       (vl-catch-all-apply 'vla-put-Layer (list new-ent copy-layer))
       (SBZ:log-write "DEBUG"
         (strcat "Kopie-Block: ABS='" abs-str "' REL='" rel-str
@@ -1485,25 +1481,22 @@
   (write-line "      : edit_box {" fp)
   (write-line "        key = \"scale\";" fp)
   (write-line "        label = \"Skalierung:\";" fp)
-  (write-line "        edit_width = 8;" fp)
-  (write-line "      }" fp)
-  (write-line "      : edit_box {" fp)
-  (write-line "        key = \"textheight\";" fp)
-  (write-line "        label = \"Texthoehe:\";" fp)
-  (write-line "        edit_width = 8;" fp)
+  (write-line "        edit_width = 10;" fp)
   (write-line "      }" fp)
   (write-line "      : edit_box {" fp)
   (write-line "        key = \"suffix\";" fp)
-  (write-line "        label = \"Suffix:\";" fp)
-  (write-line "        edit_width = 10;" fp)
+  (write-line "        label = \"Suffix (abs):\";" fp)
+  (write-line "        edit_width = 14;" fp)
   (write-line "      }" fp)
   (write-line "    }" fp)
+  (write-line "    spacer;" fp)
+  (write-line "    : text { value = \"Attribut-Layer einfrieren:\"; }" fp)
   (write-line "    : row {" fp)
-  (write-line "      : toggle { key = \"showabs\"; label = \"Absolut\"; }" fp)
-  (write-line "      : toggle { key = \"showrel\"; label = \"Relativ\"; }" fp)
-  (write-line "      : toggle { key = \"showbau0\"; label = \"Bau-0\"; }" fp)
+  (write-line "      : toggle { key = \"freezeabs\"; label = \"Absolut\"; }" fp)
+  (write-line "      : toggle { key = \"freezerel\"; label = \"Relativ\"; }" fp)
+  (write-line "      : toggle { key = \"freezebau0\"; label = \"Bau-0\"; }" fp)
   (write-line "    }" fp)
-  (write-line "    : text { key = \"copyinfo\"; value = \"Layer: _abs/_rel, ohne Suffix bei Bau-0=0\"; }" fp)
+  (write-line "    : text { key = \"copyinfo\"; value = \"Layer: GOK_abs-AttABS, -AttREL, -AttBAU0\"; }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
 
@@ -1553,23 +1546,21 @@
   (setq mode (if (= toggle-val "1") 0 1))
   (mode_tile "copyblock" mode)
   (mode_tile "scale" mode)
-  (mode_tile "textheight" mode)
   (mode_tile "suffix" mode)
   (mode_tile "copylayer" mode)
-  (mode_tile "showabs" mode)
-  (mode_tile "showrel" mode)
-  (mode_tile "showbau0" mode)
+  (mode_tile "freezeabs" mode)
+  (mode_tile "freezerel" mode)
+  (mode_tile "freezebau0" mode)
 )
 
 
 ;;; --- Hauptfunktion SBZSETTINGS ---
 (defun c:SBZSETTINGS ( / *error* dcl-file dcl-id
-                         bau0 scale th suffix layer-names layer-idx
+                         bau0 scale suffix layer-names layer-idx
                          last-blk last-attr
-                         ;; Werte die aus Dialog gelesen werden (vor done_dialog!)
                          dlg-bau0 dlg-byblock dlg-movelayer dlg-layer-idx
-                         dlg-copymode dlg-copyblock dlg-scale dlg-textheight dlg-suffix
-                         dlg-copylayer dlg-showabs dlg-showrel dlg-showbau0
+                         dlg-copymode dlg-copyblock dlg-scale dlg-suffix
+                         dlg-copylayer dlg-freezeabs dlg-freezerel dlg-freezebau0
                          dlg-action result count)
   (SBZ:ensure-init)
   (defun *error* (msg)
@@ -1645,14 +1636,12 @@
       (set_tile "copyblock" *SBZ:cfg-copyblock*)
       (set_tile "copylayer" *SBZ:cfg-copylayer*)
       (setq scale (SBZ:get-scale))
-      (setq th (SBZ:get-textheight))
       (setq suffix (SBZ:get-suffix))
       (set_tile "scale" (rtos scale 2 4))
-      (set_tile "textheight" (rtos th 2 4))
       (set_tile "suffix" suffix)
-      (set_tile "showabs" (itoa *SBZ:cfg-show-abs*))
-      (set_tile "showrel" (itoa *SBZ:cfg-show-rel*))
-      (set_tile "showbau0" (itoa *SBZ:cfg-show-bau0*))
+      (set_tile "freezeabs" (itoa *SBZ:cfg-freeze-abs*))
+      (set_tile "freezerel" (itoa *SBZ:cfg-freeze-rel*))
+      (set_tile "freezebau0" (itoa *SBZ:cfg-freeze-bau0*))
       ;; Kopie-Block Box deaktivieren wenn Kopie-Modus aus
       (SBZ:settings-update-copyblock-state (itoa *SBZ:cfg-copymode*))
 
@@ -1676,12 +1665,11 @@
           "(setq dlg-copymode (get_tile \"copymode\"))"
           "(setq dlg-copyblock (get_tile \"copyblock\"))"
           "(setq dlg-scale (get_tile \"scale\"))"
-          "(setq dlg-textheight (get_tile \"textheight\"))"
           "(setq dlg-suffix (get_tile \"suffix\"))"
           "(setq dlg-copylayer (get_tile \"copylayer\"))"
-          "(setq dlg-showabs (get_tile \"showabs\"))"
-          "(setq dlg-showrel (get_tile \"showrel\"))"
-          "(setq dlg-showbau0 (get_tile \"showbau0\"))"
+          "(setq dlg-freezeabs (get_tile \"freezeabs\"))"
+          "(setq dlg-freezerel (get_tile \"freezerel\"))"
+          "(setq dlg-freezebau0 (get_tile \"freezebau0\"))"
           "(setq dlg-action \"save\")"
           "(done_dialog 1)"
         )
@@ -1697,12 +1685,11 @@
           "(setq dlg-copymode (get_tile \"copymode\"))"
           "(setq dlg-copyblock (get_tile \"copyblock\"))"
           "(setq dlg-scale (get_tile \"scale\"))"
-          "(setq dlg-textheight (get_tile \"textheight\"))"
           "(setq dlg-suffix (get_tile \"suffix\"))"
           "(setq dlg-copylayer (get_tile \"copylayer\"))"
-          "(setq dlg-showabs (get_tile \"showabs\"))"
-          "(setq dlg-showrel (get_tile \"showrel\"))"
-          "(setq dlg-showbau0 (get_tile \"showbau0\"))"
+          "(setq dlg-freezeabs (get_tile \"freezeabs\"))"
+          "(setq dlg-freezerel (get_tile \"freezerel\"))"
+          "(setq dlg-freezebau0 (get_tile \"freezebau0\"))"
           "(setq dlg-action \"recalc\")"
           "(done_dialog 2)"
         )
@@ -1754,16 +1741,6 @@
               )
             )
           )
-          ;; Texthoehe in DWG Custom Property speichern
-          (if (and dlg-textheight (/= dlg-textheight ""))
-            (progn
-              (setq th (atof dlg-textheight))
-              (if (> th 0.0)
-                (SBZ:set-textheight th)
-                (SBZ:log-write "WARN" (strcat "Ungueltige Texthoehe: " dlg-textheight))
-              )
-            )
-          )
           ;; Suffix in DWG Custom Property speichern
           (if dlg-suffix
             (SBZ:set-suffix dlg-suffix)
@@ -1773,16 +1750,16 @@
             (setq *SBZ:cfg-copylayer* dlg-copylayer)
           )
           ;; Attribut-Sichtbarkeit speichern
-          (setq *SBZ:cfg-show-abs* (atoi dlg-showabs))
-          (setq *SBZ:cfg-show-rel* (atoi dlg-showrel))
-          (setq *SBZ:cfg-show-bau0* (atoi dlg-showbau0))
+          (setq *SBZ:cfg-freeze-abs* (atoi dlg-freezeabs))
+          (setq *SBZ:cfg-freeze-rel* (atoi dlg-freezerel))
+          (setq *SBZ:cfg-freeze-bau0* (atoi dlg-freezebau0))
           (SBZ:log-write "INFO"
             (strcat "Settings: CopyMode=" dlg-copymode
                     " CopyBlock='" *SBZ:cfg-copyblock*
                     "' Layer='" *SBZ:cfg-copylayer*
-                    "' Show: ABS=" (itoa *SBZ:cfg-show-abs*)
-                    " REL=" (itoa *SBZ:cfg-show-rel*)
-                    " BAU0=" (itoa *SBZ:cfg-show-bau0*)))
+                    "' Freeze: ABS=" (itoa *SBZ:cfg-freeze-abs*)
+                    " REL=" (itoa *SBZ:cfg-freeze-rel*)
+                    " BAU0=" (itoa *SBZ:cfg-freeze-bau0*)))
 
           ;; Config schreiben
           (SBZ:save-config)
