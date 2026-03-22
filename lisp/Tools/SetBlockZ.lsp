@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.16.0
+;;; Version: 1.17.2
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -35,7 +35,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.16.0")
+(setq *SBZ:version* "1.17.2")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -467,6 +467,456 @@
 
 
 ;;; ============================================================================
+;;; GRUPPEN-VERWALTUNG (XRecord + XData in DWG)
+;;; ============================================================================
+;;; Jeder SETBLOCKZ-Durchlauf erstellt eine "Gruppe" mit eigenem Namen.
+;;; Die Gruppen-Settings werden als XRecord im Named Object Dictionary
+;;; gespeichert. Jede Kopie-Block-Instanz bekommt XData mit dem Gruppennamen.
+;;;
+;;; NOD → SBZ_Groups (Dictionary)
+;;;         ├── "STAB137" (XRecord) → Settings als DXF 1000-Strings
+;;;         └── "GRENZ"   (XRecord) → ...
+;;;
+;;; CopyBlock-Name = <BasisName>_<Gruppenname> (z.B. "VM_Hoehe_STAB137")
+;;; Jede Gruppe hat eigene Block-Definition → verschiedene Fonts/Farben moeglich.
+;;;
+;;; XData auf jeder Kopie-Block-Instanz:
+;;;   App "SBZ", DXF 1000 = Gruppenname
+;;; ============================================================================
+
+;;; --- XData App registrieren ---
+(defun SBZ:regapp ( / )
+  (if (not (tblsearch "APPID" "SBZ"))
+    (regapp "SBZ")
+  )
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:set-xdata
+;;; Schreibt XData mit Gruppenname auf eine Entity
+;;; Parameter:
+;;;   ent        - Entity-Name (ename)
+;;;   group-name - Gruppenname (String)
+;;; ----------------------------------------------------------------------------
+(defun SBZ:set-xdata (ent group-name / ent-data xdata-list)
+  (SBZ:regapp)
+  (setq ent-data (entget ent '("SBZ")))
+  ;; Alte XData entfernen falls vorhanden
+  (if (assoc -3 ent-data)
+    (setq ent-data (vl-remove (assoc -3 ent-data) ent-data))
+  )
+  ;; Neue XData anhaengen
+  (setq xdata-list (list -3 (list "SBZ" (cons 1000 group-name))))
+  (setq ent-data (append ent-data (list xdata-list)))
+  (entmod ent-data)
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:get-xdata
+;;; Liest den Gruppennamen aus XData einer Entity
+;;; Parameter: ent - Entity-Name (ename)
+;;; Rueckgabe: Gruppenname (String) oder nil
+;;; ----------------------------------------------------------------------------
+(defun SBZ:get-xdata (ent / ent-data xdata app-data)
+  (setq ent-data (entget ent '("SBZ")))
+  (setq xdata (assoc -3 ent-data))
+  (if xdata
+    (progn
+      (setq app-data (cdr (assoc "SBZ" (cdr xdata))))
+      (if app-data
+        (cdr (assoc 1000 app-data))
+        nil
+      )
+    )
+    nil
+  )
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:get-group-entities
+;;; Findet alle INSERT-Entities die zur angegebenen Gruppe gehoeren
+;;; Parameter: group-name - Gruppenname (String)
+;;; Rueckgabe: Liste von enames oder nil
+;;; ----------------------------------------------------------------------------
+(defun SBZ:get-group-entities (group-name / ss i ent gname result)
+  (setq result nil)
+  ;; Alle INSERTs mit SBZ XData im Modelspace suchen
+  (setq ss (ssget "X" (list '(0 . "INSERT") '(410 . "Model") '(-3 ("SBZ")))))
+  (if (and ss (> (sslength ss) 0))
+    (progn
+      (setq i (sslength ss))
+      (while (> (setq i (1- i)) -1)
+        (setq ent (ssname ss i))
+        (setq gname (SBZ:get-xdata ent))
+        (if (and gname (= (strcase gname) (strcase group-name)))
+          (setq result (cons ent result))
+        )
+      )
+    )
+  )
+  result
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:get-groups-dict
+;;; Holt oder erstellt das SBZ_Groups Dictionary im Named Object Dictionary
+;;; Rueckgabe: VLA Dictionary-Objekt
+;;; ----------------------------------------------------------------------------
+(defun SBZ:get-groups-dict ( / doc nod dict)
+  (setq doc (vla-get-activedocument (vlax-get-acad-object)))
+  (setq nod (vla-GetExtensionDictionary
+              (vla-get-modelspace doc)))
+  ;; Versuche Dictionary zu holen
+  (if (vl-catch-all-error-p
+        (setq dict (vl-catch-all-apply 'vla-item (list nod "SBZ_Groups"))))
+    ;; Nicht vorhanden → im Named Object Dictionary der Zeichnung erstellen
+    (progn
+      (setq nod (vla-item
+                  (vla-get-dictionaries doc)
+                  "ACAD_GROUP"))
+      ;; Besser: direkt auf der Zeichnung (root NOD)
+      (setq nod (vlax-invoke
+                  (vla-get-activedocument (vlax-get-acad-object))
+                  'GetExtensionDictionary))
+      ;; Alternativer Ansatz: Named Objects Dictionary direkt
+      (setq dict nil)
+    )
+  )
+  ;; Sauberer Ansatz: entget auf NOD Entity
+  dict
+)
+
+
+;;; Sauberer Ansatz fuer Named Object Dictionary via entget/entmake:
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:nod-get-dict
+;;; Holt oder erstellt das SBZ_Groups Dictionary im Named Object Dictionary
+;;; Verwendet entget-basiertes NOD (zuverlaessiger als VLA fuer Dicts)
+;;; Rueckgabe: Entity-Name des Dictionary (ename) oder nil
+;;; ----------------------------------------------------------------------------
+(defun SBZ:nod-get-dict ( / nod-ent nod-data dict-name result)
+  (setq dict-name "SBZ_Groups")
+  ;; Named Object Dictionary = Entity (namedobjdict)
+  (setq nod-ent (namedobjdict))
+  (setq result (dictsearch nod-ent dict-name))
+  (if result
+    ;; Dictionary existiert → Entity-Name zurueckgeben
+    (cdr (assoc -1 result))
+    ;; Nicht vorhanden → neues Dictionary erstellen
+    (progn
+      (setq result
+        (entmakex '((0 . "DICTIONARY") (100 . "AcDbDictionary"))))
+      (if result
+        (progn
+          (dictadd nod-ent dict-name result)
+          (SBZ:log-write "INFO" "SBZ_Groups Dictionary erstellt")
+          result
+        )
+        (progn
+          (SBZ:log-write "ERROR" "SBZ_Groups Dictionary konnte nicht erstellt werden")
+          nil
+        )
+      )
+    )
+  )
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:save-group
+;;; Speichert Gruppen-Settings als XRecord im SBZ_Groups Dictionary
+;;; Parameter:
+;;;   group-name  - Gruppenname (String)
+;;;   group-data  - Assoziationsliste mit Settings:
+;;;     ("QUELLBLOCK" . "STAB137")
+;;;     ("ATTRTAG"    . "Punkthoehe")
+;;;     ("BAU0"       . "320.390")     ;; "" = DWG-Standard verwenden
+;;;     ("ZMODE"      . "REL")
+;;;     ("COPYBLOCK"  . "VM_Hoehe_STAB137")
+;;;     ("COPYLAYER"  . "GOK")
+;;;     ("SCALE"      . "10.0000")
+;;;     ("SUFFIX"     . "m ue. A.")
+;;;     ("FONT"       . "Arial")
+;;;     ("COLORBLOCK" . "7")
+;;;     ("COLORABS"   . "0")
+;;;     ("COLORREL"   . "0")
+;;;     ("COLORBAU0"  . "0")
+;;;     ("FREEZEABS"  . "0")
+;;;     ("FREEZEREL"  . "0")
+;;;     ("FREEZEBAU0" . "1")
+;;; Rueckgabe: T bei Erfolg
+;;; ----------------------------------------------------------------------------
+(defun SBZ:save-group (group-name group-data / dict-ent old-rec xrec dxf-list)
+  (setq dict-ent (SBZ:nod-get-dict))
+  (if (not dict-ent)
+    (progn
+      (SBZ:log-write "ERROR" "Kann SBZ_Groups Dictionary nicht oeffnen")
+      nil
+    )
+    (progn
+      ;; Altes XRecord loeschen falls vorhanden
+      (setq old-rec (dictsearch dict-ent group-name))
+      (if old-rec
+        (entdel (cdr (assoc -1 old-rec)))
+      )
+      ;; DXF-Liste aufbauen: XRecord mit DXF 1000 (String) pro Setting
+      ;; Format: "KEY=VALUE" pro DXF 1000 Eintrag
+      (setq dxf-list
+        (list '(0 . "XRECORD")
+              '(100 . "AcDbXrecord")
+        )
+      )
+      (foreach pair group-data
+        (setq dxf-list
+          (append dxf-list
+            (list (cons 1 (strcat (car pair) "=" (cdr pair))))
+          )
+        )
+      )
+      ;; XRecord erstellen
+      (setq xrec (entmakex dxf-list))
+      (if xrec
+        (progn
+          (dictadd dict-ent group-name xrec)
+          (SBZ:log-write "INFO"
+            (strcat "Gruppe '" group-name "' gespeichert ("
+                    (itoa (length group-data)) " Settings)"))
+          T
+        )
+        (progn
+          (SBZ:log-write "ERROR"
+            (strcat "XRecord fuer Gruppe '" group-name "' konnte nicht erstellt werden"))
+          nil
+        )
+      )
+    )
+  )
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:load-group
+;;; Laedt Gruppen-Settings aus XRecord
+;;; Parameter: group-name - Gruppenname (String)
+;;; Rueckgabe: Assoziationsliste (("KEY" . "VALUE") ...) oder nil
+;;; ----------------------------------------------------------------------------
+(defun SBZ:load-group (group-name / dict-ent rec-data result pair pos key val)
+  (setq dict-ent (SBZ:nod-get-dict))
+  (if (not dict-ent)
+    nil
+    (progn
+      (setq rec-data (dictsearch dict-ent group-name))
+      (if (not rec-data)
+        nil
+        (progn
+          (setq result nil)
+          ;; Alle DXF 1 Eintraege lesen (KEY=VALUE Format)
+          (foreach item rec-data
+            (if (= (car item) 1)
+              (progn
+                (setq pair (cdr item))
+                (setq pos (vl-string-search "=" pair))
+                (if pos
+                  (progn
+                    (setq key (substr pair 1 pos))
+                    (setq val (substr pair (+ pos 2)))
+                    (setq result (cons (cons key val) result))
+                  )
+                )
+              )
+            )
+          )
+          ;; Liste umdrehen (war durch cons umgekehrt)
+          (reverse result)
+        )
+      )
+    )
+  )
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:get-group-names
+;;; Gibt alle Gruppennamen zurueck
+;;; Rueckgabe: Liste von Strings oder nil
+;;; ----------------------------------------------------------------------------
+(defun SBZ:get-group-names ( / dict-ent dict-data result ent rec-data)
+  (setq dict-ent (SBZ:nod-get-dict))
+  (if (not dict-ent)
+    nil
+    (progn
+      (setq result nil)
+      (setq dict-data (entget dict-ent))
+      ;; DXF 3 = Dictionary-Eintragsname, DXF 350 = Handle
+      (foreach item dict-data
+        (if (= (car item) 3)
+          (setq result (cons (cdr item) result))
+        )
+      )
+      (reverse result)
+    )
+  )
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:delete-group
+;;; Loescht eine Gruppe: XRecord + alle zugehoerigen Block-Instanzen + Definition
+;;; Parameter: group-name - Gruppenname (String)
+;;; Rueckgabe: Anzahl geloeschter Instanzen
+;;; ----------------------------------------------------------------------------
+(defun SBZ:delete-group (group-name / dict-ent old-rec group-data
+                                      copy-blk-name ents count blocks blk-def)
+  ;; 1. Gruppen-Settings laden um CopyBlock-Namen zu erfahren
+  (setq group-data (SBZ:load-group group-name))
+  (setq copy-blk-name
+    (if group-data
+      (cdr (assoc "COPYBLOCK" group-data))
+      nil
+    )
+  )
+  ;; 2. Alle Instanzen dieser Gruppe loeschen (via XData)
+  (setq ents (SBZ:get-group-entities group-name))
+  (setq count (length ents))
+  (if (> count 0)
+    (progn
+      (foreach ent ents (entdel ent))
+      (SBZ:log-write "INFO"
+        (strcat (itoa count) " Instanzen der Gruppe '" group-name "' geloescht"))
+    )
+  )
+  ;; 3. Block-Definition loeschen
+  (if copy-blk-name
+    (progn
+      (setq blocks (vla-get-blocks
+        (vla-get-activedocument (vlax-get-acad-object))))
+      (if (not (vl-catch-all-error-p
+            (setq blk-def (vl-catch-all-apply 'vla-item
+              (list blocks copy-blk-name)))))
+        (progn
+          (vl-catch-all-apply 'vla-delete (list blk-def))
+          (SBZ:log-write "INFO"
+            (strcat "Block-Definition '" copy-blk-name "' geloescht"))
+        )
+      )
+    )
+  )
+  ;; 4. XRecord aus Dictionary loeschen
+  (setq dict-ent (SBZ:nod-get-dict))
+  (if dict-ent
+    (progn
+      (setq old-rec (dictsearch dict-ent group-name))
+      (if old-rec
+        (progn
+          (dictremove dict-ent group-name)
+          (entdel (cdr (assoc -1 old-rec)))
+          (SBZ:log-write "INFO"
+            (strcat "Gruppe '" group-name "' aus Dictionary geloescht"))
+        )
+      )
+    )
+  )
+  count
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:build-copyblock-name
+;;; Baut den CopyBlock-Namen aus Basis + Gruppenname
+;;; Format: <BasisName>_<Gruppenname>
+;;; Parameter:
+;;;   group-name - Gruppenname (String)
+;;; Rueckgabe: CopyBlock-Name (z.B. "VM_Hoehe_STAB137")
+;;; ----------------------------------------------------------------------------
+(defun SBZ:build-copyblock-name (group-name / )
+  (strcat *SBZ:cfg-copyblock* "_" group-name)
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:group-data-from-current
+;;; Erstellt eine Gruppen-Settings-Liste aus den aktuellen globalen Variablen
+;;; Parameter:
+;;;   quell-block - Quell-Blockname (String)
+;;;   attr-tag    - Attribut-Tag (String)
+;;;   bau0-str    - Bau-0 als String ("" = DWG-Standard verwenden)
+;;;   z-mode      - "ABS" oder "REL"
+;;;   group-name  - Gruppenname (fuer CopyBlock-Name)
+;;; Rueckgabe: Assoziationsliste
+;;; ----------------------------------------------------------------------------
+(defun SBZ:group-data-from-current (quell-block attr-tag bau0-str z-mode group-name / )
+  (list
+    (cons "QUELLBLOCK" quell-block)
+    (cons "ATTRTAG"    attr-tag)
+    (cons "BAU0"       bau0-str)
+    (cons "ZMODE"      z-mode)
+    (cons "COPYBLOCK"  (SBZ:build-copyblock-name group-name))
+    (cons "COPYLAYER"  *SBZ:cfg-copylayer*)
+    (cons "SCALE"      (rtos (SBZ:get-scale) 2 4))
+    (cons "SUFFIX"     (SBZ:get-suffix))
+    (cons "FONT"       (SBZ:get-font))
+    (cons "COLORBLOCK" (itoa *SBZ:cfg-color-block*))
+    (cons "COLORABS"   (itoa *SBZ:cfg-color-abs*))
+    (cons "COLORREL"   (itoa *SBZ:cfg-color-rel*))
+    (cons "COLORBAU0"  (itoa *SBZ:cfg-color-bau0*))
+    (cons "FREEZEABS"  (itoa *SBZ:cfg-freeze-abs*))
+    (cons "FREEZEREL"  (itoa *SBZ:cfg-freeze-rel*))
+    (cons "FREEZEBAU0" (itoa *SBZ:cfg-freeze-bau0*))
+  )
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:apply-group-settings
+;;; Laedt Gruppen-Settings und setzt die globalen Variablen entsprechend
+;;; Parameter: group-name - Gruppenname (String)
+;;; Rueckgabe: T wenn geladen, nil wenn Gruppe nicht existiert
+;;; ----------------------------------------------------------------------------
+(defun SBZ:apply-group-settings (group-name / gdata val)
+  (setq gdata (SBZ:load-group group-name))
+  (if (not gdata)
+    nil
+    (progn
+      ;; Globale Variablen aus Gruppen-Daten setzen
+      (if (setq val (cdr (assoc "COPYLAYER" gdata)))
+        (setq *SBZ:cfg-copylayer* val))
+      (if (setq val (cdr (assoc "FONT" gdata)))
+        (setq *SBZ:cfg-font* val))
+      (if (setq val (cdr (assoc "COLORBLOCK" gdata)))
+        (setq *SBZ:cfg-color-block* (atoi val)))
+      (if (setq val (cdr (assoc "COLORABS" gdata)))
+        (setq *SBZ:cfg-color-abs* (atoi val)))
+      (if (setq val (cdr (assoc "COLORREL" gdata)))
+        (setq *SBZ:cfg-color-rel* (atoi val)))
+      (if (setq val (cdr (assoc "COLORBAU0" gdata)))
+        (setq *SBZ:cfg-color-bau0* (atoi val)))
+      (if (setq val (cdr (assoc "FREEZEABS" gdata)))
+        (setq *SBZ:cfg-freeze-abs* (atoi val)))
+      (if (setq val (cdr (assoc "FREEZEREL" gdata)))
+        (setq *SBZ:cfg-freeze-rel* (atoi val)))
+      (if (setq val (cdr (assoc "FREEZEBAU0" gdata)))
+        (setq *SBZ:cfg-freeze-bau0* (atoi val)))
+      ;; DWG Custom Properties setzen
+      (if (setq val (cdr (assoc "SCALE" gdata)))
+        (SBZ:set-scale (atof val)))
+      (if (setq val (cdr (assoc "SUFFIX" gdata)))
+        (SBZ:set-suffix val))
+      (if (setq val (cdr (assoc "FONT" gdata)))
+        (SBZ:set-font val))
+      (SBZ:log-write "INFO"
+        (strcat "Gruppen-Settings '" group-name "' geladen"))
+      T
+    )
+  )
+)
+
+
+;;; ============================================================================
 ;;; LAZY-INIT
 ;;; ============================================================================
 
@@ -480,6 +930,8 @@
     (progn
       ;; VLA laden
       (vl-load-com)
+      ;; XData App registrieren
+      (SBZ:regapp)
       ;; AppData-Ordner sicherstellen
       (SBZ:get-appdata-path)
       ;; Start-Log
@@ -789,14 +1241,20 @@
 ;;;   z-mode    - "ABS" oder "REL" (Z-Koordinate fuer Kopie-Block)
 ;;; Rueckgabe: Anzahl verarbeiteter Bloecke (Integer)
 ;;; ----------------------------------------------------------------------------
-(defun SBZ:process-blocks (blk-name attr-tag bau0 z-mode
+(defun SBZ:process-blocks (blk-name attr-tag bau0 z-mode group-name
                            / ss i ent val-str abs-h rel-z ins-z count-ok count-err
-                             copy-mode copy-blk-name copy-def-ok target-layer)
+                             copy-mode copy-blk-name copy-def-ok target-layer new-ent-name)
   (setq count-ok 0)
   (setq count-err 0)
   ;; Kopie-Modus Variablen lokal cachen
   (setq copy-mode (= *SBZ:cfg-copymode* 1))
-  (setq copy-blk-name *SBZ:cfg-copyblock*)
+  ;; CopyBlock-Name: mit Gruppenname wenn vorhanden
+  (setq copy-blk-name
+    (if (and group-name (/= group-name ""))
+      (SBZ:build-copyblock-name group-name)
+      *SBZ:cfg-copyblock*
+    )
+  )
   (setq target-layer (if (and (= *SBZ:cfg-movelayer* 1)
                                (/= *SBZ:cfg-target-layer* ""))
                        *SBZ:cfg-target-layer* ""))
@@ -843,19 +1301,28 @@
                     (setq ins-z (if (= z-mode "ABS") abs-h rel-z))
                     (if copy-mode
                       ;; === KOPIE-MODUS: Original beibehalten, Kopie-Block einfuegen ===
-                      (if (SBZ:insert-copyblock ent copy-blk-name abs-h rel-z ins-z bau0 z-mode)
-                        (progn
-                          (setq count-ok (1+ count-ok))
-                          (SBZ:log-write "DEBUG"
-                            (strcat "Block " (itoa (1+ i)) ": Kopie eingefuegt"
-                                    " ABS=" (rtos abs-h 2 3)
-                                    " REL=" (rtos rel-z 2 3)
-                                    " Z=" (rtos ins-z 2 3) " (" z-mode ")"))
-                        )
-                        (progn
-                          (setq count-err (1+ count-err))
-                          (SBZ:log-write "ERROR"
-                            (strcat "Block " (itoa (1+ i)) ": Kopie-Insert fehlgeschlagen"))
+                      (progn
+                        (setq new-ent-name
+                          (SBZ:insert-copyblock ent copy-blk-name abs-h rel-z ins-z bau0 z-mode))
+                        (if new-ent-name
+                          (progn
+                            ;; XData mit Gruppenname setzen (falls Gruppe angegeben)
+                            (if (and group-name (/= group-name ""))
+                              (SBZ:set-xdata (vlax-vla-object->ename new-ent-name) group-name)
+                            )
+                            (setq count-ok (1+ count-ok))
+                            (SBZ:log-write "DEBUG"
+                              (strcat "Block " (itoa (1+ i)) ": Kopie eingefuegt"
+                                      " ABS=" (rtos abs-h 2 3)
+                                      " REL=" (rtos rel-z 2 3)
+                                      " Z=" (rtos ins-z 2 3) " (" z-mode ")"
+                                      (if group-name (strcat " Gruppe='" group-name "'") "")))
+                          )
+                          (progn
+                            (setq count-err (1+ count-err))
+                            (SBZ:log-write "ERROR"
+                              (strcat "Block " (itoa (1+ i)) ": Kopie-Insert fehlgeschlagen"))
+                          )
                         )
                       )
                       ;; === STANDARD-MODUS: Original verschieben ===
@@ -1291,7 +1758,7 @@
       (SBZ:log-write "DEBUG"
         (strcat "Kopie-Block: ABS='" abs-str "' REL='" rel-str
                 "' Layer='" copy-layer "'"))
-      T
+      new-ent  ;; VLA-Objekt zurueckgeben (fuer XData)
     )
   )
 )
@@ -1418,7 +1885,8 @@
 ;;; ----------------------------------------------------------------------------
 (defun c:SETBLOCKZ ( / *error* old-cmdecho
                        sel blk-ent blk-name attr-tags selected-attr
-                       bau0 bau0-input ss-preview num-found confirm z-mode count)
+                       bau0 bau0-input bau0-str ss-preview num-found confirm
+                       z-mode count group-name)
   (SBZ:ensure-init)
   ;; Lokaler Error-Handler
   (defun *error* (msg)
@@ -1583,15 +2051,60 @@
                               ;; Toggles speichern (AppData)
                               (SBZ:save-config)
 
-                              ;; --- Schritt 6: Verarbeitung ---
-                              (setq count (SBZ:process-blocks blk-name selected-attr bau0 z-mode))
-                              (princ (strcat "\n" (itoa count) " Bloecke verarbeitet."))
-                              (if (and (= *SBZ:cfg-movelayer* 1)
-                                       (/= *SBZ:cfg-target-layer* ""))
-                                (princ (strcat "\nBloecke auf Layer '" *SBZ:cfg-target-layer* "' verschoben."))
+                              ;; --- Schritt 6: Gruppenname abfragen ---
+                              (setq group-name
+                                (getstring T
+                                  (strcat "\nGruppenname eingeben <" blk-name ">: ")))
+                              (if (or (not group-name) (= group-name ""))
+                                (setq group-name blk-name)
                               )
-                              (if (= *SBZ:cfg-byblock* 1)
-                                (princ "\nBlock-Definition: Farbe auf ByBlock gesetzt.")
+                              ;; Pruefen ob Gruppe schon existiert
+                              (if (SBZ:load-group group-name)
+                                (progn
+                                  (initget "Ueberschreiben Abbrechen")
+                                  (setq confirm
+                                    (getkword
+                                      (strcat "\nGruppe '" group-name
+                                              "' existiert bereits. [Ueberschreiben/Abbrechen] <Abbrechen>: ")))
+                                  (if (not confirm) (setq confirm "Abbrechen"))
+                                  (if (= confirm "Abbrechen")
+                                    (progn
+                                      (princ "\nAbgebrochen.")
+                                      (SBZ:log-write "INFO"
+                                        (strcat "Gruppe '" group-name "' existiert, User hat abgebrochen"))
+                                      (setq group-name nil)
+                                    )
+                                    ;; Ueberschreiben: Alte Bloecke dieser Gruppe loeschen
+                                    (progn
+                                      (SBZ:log-write "INFO"
+                                        (strcat "Gruppe '" group-name "' wird ueberschrieben"))
+                                      (SBZ:delete-group group-name)
+                                    )
+                                  )
+                                )
+                              )
+
+                              ;; --- Schritt 7: Verarbeitung ---
+                              (if group-name
+                                (progn
+                                  (SBZ:log-write "INFO"
+                                    (strcat "Gruppe: '" group-name "'"))
+                                  (setq count
+                                    (SBZ:process-blocks blk-name selected-attr bau0 z-mode group-name))
+                                  (princ (strcat "\n" (itoa count) " Bloecke verarbeitet."))
+
+                                  ;; Gruppe als XRecord speichern
+                                  (setq bau0-str
+                                    (if (equal bau0 (SBZ:get-bau0) 0.001)
+                                      ""  ;; Gleich wie DWG-Standard → leer lassen
+                                      (rtos bau0 2 3)  ;; Eigener Wert
+                                    )
+                                  )
+                                  (SBZ:save-group group-name
+                                    (SBZ:group-data-from-current
+                                      blk-name selected-attr bau0-str z-mode group-name))
+                                  (princ (strcat "\nGruppe '" group-name "' gespeichert."))
+                                )
                               )
                             )
                             ;; Nein → Abbruch
@@ -1716,10 +2229,21 @@
   (write-line "  width = 55;" fp)
   (write-line "  spacer;" fp)
 
+  ;; ===== GRUPPE (oben) =====
+  (write-line "  : row {" fp)
+  (write-line "    : popup_list { key = \"group\"; label = \"Gruppe:\"; }" fp)
+  (write-line "    : button { key = \"groupdel\"; label = \"Loeschen\"; width = 8; fixed_width = true; }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+
   ;; ===== BOX 1: ZEICHNUNG =====
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"Zeichnung\";" fp)
-  (write-line "    : edit_box { key = \"bau0\"; label = \"Bau-0-Hoehe (m):\"; edit_width = 12; }" fp)
+  (write-line "    : edit_box { key = \"bau0\"; label = \"DWG Bau-0 (m):  \"; edit_width = 12; }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : edit_box { key = \"groupbau0\"; label = \"Gruppen Bau-0:\"; edit_width = 12; }" fp)
+  (write-line "      : toggle { key = \"usegroupbau0\"; label = \"Eigener\"; }" fp)
+  (write-line "    }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
 
@@ -1855,6 +2379,67 @@
 )
 
 
+;;; --- Gruppen-Settings in Dialog-Felder laden ---
+;;; Wird aufgerufen wenn User eine Gruppe im Dropdown waehlt
+;;; Benoetigt font-names, block-colors, attr-colors im Dialog-Scope
+(defun SBZ:load-group-to-dialog (group-name / gdata val idx)
+  (setq gdata (SBZ:load-group group-name))
+  (if gdata
+    (progn
+      ;; Bau-0: Gruppen-eigener oder DWG-Standard
+      (setq val (cdr (assoc "BAU0" gdata)))
+      (if (and val (/= val ""))
+        (progn
+          (set_tile "groupbau0" val)
+          (set_tile "usegroupbau0" "1")
+          (mode_tile "groupbau0" 0)
+        )
+        (progn
+          (set_tile "groupbau0" "")
+          (set_tile "usegroupbau0" "0")
+          (mode_tile "groupbau0" 1)
+        )
+      )
+      ;; Block-Settings
+      (if (setq val (cdr (assoc "COPYLAYER" gdata)))
+        (set_tile "copylayer" val))
+      (if (setq val (cdr (assoc "SCALE" gdata)))
+        (set_tile "scale" val))
+      (if (setq val (cdr (assoc "SUFFIX" gdata)))
+        (set_tile "suffix" val))
+      ;; Block-Farbe
+      (if (setq val (cdr (assoc "COLORBLOCK" gdata)))
+        (set_tile "colorblock" (itoa (SBZ:color-to-index (atoi val) block-colors))))
+      ;; Schriftart
+      (if (setq val (cdr (assoc "FONT" gdata)))
+        (progn
+          (setq idx (vl-position (strcase val) (mapcar 'strcase font-names)))
+          (if idx (set_tile "font" (itoa idx)))
+        )
+      )
+      ;; Attribut-Farben
+      (if (setq val (cdr (assoc "COLORABS" gdata)))
+        (set_tile "colorabs" (itoa (SBZ:color-to-index (atoi val) attr-colors))))
+      (if (setq val (cdr (assoc "COLORREL" gdata)))
+        (set_tile "colorrel" (itoa (SBZ:color-to-index (atoi val) attr-colors))))
+      (if (setq val (cdr (assoc "COLORBAU0" gdata)))
+        (set_tile "colorbau0" (itoa (SBZ:color-to-index (atoi val) attr-colors))))
+      ;; Freeze
+      (if (setq val (cdr (assoc "FREEZEABS" gdata)))
+        (set_tile "freezeabs" val))
+      (if (setq val (cdr (assoc "FREEZEREL" gdata)))
+        (set_tile "freezerel" val))
+      (if (setq val (cdr (assoc "FREEZEBAU0" gdata)))
+        (set_tile "freezebau0" val))
+      ;; Kopie-Modus immer ein bei Gruppen
+      (set_tile "copymode" "1")
+      (SBZ:settings-update-copyblock-state "1")
+      (SBZ:log-write "INFO" (strcat "Gruppe '" group-name "' in Dialog geladen"))
+    )
+  )
+)
+
+
 ;;; --- Hauptfunktion SBZSETTINGS ---
 (defun c:SBZSETTINGS ( / *error* dcl-file dcl-id
                          bau0 scale suffix
@@ -1866,7 +2451,9 @@
                          dlg-copylayer dlg-font
                          dlg-colorblock dlg-colorabs dlg-colorrel dlg-colorbau0
                          dlg-freezeabs dlg-freezerel dlg-freezebau0
-                         dlg-action result count ss blocks blk-def old-copyblock)
+                         dlg-action dlg-group dlg-groupbau0 dlg-usegroupbau0
+                         result count ss blocks blk-def old-copyblock
+                         group-names sel-group sel-group-data bau0-str)
   (SBZ:ensure-init)
   (defun *error* (msg)
     (if (not (SBZ:cancel-p msg))
@@ -1890,6 +2477,9 @@
   (setq font-names (SBZ:get-font-list))
   (setq block-colors (SBZ:get-block-color-list))
   (setq attr-colors (SBZ:get-attr-color-list))
+  ;; Gruppennamen aus DWG laden
+  (setq group-names (SBZ:get-group-names))
+  (if (not group-names) (setq group-names nil))
 
   ;; DCL schreiben und laden
   (setq dcl-file (SBZ:write-settings-dcl))
@@ -1904,8 +2494,21 @@
       (princ)
     )
     (progn
+      ;; === GRUPPE: Dropdown befuellen ===
+      (start_list "group")
+      (add_list "(keine Gruppe)")
+      (if group-names
+        (foreach gn group-names (add_list gn))
+      )
+      (end_list)
+      (set_tile "group" "0")  ;; Default: keine Gruppe
+
       ;; === BOX 1: Zeichnung ===
       (set_tile "bau0" (rtos bau0 2 3))
+      ;; Gruppen-Bau0 erstmal leer + disabled
+      (set_tile "groupbau0" "")
+      (set_tile "usegroupbau0" "0")
+      (mode_tile "groupbau0" 1)
 
       ;; === BOX 2: Modus ===
       (set_tile "copymode" (itoa *SBZ:cfg-copymode*))
@@ -1959,6 +2562,40 @@
       ;; --- Action Tiles ---
       (action_tile "copymode" "(SBZ:settings-update-copyblock-state $value)")
 
+      ;; Gruppen-Auswahl: Settings laden wenn Gruppe gewaehlt wird
+      (action_tile "group"
+        (strcat
+          "(if (> (atoi $value) 0)"
+          "  (SBZ:load-group-to-dialog (nth (1- (atoi $value)) group-names))"
+          ")"
+        )
+      )
+
+      ;; Gruppen-Bau0 Toggle: Feld aktivieren/deaktivieren
+      (action_tile "usegroupbau0"
+        "(mode_tile \"groupbau0\" (if (= $value \"1\") 0 1))")
+
+      ;; Gruppe loeschen
+      (action_tile "groupdel"
+        (strcat
+          "(progn"
+          "  (setq dlg-group (get_tile \"group\"))"
+          "  (if (> (atoi dlg-group) 0)"
+          "    (progn"
+          "      (setq sel-group (nth (1- (atoi dlg-group)) group-names))"
+          "      (SBZ:delete-group sel-group)"
+          "      (setq group-names (SBZ:get-group-names))"
+          "      (start_list \"group\")"
+          "      (add_list \"(keine Gruppe)\")"
+          "      (if group-names (foreach gn group-names (add_list gn)))"
+          "      (end_list)"
+          "      (set_tile \"group\" \"0\")"
+          "    )"
+          "  )"
+          ")"
+        )
+      )
+
       ;; Standard: Setzt alle Felder auf Werkseinstellungen
       (action_tile "defaults" "(SBZ:reset-defaults)")
 
@@ -1968,6 +2605,9 @@
       (setq *SBZ:dlg-get-all*
         (strcat
           "(setq dlg-bau0 (get_tile \"bau0\"))"
+          "(setq dlg-group (get_tile \"group\"))"
+          "(setq dlg-groupbau0 (get_tile \"groupbau0\"))"
+          "(setq dlg-usegroupbau0 (get_tile \"usegroupbau0\"))"
           
           "(setq dlg-copymode (get_tile \"copymode\"))"
           "(setq dlg-copyblock (get_tile \"copyblock\"))"
@@ -2052,67 +2692,115 @@
           (SBZ:save-config)
           (princ "\nEinstellungen gespeichert.")
 
-          ;; Aendern? → Alle Kopie-Bloecke loeschen + neu erstellen
-          (if (= dlg-action "update")
-            (if (and last-blk last-attr)
-              (progn
-                (SBZ:log-write "INFO"
-                  (strcat "Aendern: Loesche + Neu erstellen mit Block='"
-                          last-blk "' Attr='" last-attr "'"))
-                ;; 1. Alte Kopie-Bloecke loeschen (mit ALTEM Blocknamen!)
-                (setq count 0)
-                (setq ss (ssget "X" (list (cons 2 old-copyblock) (cons 410 "Model"))))
-                (if (and ss (> (sslength ss) 0))
-                  (progn
-                    (setq count (sslength ss))
-                    (command "._erase" ss "")
-                    (SBZ:log-write "INFO" (strcat (itoa count) " alte '" old-copyblock "' Bloecke geloescht"))
-                  )
+          ;; Gewaehlte Gruppe ermitteln
+          (setq sel-group
+            (if (and dlg-group (> (atoi dlg-group) 0) group-names)
+              (nth (1- (atoi dlg-group)) group-names)
+              nil
+            )
+          )
+
+          ;; Wenn Gruppe gewaehlt: Gruppen-XRecord aktualisieren
+          (if sel-group
+            (progn
+              ;; Gruppen-Bau0 bestimmen
+              (setq bau0-str
+                (if (= dlg-usegroupbau0 "1")
+                  dlg-groupbau0  ;; Eigener Wert
+                  ""             ;; Leer = DWG-Standard
                 )
-                ;; Falls Blockname geaendert: auch neue Instanzen loeschen (falls vorhanden)
-                (if (/= (strcase old-copyblock) (strcase *SBZ:cfg-copyblock*))
+              )
+              ;; Gruppen-Settings laden (fuer QuellBlock, AttrTag, ZMode)
+              (setq sel-group-data (SBZ:load-group sel-group))
+              ;; XRecord aktualisieren mit aktuellen Dialog-Werten
+              (SBZ:save-group sel-group
+                (SBZ:group-data-from-current
+                  (if sel-group-data (cdr (assoc "QUELLBLOCK" sel-group-data)) "")
+                  (if sel-group-data (cdr (assoc "ATTRTAG" sel-group-data)) "")
+                  bau0-str
+                  (if sel-group-data (cdr (assoc "ZMODE" sel-group-data)) "REL")
+                  sel-group
+                )
+              )
+              (SBZ:log-write "INFO" (strcat "Gruppe '" sel-group "' XRecord aktualisiert"))
+            )
+          )
+
+          ;; Aendern? → Gruppen-Bloecke loeschen + neu erstellen
+          (if (= dlg-action "update")
+            (if sel-group
+              ;; === GRUPPEN-MODUS: Gruppe loeschen + neu erstellen ===
+              (progn
+                (setq sel-group-data (SBZ:load-group sel-group))
+                (if sel-group-data
                   (progn
-                    (setq ss (ssget "X" (list (cons 2 *SBZ:cfg-copyblock*) (cons 410 "Model"))))
-                    (if (and ss (> (sslength ss) 0))
-                      (progn
-                        (command "._erase" ss "")
-                        (SBZ:log-write "INFO"
-                          (strcat (itoa (sslength ss)) " '" *SBZ:cfg-copyblock* "' Bloecke geloescht"))
+                    (setq last-blk (cdr (assoc "QUELLBLOCK" sel-group-data)))
+                    (setq last-attr (cdr (assoc "ATTRTAG" sel-group-data)))
+                    (SBZ:log-write "INFO"
+                      (strcat "Aendern Gruppe '" sel-group "': Block='"
+                              last-blk "' Attr='" last-attr "'"))
+                    ;; 1. Alle Entities dieser Gruppe loeschen (via XData)
+                    (setq count (SBZ:delete-group sel-group))
+                    ;; 2. Gruppe neu speichern (wurde oben schon gemacht, delete hat es geloescht)
+                    (setq bau0-str
+                      (if (= dlg-usegroupbau0 "1") dlg-groupbau0 ""))
+                    (SBZ:save-group sel-group
+                      (SBZ:group-data-from-current
+                        last-blk last-attr bau0-str
+                        (cdr (assoc "ZMODE" sel-group-data))
+                        sel-group
                       )
                     )
+                    ;; 3. Bau-0 fuer process-blocks: Gruppen-Bau0 oder DWG-Standard
+                    (if (and (= dlg-usegroupbau0 "1")
+                             dlg-groupbau0 (/= dlg-groupbau0 ""))
+                      (setq bau0 (atof (vl-string-subst "." "," dlg-groupbau0)))
+                    )
+                    ;; 4. Neu erstellen
+                    (setq count
+                      (SBZ:process-blocks last-blk last-attr bau0
+                        (cdr (assoc "ZMODE" sel-group-data)) sel-group))
+                    (princ (strcat "\n" (itoa count) " Bloecke in Gruppe '" sel-group "' neu erstellt."))
                   )
-                )
-                ;; 2. Block-Definitionen purgen (alt + neu)
-                (setq blocks (vla-get-blocks
-                  (vla-get-activedocument (vlax-get-acad-object))))
-                ;; Alte Definition loeschen
-                (if (not (vl-catch-all-error-p
-                      (setq blk-def (vl-catch-all-apply 'vla-item
-                        (list blocks old-copyblock)))))
                   (progn
-                    (vl-catch-all-apply 'vla-delete (list blk-def))
-                    (SBZ:log-write "INFO" (strcat "Block-Definition '" old-copyblock "' geloescht"))
+                    (princ "\nGruppen-Daten nicht gefunden.")
+                    (SBZ:log-write "ERROR" (strcat "Gruppe '" sel-group "' Daten nicht lesbar"))
                   )
                 )
-                ;; Neue Definition loeschen (falls schon vorhanden, damit frisch erstellt wird)
-                (if (/= (strcase old-copyblock) (strcase *SBZ:cfg-copyblock*))
-                  (if (not (vl-catch-all-error-p
-                        (setq blk-def (vl-catch-all-apply 'vla-item
-                          (list blocks *SBZ:cfg-copyblock*)))))
+              )
+              ;; === KEIN GRUPPEN-MODUS: Altes Verhalten (ohne Gruppe) ===
+              (if (and last-blk last-attr)
+                (progn
+                  (SBZ:log-write "INFO"
+                    (strcat "Aendern ohne Gruppe: Block='"
+                            last-blk "' Attr='" last-attr "'"))
+                  ;; 1. Alte Kopie-Bloecke loeschen (mit ALTEM Blocknamen!)
+                  (setq count 0)
+                  (setq ss (ssget "X" (list (cons 2 old-copyblock) (cons 410 "Model"))))
+                  (if (and ss (> (sslength ss) 0))
                     (progn
-                      (vl-catch-all-apply 'vla-delete (list blk-def))
-                      (SBZ:log-write "INFO" (strcat "Block-Definition '" *SBZ:cfg-copyblock* "' geloescht"))
+                      (setq count (sslength ss))
+                      (command "._erase" ss "")
+                      (SBZ:log-write "INFO" (strcat (itoa count) " alte Bloecke geloescht"))
                     )
                   )
+                  ;; 2. Block-Definition purgen
+                  (setq blocks (vla-get-blocks
+                    (vla-get-activedocument (vlax-get-acad-object))))
+                  (if (not (vl-catch-all-error-p
+                        (setq blk-def (vl-catch-all-apply 'vla-item
+                          (list blocks old-copyblock)))))
+                    (vl-catch-all-apply 'vla-delete (list blk-def))
+                  )
+                  ;; 3. Neu erstellen
+                  (setq count (SBZ:process-blocks last-blk last-attr bau0 "REL" nil))
+                  (princ (strcat "\n" (itoa count) " Bloecke neu erstellt."))
                 )
-                ;; 3. Neu erstellen mit process-blocks (verwendet neuen Blocknamen)
-                (setq count (SBZ:process-blocks last-blk last-attr bau0 "REL"))
-                (princ (strcat "\n" (itoa count) " Bloecke neu erstellt."))
-              )
-              (progn
-                (princ "\nAendern nicht moeglich: Kein Block/Attribut gespeichert.")
-                (princ "\nFuehre zuerst SETBLOCKZ aus.")
-                (SBZ:log-write "WARN" "Aendern: Keine gespeicherten Block/Attr-Daten")
+                (progn
+                  (princ "\nAendern nicht moeglich: Kein Block/Attribut gespeichert.")
+                  (princ "\nFuehre zuerst SETBLOCKZ aus.")
+                  (SBZ:log-write "WARN" "Aendern: Keine gespeicherten Block/Attr-Daten")
+                )
               )
             )
           )
