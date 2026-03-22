@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.17.6
+;;; Version: 1.17.7
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -35,7 +35,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.17.6")
+(setq *SBZ:version* "1.17.7")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -741,6 +741,63 @@
 
 
 ;;; ----------------------------------------------------------------------------
+;;; SBZ:cleanup-group-layers
+;;; Loescht die Layer einer Gruppe wenn sie leer sind (keine Entities darauf)
+;;; Loescht: Basis-Layer + _abs/_rel Varianten + Attribut-Sub-Layer
+;;; Parameter: group-data - Assoziationsliste der Gruppe
+;;; ----------------------------------------------------------------------------
+(defun SBZ:cleanup-group-layers (group-data / base-layer zmode layer-names
+                                              doc layers lay-obj lay-name)
+  (setq base-layer (cdr (assoc "COPYLAYER" group-data)))
+  (setq zmode (cdr (assoc "ZMODE" group-data)))
+  (if (not base-layer) (setq base-layer ""))
+  (if (= base-layer "") nil ;; Kein Layer → nichts zu tun
+    (progn
+      ;; Alle moeglichen Layer-Namen dieser Gruppe sammeln
+      (setq layer-names
+        (list
+          base-layer
+          (strcat base-layer "_abs")
+          (strcat base-layer "_rel")
+          (strcat base-layer "-AttABS")
+          (strcat base-layer "-AttREL")
+          (strcat base-layer "-AttBAU0")
+          (strcat base-layer "_abs-AttABS")
+          (strcat base-layer "_abs-AttREL")
+          (strcat base-layer "_abs-AttBAU0")
+          (strcat base-layer "_rel-AttABS")
+          (strcat base-layer "_rel-AttREL")
+          (strcat base-layer "_rel-AttBAU0")
+        )
+      )
+      (setq doc (vla-get-activedocument (vlax-get-acad-object)))
+      (setq layers (vla-get-layers doc))
+      (foreach lay-name layer-names
+        ;; Pruefen ob Layer existiert
+        (if (not (vl-catch-all-error-p
+              (setq lay-obj (vl-catch-all-apply 'vla-item (list layers lay-name)))))
+          (progn
+            ;; Pruefen ob Layer leer ist (keine Entities)
+            (if (not (ssget "X" (list (cons 8 lay-name))))
+              ;; Layer ist leer → loeschen
+              (if (not (vl-catch-all-error-p
+                    (vl-catch-all-apply 'vla-delete (list lay-obj))))
+                (SBZ:log-write "INFO"
+                  (strcat "Leerer Layer '" lay-name "' geloescht"))
+                ;; Kann nicht geloescht werden (z.B. aktueller Layer)
+                (SBZ:log-write "DEBUG"
+                  (strcat "Layer '" lay-name "' konnte nicht geloescht werden"))
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+)
+
+
+;;; ----------------------------------------------------------------------------
 ;;; SBZ:delete-group
 ;;; Loescht eine Gruppe: XRecord + alle zugehoerigen Block-Instanzen + Definition
 ;;; Parameter: group-name - Gruppenname (String)
@@ -782,7 +839,11 @@
       )
     )
   )
-  ;; 4. XRecord aus Dictionary loeschen
+  ;; 4. Gruppen-Layer aufraeumen
+  (if group-data
+    (SBZ:cleanup-group-layers group-data)
+  )
+  ;; 5. XRecord aus Dictionary loeschen
   (setq dict-ent (SBZ:nod-get-dict))
   (if dict-ent
     (progn
@@ -2726,6 +2787,10 @@
                     (setq *save-freeze-abs* *SBZ:cfg-freeze-abs*)
                     (setq *save-freeze-rel* *SBZ:cfg-freeze-rel*)
                     (setq *save-freeze-bau0* *SBZ:cfg-freeze-bau0*)
+                    ;; DWG Custom Properties sichern
+                    (setq *save-scale* (SBZ:get-scale))
+                    (setq *save-suffix* (SBZ:get-suffix))
+                    (setq *save-dwg-font* (SBZ:get-font))
 
                     ;; Dialog-Werte TEMPORAER in globale Vars laden
                     (if (and dlg-copylayer (/= dlg-copylayer ""))
@@ -2783,7 +2848,11 @@
                     (setq *SBZ:cfg-freeze-abs* *save-freeze-abs*)
                     (setq *SBZ:cfg-freeze-rel* *save-freeze-rel*)
                     (setq *SBZ:cfg-freeze-bau0* *save-freeze-bau0*)
-                    (SBZ:log-write "INFO" "Globale Settings wiederhergestellt")
+                    ;; DWG Custom Properties wiederherstellen
+                    (SBZ:set-scale *save-scale*)
+                    (SBZ:set-suffix *save-suffix*)
+                    (SBZ:set-font *save-dwg-font*)
+                    (SBZ:log-write "INFO" "Globale Settings + Custom Properties wiederhergestellt")
                   )
                   (progn
                     (princ "\nGruppen-Daten nicht gefunden.")
