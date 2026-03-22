@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.6.1
+;;; Version: 1.7.2
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -34,7 +34,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.6.1")
+(setq *SBZ:version* "1.7.2")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -1053,7 +1053,8 @@
 (defun SBZ:insert-copyblock (orig-ent blk-name abs-h rel-z ins-z bau0 z-mode
                              / orig-data orig-pt ins-pt new-ent attrs
                                scale th suffix copy-layer
-                               abs-str rel-str bau0-str tag-str)
+                               abs-str rel-str bau0-str tag-str
+                               att-ent att-data att-y)
   ;; XY vom Original, Z = je nach Modus (ABS oder REL)
   (setq orig-data (entget orig-ent))
   (setq orig-pt (cdr (assoc 10 orig-data)))
@@ -1103,28 +1104,63 @@
         )
       )
       ;; Bau-0 Zeile: "±rel = abs suffix" z.B. "±0.02 = 320.73 m ü. A."
-      ;; Verwendet rel-str (schon formatiert mit +/-/%%P) und abs-str (mit Suffix)
       (setq bau0-str (strcat rel-str " = " abs-str))
-      ;; Attribute setzen + Sichtbarkeit steuern
+      ;; Attribute setzen + Sichtbarkeit + dynamische Position
+      ;; Positionen relativ zur Mittellinie, proportional zur Texthoehe:
+      ;;   gap = Abstand Mittellinie↔Text (th * 0.15)
+      ;;   X = Radius + Abstand (0.06 Block-Einheiten)
+      ;;   ABS: Y = +gap  (Links Unten → waechst nach oben)
+      ;;   REL: Y = -gap  (Links Oben → waechst nach unten)
+      ;;   BAU0: Y = REL.Y - th*1.3 (voller Texthoehe-Abstand unter REL)
+      ;;
+      ;; ENTMOD auf DXF-Ebene: setzt Code 10, 11, 40, 1 direkt
+      ;; VLA TextAlignmentPoint wirft "Not applicable" bei bestimmten
+      ;; Alignment-Typen (Community-bestaetigter Bug) → entmod ist zuverlaessiger
       (setq attrs (vlax-invoke new-ent 'GetAttributes))
       (foreach attr attrs
         (setq tag-str (strcase (vla-get-TagString attr)))
+        (setq att-ent (vlax-vla-object->ename attr))
+        (setq att-data (entget att-ent))
         (cond
           ((= tag-str "HOEHE_ABS")
-            (vla-put-TextString attr abs-str)
-            (vl-catch-all-apply 'vla-put-Height (list attr th))
-            ;; Sichtbarkeit: Invisible = NOT show-abs
-            (vla-put-Invisible attr (if (= *SBZ:cfg-show-abs* 1) :vlax-false :vlax-true))
+            (setq att-y (* th 0.15))
+            (setq att-data (subst (cons 1 abs-str) (assoc 1 att-data) att-data))
+            (setq att-data (subst (cons 40 th) (assoc 40 att-data) att-data))
+            (setq att-data (subst (cons 10 (list 0.06 att-y 0.0)) (assoc 10 att-data) att-data))
+            (if (assoc 11 att-data)
+              (setq att-data (subst (cons 11 (list 0.06 att-y 0.0)) (assoc 11 att-data) att-data)))
+            ;; Sichtbarkeit: DXF 70 Bit 1 = Invisible
+            (setq att-data (subst
+              (cons 70 (if (= *SBZ:cfg-show-abs* 1) 0 1))
+              (assoc 70 att-data) att-data))
+            (entmod att-data)
+            (entupd att-ent)
           )
           ((= tag-str "HOEHE_REL")
-            (vla-put-TextString attr rel-str)
-            (vl-catch-all-apply 'vla-put-Height (list attr th))
-            (vla-put-Invisible attr (if (= *SBZ:cfg-show-rel* 1) :vlax-false :vlax-true))
+            (setq att-y (* th -0.15))
+            (setq att-data (subst (cons 1 rel-str) (assoc 1 att-data) att-data))
+            (setq att-data (subst (cons 40 th) (assoc 40 att-data) att-data))
+            (setq att-data (subst (cons 10 (list 0.06 att-y 0.0)) (assoc 10 att-data) att-data))
+            (if (assoc 11 att-data)
+              (setq att-data (subst (cons 11 (list 0.06 att-y 0.0)) (assoc 11 att-data) att-data)))
+            (setq att-data (subst
+              (cons 70 (if (= *SBZ:cfg-show-rel* 1) 0 1))
+              (assoc 70 att-data) att-data))
+            (entmod att-data)
+            (entupd att-ent)
           )
           ((= tag-str "HOEHE_BAU0")
-            (vla-put-TextString attr bau0-str)
-            (vl-catch-all-apply 'vla-put-Height (list attr th))
-            (vla-put-Invisible attr (if (= *SBZ:cfg-show-bau0* 1) :vlax-false :vlax-true))
+            (setq att-y (- (* th -0.15) (* th 1.3)))
+            (setq att-data (subst (cons 1 bau0-str) (assoc 1 att-data) att-data))
+            (setq att-data (subst (cons 40 th) (assoc 40 att-data) att-data))
+            (setq att-data (subst (cons 10 (list 0.06 att-y 0.0)) (assoc 10 att-data) att-data))
+            (if (assoc 11 att-data)
+              (setq att-data (subst (cons 11 (list 0.06 att-y 0.0)) (assoc 11 att-data) att-data)))
+            (setq att-data (subst
+              (cons 70 (if (= *SBZ:cfg-show-bau0* 1) 0 1))
+              (assoc 70 att-data) att-data))
+            (entmod att-data)
+            (entupd att-ent)
           )
         )
       )
@@ -1369,32 +1405,48 @@
 ;;; ----------------------------------------------------------------------------
 
 ;;; --- DCL schreiben (Embedded, Temp-Datei) ---
+;;; Layout: 3 Boxen (Zeichnung, Modus, Kopie-Block) + Buttons
 (defun SBZ:write-settings-dcl ( / dcl-file fp)
   (setq dcl-file (vl-filename-mktemp "sbz_set" nil ".dcl"))
   (setq fp (open dcl-file "w"))
   (write-line "sbz_settings : dialog {" fp)
   (write-line "  label = \"SetBlockZ - Einstellungen\";" fp)
   (write-line "  spacer;" fp)
-  ;; --- Bau-0-Hoehe ---
+
+  ;; ===== BOX 1: ZEICHNUNG (DWG-spezifisch) =====
   (write-line "  : boxed_column {" fp)
-  (write-line "    label = \"Bau-0-Hoehe\";" fp)
-  (write-line "    : edit_box {" fp)
-  (write-line "      key = \"bau0\";" fp)
-  (write-line "      label = \"Hoehe (m):\";" fp)
-  (write-line "      edit_width = 14;" fp)
-  (write-line "      value = \"0.000\";" fp)
+  (write-line "    label = \"Zeichnung\";" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : edit_box {" fp)
+  (write-line "        key = \"bau0\";" fp)
+  (write-line "        label = \"Bau-0-Hoehe (m):\";" fp)
+  (write-line "        edit_width = 12;" fp)
+  (write-line "      }" fp)
   (write-line "    }" fp)
-  (write-line "    : text { key = \"bau0_info\"; value = \"\"; }" fp)
+  (write-line "    : text { key = \"last_info\"; value = \"\"; }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : button {" fp)
+  (write-line "        key = \"recalc\";" fp)
+  (write-line "        label = \"Neu berechnen\";" fp)
+  (write-line "        width = 16;" fp)
+  (write-line "        fixed_width = true;" fp)
+  (write-line "      }" fp)
+  (write-line "    }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
-  ;; --- Optionen ---
+
+  ;; ===== BOX 2: MODUS + OPTIONEN =====
   (write-line "  : boxed_column {" fp)
-  (write-line "    label = \"Optionen\";" fp)
+  (write-line "    label = \"Modus\";" fp)
+  (write-line "    : toggle {" fp)
+  (write-line "      key = \"copymode\";" fp)
+  (write-line "      label = \"Kopie-Block einfuegen (Original bleibt auf Z=0)\";" fp)
+  (write-line "    }" fp)
+  (write-line "    spacer;" fp)
   (write-line "    : toggle {" fp)
   (write-line "      key = \"byblock\";" fp)
   (write-line "      label = \"Farbe auf ByBlock setzen\";" fp)
   (write-line "    }" fp)
-  (write-line "    spacer;" fp)
   (write-line "    : toggle {" fp)
   (write-line "      key = \"movelayer\";" fp)
   (write-line "      label = \"Bloecke auf Ziel-Layer verschieben\";" fp)
@@ -1406,65 +1458,49 @@
   (write-line "    }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
-  ;; --- Kopie-Modus ---
+
+  ;; ===== BOX 3: KOPIE-BLOCK (deaktiviert wenn Kopie-Modus aus) =====
   (write-line "  : boxed_column {" fp)
-  (write-line "    label = \"Kopie-Modus\";" fp)
-  (write-line "    : toggle {" fp)
-  (write-line "      key = \"copymode\";" fp)
-  (write-line "      label = \"Original beibehalten + Kopie-Block einfuegen\";" fp)
-  (write-line "    }" fp)
-  (write-line "    : edit_box {" fp)
-  (write-line "      key = \"copyblock\";" fp)
-  (write-line "      label = \"Kopie-Blockname:\";" fp)
-  (write-line "      edit_width = 25;" fp)
+  (write-line "    label = \"Kopie-Block\";" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : edit_box {" fp)
+  (write-line "        key = \"copyblock\";" fp)
+  (write-line "        label = \"Blockname:\";" fp)
+  (write-line "        edit_width = 18;" fp)
+  (write-line "      }" fp)
+  (write-line "      : edit_box {" fp)
+  (write-line "        key = \"copylayer\";" fp)
+  (write-line "        label = \"Basis-Layer:\";" fp)
+  (write-line "        edit_width = 12;" fp)
+  (write-line "      }" fp)
   (write-line "    }" fp)
   (write-line "    : row {" fp)
   (write-line "      : edit_box {" fp)
   (write-line "        key = \"scale\";" fp)
   (write-line "        label = \"Skalierung:\";" fp)
-  (write-line "        edit_width = 10;" fp)
+  (write-line "        edit_width = 8;" fp)
   (write-line "      }" fp)
   (write-line "      : edit_box {" fp)
   (write-line "        key = \"textheight\";" fp)
   (write-line "        label = \"Texthoehe:\";" fp)
+  (write-line "        edit_width = 8;" fp)
+  (write-line "      }" fp)
+  (write-line "      : edit_box {" fp)
+  (write-line "        key = \"suffix\";" fp)
+  (write-line "        label = \"Suffix:\";" fp)
   (write-line "        edit_width = 10;" fp)
   (write-line "      }" fp)
   (write-line "    }" fp)
-  (write-line "    : edit_box {" fp)
-  (write-line "      key = \"suffix\";" fp)
-  (write-line "      label = \"Suffix Absoluthoehe:\";" fp)
-  (write-line "      edit_width = 20;" fp)
-  (write-line "    }" fp)
-  (write-line "    : edit_box {" fp)
-  (write-line "      key = \"copylayer\";" fp)
-  (write-line "      label = \"Basis-Layername:\";" fp)
-  (write-line "      edit_width = 20;" fp)
-  (write-line "    }" fp)
-  (write-line "    : text { key = \"layerinfo\"; value = \"(Suffix: _abs/_rel, kein Suffix bei Bau-0=0)\"; }" fp)
-  (write-line "    spacer;" fp)
   (write-line "    : row {" fp)
   (write-line "      : toggle { key = \"showabs\"; label = \"Absolut\"; }" fp)
   (write-line "      : toggle { key = \"showrel\"; label = \"Relativ\"; }" fp)
   (write-line "      : toggle { key = \"showbau0\"; label = \"Bau-0\"; }" fp)
   (write-line "    }" fp)
-  (write-line "    : text { key = \"copyinfo\"; value = \"Relativ: +/- automatisch, %%P bei 0\"; }" fp)
+  (write-line "    : text { key = \"copyinfo\"; value = \"Layer: _abs/_rel, ohne Suffix bei Bau-0=0\"; }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
-  ;; --- Letzte Verarbeitung ---
-  (write-line "  : boxed_column {" fp)
-  (write-line "    label = \"Letzte Verarbeitung\";" fp)
-  (write-line "    : text { key = \"last_block\"; value = \"Block: -\"; }" fp)
-  (write-line "    : text { key = \"last_attr\"; value = \"Attribut: -\"; }" fp)
-  (write-line "    spacer;" fp)
-  (write-line "    : button {" fp)
-  (write-line "      key = \"recalc\";" fp)
-  (write-line "      label = \"Neu berechnen\";" fp)
-  (write-line "      width = 20;" fp)
-  (write-line "      fixed_width = true;" fp)
-  (write-line "    }" fp)
-  (write-line "  }" fp)
-  (write-line "  spacer;" fp)
-  ;; --- Buttons ---
+
+  ;; ===== BUTTONS =====
   (write-line "  : row {" fp)
   (write-line "    : button {" fp)
   (write-line "      key = \"save\";" fp)
@@ -1570,59 +1606,48 @@
     (progn
       ;; --- Werte in Dialog setzen ---
 
-      ;; Bau-0
+      ;; === BOX 1: Zeichnung ===
       (set_tile "bau0" (rtos bau0 2 3))
-      (set_tile "bau0_info" "(gespeichert in DWG Custom Property)")
+      ;; Letzte Verarbeitung als Info-Zeile
+      (if (and last-blk last-attr)
+        (set_tile "last_info"
+          (strcat "Letzter Lauf: " last-blk " / " last-attr))
+        (set_tile "last_info" "Noch nicht ausgefuehrt")
+      )
+      ;; Neu-Berechnen Button nur aktiv wenn letzte Werte vorhanden
+      (if (or (not last-blk) (not last-attr))
+        (mode_tile "recalc" 1)
+      )
 
-      ;; ByBlock Toggle
+      ;; === BOX 2: Modus ===
+      (set_tile "copymode" (itoa *SBZ:cfg-copymode*))
       (set_tile "byblock" (itoa *SBZ:cfg-byblock*))
-
-      ;; Layer Toggle + Popup
       (set_tile "movelayer" (itoa *SBZ:cfg-movelayer*))
       ;; Layer-Popup fuellen
       (start_list "layerlist")
       (foreach ln layer-names (add_list ln))
       (end_list)
-      ;; Aktuellen Ziel-Layer vorselektieren
       (setq layer-idx (vl-position *SBZ:cfg-target-layer* layer-names))
       (if layer-idx
         (set_tile "layerlist" (itoa layer-idx))
         (set_tile "layerlist" "0")
       )
-      ;; Layer-Popup aktivieren/deaktivieren
       (SBZ:settings-update-layer-state (itoa *SBZ:cfg-movelayer*))
 
-      ;; Kopie-Modus
-      (set_tile "copymode" (itoa *SBZ:cfg-copymode*))
+      ;; === BOX 3: Kopie-Block ===
       (set_tile "copyblock" *SBZ:cfg-copyblock*)
-      ;; Skalierung, Texthoehe, Suffix aus DWG Custom Properties
+      (set_tile "copylayer" *SBZ:cfg-copylayer*)
       (setq scale (SBZ:get-scale))
       (setq th (SBZ:get-textheight))
       (setq suffix (SBZ:get-suffix))
       (set_tile "scale" (rtos scale 2 4))
       (set_tile "textheight" (rtos th 2 4))
       (set_tile "suffix" suffix)
-      (set_tile "copylayer" *SBZ:cfg-copylayer*)
-      ;; Attribut-Sichtbarkeit
       (set_tile "showabs" (itoa *SBZ:cfg-show-abs*))
       (set_tile "showrel" (itoa *SBZ:cfg-show-rel*))
       (set_tile "showbau0" (itoa *SBZ:cfg-show-bau0*))
+      ;; Kopie-Block Box deaktivieren wenn Kopie-Modus aus
       (SBZ:settings-update-copyblock-state (itoa *SBZ:cfg-copymode*))
-
-      ;; Letzte Verarbeitung (aus DWG Custom Properties)
-      (if last-blk
-        (set_tile "last_block" (strcat "Block: " last-blk))
-        (set_tile "last_block" "Block: (noch nicht verwendet)")
-      )
-      (if last-attr
-        (set_tile "last_attr" (strcat "Attribut: " last-attr))
-        (set_tile "last_attr" "Attribut: (noch nicht verwendet)")
-      )
-
-      ;; Neu-Berechnen Button nur aktiv wenn letzte Werte vorhanden
-      (if (or (not last-blk) (not last-attr))
-        (mode_tile "recalc" 1) ;; deaktiviert
-      )
 
       ;; --- Action Tiles ---
       ;; Layer-Toggle steuert Popup-Status
