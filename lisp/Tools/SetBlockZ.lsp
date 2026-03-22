@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.13.4
+;;; Version: 1.14.0
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -35,7 +35,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.13.4")
+(setq *SBZ:version* "1.14.0")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -61,7 +61,7 @@
 (setq *SBZ:cfg-byblock* 1)          ;; Farbe auf ByBlock setzen (0/1)
 (setq *SBZ:cfg-movelayer* 0)        ;; Block auf Ziel-Layer verschieben (0/1)
 (setq *SBZ:cfg-target-layer* "")    ;; Ziel-Layer Name
-(setq *SBZ:cfg-copymode* 0)         ;; Kopie-Modus: Original beibehalten + Kopie-Block (0/1)
+(setq *SBZ:cfg-copymode* 1)         ;; Kopie-Modus: Standard EIN (0/1)
 (setq *SBZ:cfg-copyblock* "VermesserGOK") ;; Blockname fuer Kopie-Block
 (setq *SBZ:cfg-copylayer* "GOK")    ;; Basis-Layername fuer Kopie-Block (Suffix wird angehaengt)
 (setq *SBZ:cfg-freeze-abs* 0)       ;; AttABS Layer einfrieren (0=sichtbar, 1=gefroren)
@@ -1742,7 +1742,7 @@
   (write-line "        : popup_list { key = \"colorblock\"; label = \"Farbe:\"; }" fp)
   (write-line "      }" fp)
   (write-line "      : column { fixed_width = true; width = 23;" fp)
-  (write-line "        : edit_box { key = \"suffix\"; label = \"Suffix:\"; }" fp)
+  (write-line "        : edit_box { key = \"suffix\"; label = \"Suffix:        \"; }" fp)
   (write-line "        : edit_box { key = \"scale\"; label = \"Skalierung:\"; }" fp)
   (write-line "      }" fp)
   (write-line "    }" fp)
@@ -1782,12 +1782,13 @@
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
 
-  ;; ===== BUTTONS: Aendern | Speichern | Schliessen =====
+  ;; ===== BUTTONS: Standard | Aendern | Speichern | Schliessen =====
   (write-line "  : row {" fp)
-  (write-line "    : button { key = \"update\"; label = \"Aendern\"; width = 12; fixed_width = true; }" fp)
+  (write-line "    : button { key = \"defaults\"; label = \"Standard\"; width = 10; fixed_width = true; }" fp)
   (write-line "    : spacer { width = 1; }" fp)
-  (write-line "    : button { key = \"save\"; label = \"Speichern\"; is_default = true; width = 12; fixed_width = true; }" fp)
-  (write-line "    : button { key = \"close\"; label = \"Schliessen\"; is_cancel = true; width = 12; fixed_width = true; }" fp)
+  (write-line "    : button { key = \"update\"; label = \"Aendern\"; width = 10; fixed_width = true; }" fp)
+  (write-line "    : button { key = \"save\"; label = \"Speichern\"; is_default = true; width = 10; fixed_width = true; }" fp)
+  (write-line "    : button { key = \"close\"; label = \"Schliessen\"; is_cancel = true; width = 10; fixed_width = true; }" fp)
   (write-line "  }" fp)
   (write-line "}" fp)
   (close fp)
@@ -1918,6 +1919,37 @@
 
       ;; --- Action Tiles ---
       (action_tile "copymode" "(SBZ:settings-update-copyblock-state $value)")
+
+      ;; Standard: Alle Felder auf Default-Werte setzen (Dialog bleibt offen)
+      (action_tile "defaults"
+        (strcat
+          "(set_tile \"bau0\" \"0.000\")"
+          "(set_tile \"copymode\" \"1\")"
+          "(set_tile \"copyblock\" \"VermesserGOK\")"
+          "(set_tile \"copylayer\" \"GOK\")"
+          "(set_tile \"suffix\" \"m ue. A.\")"
+          "(set_tile \"scale\" \"1.0000\")"
+          "(set_tile \"colorblock\" \""
+          (itoa (SBZ:color-to-index 7 block-colors))
+          "\")"
+          "(set_tile \"font\" \""
+          (itoa (if (setq font-idx (vl-position \"Arial\" font-names)) font-idx 0))
+          "\")"
+          "(set_tile \"colorabs\" \""
+          (itoa (SBZ:color-to-index 0 attr-colors))
+          "\")"
+          "(set_tile \"colorrel\" \""
+          (itoa (SBZ:color-to-index 0 attr-colors))
+          "\")"
+          "(set_tile \"colorbau0\" \""
+          (itoa (SBZ:color-to-index 0 attr-colors))
+          "\")"
+          "(set_tile \"freezeabs\" \"0\")"
+          "(set_tile \"freezerel\" \"0\")"
+          "(set_tile \"freezebau0\" \"1\")"
+          "(SBZ:settings-update-copyblock-state \"1\")"
+        )
+      )
 
       ;; Alle get_tile Strings fuer save/update/recalc (Sub-Dialog-Bug!)
       ;; Gemeinsamer Block: alle Werte in globale Variablen lesen
