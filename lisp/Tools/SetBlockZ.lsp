@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.22.1
+;;; Version: 1.24.0
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -26,6 +26,7 @@
 ;;; Befehle:
 ;;; SETBLOCKZ    - Hauptbefehl: Blöcke nach Attribut auf Z setzen
 ;;; SBZSETTINGS  - Einstellungen (Bau-0, Toggles, Neuberechnung)
+;;; SBZIMPORT    - Leica Vermessungspunkte importieren
 ;;; SBZPURGE     - Kopie-Blöcke löschen + Block-Definition purgen
 ;;; SBZDEBUG     - Debug-Modus ein/aus
 ;;; ============================================================================
@@ -35,7 +36,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.22.1")
+(setq *SBZ:version* "1.24.0")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -2442,6 +2443,7 @@
 
 
 ;;; --- DCL schreiben (Embedded, Temp-Datei) ---
+;;; --- DCL schreiben (Embedded, Temp-Datei) ---
 ;;; Layout: 4 Boxen (Zeichnung, Modus, Block, Attribut) + 3 Buttons
 (defun SBZ:write-settings-dcl ( / dcl-file fp)
   (setq dcl-file (vl-filename-mktemp "sbz_set" nil ".dcl"))
@@ -2461,6 +2463,15 @@
   (write-line "  : row {" fp)
   (write-line "    : button { key = \"grp_add\"; label = \"Hinzufuegen\"; width = 16; fixed_width = true; }" fp)
   (write-line "    : button { key = \"grp_remove\"; label = \"Entfernen\"; width = 16; fixed_width = true; }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+
+  ;; ===== IMPORT =====
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Import\";" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : button { key = \"import\"; label = \"Leica Punkte importieren...\"; width = 30; fixed_width = true; }" fp)
+  (write-line "    }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
 
@@ -2547,6 +2558,52 @@
   (write-line "    : button { key = \"update\"; label = \"Aendern\"; width = 10; fixed_width = true; }" fp)
   (write-line "    : button { key = \"save\"; label = \"Speichern\"; is_default = true; width = 10; fixed_width = true; }" fp)
   (write-line "    : button { key = \"close\"; label = \"Schliessen\"; is_cancel = true; width = 10; fixed_width = true; }" fp)
+  (write-line "  }" fp)
+  (write-line "}" fp)
+
+  ;; ===== IMPORT SUB-DIALOG =====
+  (write-line "" fp)
+  (write-line "sbz_import : dialog {" fp)
+  (write-line "  label = \"Leica Punkte importieren\";" fp)
+  (write-line "  width = 50;" fp)
+  (write-line "  spacer;" fp)
+  ;; Datei
+  (write-line "  : row {" fp)
+  (write-line "    : edit_box { key = \"imp_file\"; label = \"Datei:\"; edit_width = 30; }" fp)
+  (write-line "    : button { key = \"imp_browse\"; label = \"...\"; width = 4; fixed_width = true; }" fp)
+  (write-line "  }" fp)
+  ;; Vorschau
+  (write-line "  : text { key = \"imp_preview\"; label = \"\"; }" fp)
+  (write-line "  spacer;" fp)
+  ;; Format
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Format\";" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : popup_list { key = \"imp_order\"; label = \"Reihenfolge:\"; width = 20; }" fp)
+  (write-line "      : popup_list { key = \"imp_sep\"; label = \"Trennzeichen:\"; width = 20; }" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  ;; Hoehen-Einstellungen
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Hoehen\";" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : edit_box { key = \"imp_bau0\"; label = \"Bau-0 (m):\"; edit_width = 12; }" fp)
+  (write-line "      : popup_list { key = \"imp_zmode\"; label = \"Gemessen als:\"; width = 20; }" fp)
+  (write-line "    }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  ;; Optionen
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Optionen\";" fp)
+  (write-line "    : toggle { key = \"imp_layercol\"; label = \"Layer aus Spalte uebernehmen (letzte Spalte)\"; }" fp)
+  (write-line "    : toggle { key = \"imp_group\"; label = \"Pro Layer eine Gruppe erstellen\"; }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  ;; Buttons
+  (write-line "  : row {" fp)
+  (write-line "    : button { key = \"imp_ok\"; label = \"Importieren\"; is_default = true; width = 12; fixed_width = true; }" fp)
+  (write-line "    : button { key = \"imp_cancel\"; label = \"Abbrechen\"; is_cancel = true; width = 12; fixed_width = true; }" fp)
   (write-line "  }" fp)
   (write-line "}" fp)
   (close fp)
@@ -2732,6 +2789,584 @@
 )
 
 
+;;; ============================================================================
+;;; LEICA IMPORT FUNKTIONEN
+;;; ============================================================================
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:write-import-dcl
+;;; Schreibt die DCL-Datei fuer den Import-Dialog
+;;; Rueckgabe: DCL-Dateipfad
+;;; ----------------------------------------------------------------------------
+(defun SBZ:write-import-dcl ( / dcl-file fp)
+  (setq dcl-file (vl-filename-mktemp "sbz_imp" nil ".dcl"))
+  (setq fp (open dcl-file "w"))
+  (write-line "sbz_import : dialog {" fp)
+  (write-line "  label = \"SetBlockZ - Leica Import\";" fp)
+  (write-line "  width = 55;" fp)
+  (write-line "  spacer;" fp)
+  ;; Datei
+  (write-line "  : row {" fp)
+  (write-line "    : edit_box { key = \"filepath\"; label = \"Datei:\"; width = 40; }" fp)
+  (write-line "    : button { key = \"browse\"; label = \"...\"; width = 4; fixed_width = true; }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  ;; Format
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Format\";" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : popup_list { key = \"coordorder\"; label = \"Reihenfolge:\"; width = 16; }" fp)
+  (write-line "      : popup_list { key = \"separator\"; label = \"Trennzeichen:\"; width = 16; }" fp)
+  (write-line "    }" fp)
+  (write-line "    : text { key = \"preview\"; label = \"\"; }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  ;; Hoehen-Einstellungen
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Hoehen\";" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : popup_list { key = \"zmode\"; label = \"Gemessen als:\"; width = 16; }" fp)
+  (write-line "      : edit_box { key = \"imp_bau0\"; label = \"Bau-0 (m):\"; edit_width = 12; }" fp)
+  (write-line "    }" fp)
+  (write-line "    : popup_list { key = \"ztarget\"; label = \"Z-Koordinate nach:\"; width = 16; }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+  ;; Buttons
+  (write-line "  : row {" fp)
+  (write-line "    : button { key = \"accept\"; label = \"Importieren\"; is_default = true; width = 16; fixed_width = true; }" fp)
+  (write-line "    : button { key = \"cancel\"; label = \"Abbrechen\"; is_cancel = true; width = 16; fixed_width = true; }" fp)
+  (write-line "  }" fp)
+  (write-line "}" fp)
+  (close fp)
+  dcl-file
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:detect-separator
+;;; Erkennt das Trennzeichen einer Leica-Exportdatei
+;;; Parameter: line - Erste Zeile der Datei (String)
+;;; Rueckgabe: Index fuer Popup (0=Komma, 1=Semikolon, 2=Tab, 3=Leerzeichen)
+;;; ----------------------------------------------------------------------------
+(defun SBZ:detect-separator (line / )
+  (cond
+    ((vl-string-search ";" line)  1)    ;; Semikolon
+    ((vl-string-search "\t" line) 2)    ;; Tab
+    ((vl-string-search "," line)  0)    ;; Komma
+    (T 3)                                ;; Leerzeichen
+  )
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:split-string
+;;; Teilt einen String anhand eines Trennzeichens
+;;; Parameter: str - String, delim - Trennzeichen (String, 1 Zeichen)
+;;; Rueckgabe: Liste von Strings
+;;; ----------------------------------------------------------------------------
+(defun SBZ:split-string (str delim / pos result part)
+  (setq result nil)
+  (while (setq pos (vl-string-search delim str))
+    (setq part (substr str 1 pos))
+    (setq result (cons part result))
+    (setq str (substr str (+ pos 2)))
+  )
+  (setq result (cons str result))
+  (reverse result)
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:parse-leica-file
+;;; Liest eine Leica-Exportdatei und gibt eine Liste von Punkt-Daten zurueck
+;;; Parameter:
+;;;   filepath   - Pfad zur Datei (String)
+;;;   sep        - Trennzeichen (String: "," ";" "\t" " ")
+;;;   coord-order - "ONH" oder "NOH"
+;;; Rueckgabe: Liste von (name east north height layer) oder nil
+;;; ----------------------------------------------------------------------------
+(defun SBZ:parse-leica-file (filepath sep coord-order / fp line parts
+                              name c1 c2 c3 layer east north height
+                              points count-ok count-err)
+  (setq fp (open filepath "r"))
+  (if (not fp)
+    (progn
+      (SBZ:log-write "ERROR" (strcat "Datei nicht geoeffnet: " filepath))
+      nil
+    )
+    (progn
+      (setq points nil count-ok 0 count-err 0)
+      (while (setq line (read-line fp))
+        ;; CR/LF entfernen
+        (setq line (vl-string-trim "\r\n " line))
+        (if (and line (/= line ""))
+          (progn
+            (setq parts (SBZ:split-string line sep))
+            ;; Mindestens 4 Spalten: Name, Coord1, Coord2, Coord3
+            (if (>= (length parts) 4)
+              (progn
+                (setq name (nth 0 parts))
+                (setq c1 (atof (nth 1 parts)))
+                (setq c2 (atof (nth 2 parts)))
+                (setq c3 (atof (nth 3 parts)))
+                ;; Layer (optional, Spalte 5)
+                (setq layer (if (>= (length parts) 5) (nth 4 parts) "0"))
+                ;; CR/LF aus Layer entfernen
+                (setq layer (vl-string-trim "\r\n " layer))
+                ;; Koordinaten-Reihenfolge
+                (if (= coord-order "ONH")
+                  (progn (setq east c1) (setq north c2) (setq height c3))
+                  (progn (setq north c1) (setq east c2) (setq height c3))
+                )
+                (setq points (cons (list name east north height layer) points))
+                (setq count-ok (1+ count-ok))
+              )
+              (setq count-err (1+ count-err))
+            )
+          )
+        )
+      )
+      (close fp)
+      (SBZ:log-write "INFO"
+        (strcat "Import: " (itoa count-ok) " Punkte gelesen, "
+                (itoa count-err) " Fehler"))
+      (reverse points)
+    )
+  )
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:import-create-blocks
+;;; Erstellt Kopie-Bloecke aus importierten Punktdaten
+;;; Parameter:
+;;;   points   - Liste von (name east north height layer)
+;;;   bau0     - Bau-0-Hoehe (Real)
+;;;   z-mode   - "ABS" oder "REL"
+;;; Rueckgabe: Anzahl erstellter Bloecke
+;;; ----------------------------------------------------------------------------
+(defun SBZ:import-create-blocks (points bau0 z-mode z-target / pt name east north height
+                                  layer abs-h rel-z ins-z group-name
+                                  copy-blk-name ins-pt new-ent
+                                  scale suffix style-name copy-layer
+                                  abs-str rel-str bau0-str tag-str
+                                  att-ent att-data attrs bks-angle
+                                  count layers-created)
+  (setq count 0)
+  (setq layers-created nil)
+  (setq scale (SBZ:get-scale))
+  (setq suffix (SBZ:get-suffix))
+  (setq style-name (SBZ:ensure-textstyle (SBZ:get-font)))
+  ;; BKS-Rotation
+  (setq bks-angle (angle '(0.0 0.0 0.0) (getvar "UCSXDIR")))
+  ;; Bau-0 String fuer Gruppe
+  (setq bau0-str
+    (if (equal bau0 (SBZ:get-bau0) 0.001) "" (rtos bau0 2 3)))
+
+  (foreach pt points
+    (setq name   (nth 0 pt))
+    (setq east   (nth 1 pt))
+    (setq north  (nth 2 pt))
+    (setq height (nth 3 pt))
+    (setq layer  (nth 4 pt))
+
+    ;; Hoehen berechnen je nach "Gemessen als" (z-mode)
+    (if (= z-mode "ABS")
+      (progn
+        (setq abs-h height)
+        (setq rel-z (- height bau0))
+      )
+      (progn
+        ;; Relativ gemessen: height = relative Hoehe
+        (setq rel-z height)
+        (setq abs-h (+ bau0 height))
+      )
+    )
+    ;; Z-Koordinate des Blocks je nach "Z-Koordinate nach" (z-target)
+    (setq ins-z (if (= z-target "ABS") abs-h rel-z))
+
+    ;; Gruppenname = Layername aus Datei
+    (setq group-name layer)
+    (setq copy-blk-name (SBZ:build-copyblock-name group-name))
+
+    ;; Block-Definition sicherstellen (einmal pro Layer)
+    (if (not (member group-name layers-created))
+      (progn
+        (SBZ:ensure-copyblock-def copy-blk-name)
+        (setq layers-created (cons group-name layers-created))
+        ;; Gruppe als XRecord speichern (falls nicht vorhanden)
+        (if (not (SBZ:load-group group-name))
+          (SBZ:save-group group-name
+            (SBZ:group-data-from-current
+              "IMPORT" "HOEHE" bau0-str z-mode group-name))
+        )
+      )
+    )
+
+    ;; Layer + Sublayer erstellen
+    (setq copy-layer (SBZ:get-copy-layername z-mode bau0 group-name))
+    (SBZ:ensure-attr-layers copy-layer)
+
+    ;; Insert-Punkt (X=Ost, Y=Nord, Z=Hoehe)
+    (setq ins-pt (list east north ins-z))
+
+    ;; Block einfuegen
+    (setq new-ent
+      (vl-catch-all-apply
+        '(lambda ()
+          (vla-InsertBlock
+            (vla-get-modelspace (vla-get-activedocument (vlax-get-acad-object)))
+            (vlax-3d-point ins-pt)
+            copy-blk-name
+            scale scale scale
+            bks-angle
+          )
+        )
+      )
+    )
+    (if (and new-ent (not (vl-catch-all-error-p new-ent)))
+      (progn
+        ;; Attribute setzen
+        (setq abs-str (strcat (SBZ:rtos-fixed abs-h 2)
+                              (if (and suffix (/= suffix ""))
+                                (strcat " " suffix) "")))
+        (cond
+          ((> rel-z 0.001)  (setq rel-str (strcat "+" (SBZ:rtos-fixed rel-z 2))))
+          ((< rel-z -0.001) (setq rel-str (SBZ:rtos-fixed rel-z 2)))
+          (T (setq rel-str (strcat "%%P" (SBZ:rtos-fixed rel-z 2))))
+        )
+        (setq bau0-str-txt (strcat "%%P0.00 = " (SBZ:rtos-fixed bau0 2)
+                                    (if (and suffix (/= suffix ""))
+                                      (strcat " " suffix) "")))
+        (setq attrs (vlax-invoke new-ent 'GetAttributes))
+        (foreach attr attrs
+          (setq tag-str (strcase (vla-get-TagString attr)))
+          (setq att-ent (vlax-vla-object->ename attr))
+          (setq att-data (entget att-ent))
+          (cond
+            ((= tag-str "HOEHE_ABS")
+              (setq att-data (subst (cons 1 abs-str) (assoc 1 att-data) att-data))
+              (setq att-data (subst (cons 70 16) (assoc 70 att-data) att-data))
+              (setq att-data (subst (cons 7 style-name) (assoc 7 att-data) att-data))
+              (setq att-data (subst (cons 8 (strcat copy-layer "-AttABS"))
+                                    (assoc 8 att-data) att-data))
+              (if (/= *SBZ:cfg-color-abs* 0)
+                (setq att-data (subst (cons 62 *SBZ:cfg-color-abs*) (assoc 62 att-data) att-data)))
+              (entmod att-data) (entupd att-ent)
+            )
+            ((= tag-str "HOEHE_REL")
+              (setq att-data (subst (cons 1 rel-str) (assoc 1 att-data) att-data))
+              (setq att-data (subst (cons 70 16) (assoc 70 att-data) att-data))
+              (setq att-data (subst (cons 7 style-name) (assoc 7 att-data) att-data))
+              (setq att-data (subst (cons 8 (strcat copy-layer "-AttREL"))
+                                    (assoc 8 att-data) att-data))
+              (if (/= *SBZ:cfg-color-rel* 0)
+                (setq att-data (subst (cons 62 *SBZ:cfg-color-rel*) (assoc 62 att-data) att-data)))
+              (entmod att-data) (entupd att-ent)
+            )
+            ((= tag-str "HOEHE_BAU0")
+              (setq att-data (subst (cons 1 bau0-str-txt) (assoc 1 att-data) att-data))
+              (setq att-data (subst (cons 70 16) (assoc 70 att-data) att-data))
+              (setq att-data (subst (cons 7 style-name) (assoc 7 att-data) att-data))
+              (setq att-data (subst (cons 8 (strcat copy-layer "-AttBAU0"))
+                                    (assoc 8 att-data) att-data))
+              (if (/= *SBZ:cfg-color-bau0* 0)
+                (setq att-data (subst (cons 62 *SBZ:cfg-color-bau0*) (assoc 62 att-data) att-data)))
+              (entmod att-data) (entupd att-ent)
+            )
+          )
+        )
+        ;; Block auf Layer + Farbe
+        (vl-catch-all-apply 'vla-put-Layer (list new-ent copy-layer))
+        (vl-catch-all-apply 'vla-put-Color (list new-ent *SBZ:cfg-color-block*))
+        ;; XData setzen (Gruppenname, kein Quell-Handle bei Import)
+        (SBZ:set-xdata (vlax-vla-object->ename new-ent) group-name "")
+        (setq count (1+ count))
+      )
+    )
+  )
+  (SBZ:log-write "INFO" (strcat "Import: " (itoa count) " Bloecke erstellt"))
+  count
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:run-import-dialog
+;;; Oeffnet den Import-Dialog, liest Einstellungen, importiert
+;;; Rueckgabe: Anzahl importierter Punkte oder nil
+;;; ----------------------------------------------------------------------------
+(defun SBZ:run-import-dialog ( / dcl-file dcl-id result
+                                  filepath sep-idx coord-idx zmode-idx ztarget-idx
+                                  imp-bau0 separator coord-order z-mode z-target
+                                  sep-list points count
+                                  first-line preview-text)
+  (setq dcl-file (SBZ:write-import-dcl))
+  (setq dcl-id (load_dialog dcl-file))
+  (if (not (new_dialog "sbz_import" dcl-id))
+    (progn
+      (SBZ:log-write "ERROR" "Import-Dialog konnte nicht geoeffnet werden")
+      (unload_dialog dcl-id)
+      (vl-file-delete dcl-file)
+      nil
+    )
+    (progn
+      ;; Popup-Listen befuellen
+      (start_list "coordorder")
+      (add_list "ONH (Ost-Nord-Hoehe)")
+      (add_list "NOH (Nord-Ost-Hoehe)")
+      (end_list)
+      (set_tile "coordorder" "0")
+
+      (start_list "separator")
+      (add_list "Komma (,)")
+      (add_list "Semikolon (;)")
+      (add_list "Tab")
+      (add_list "Leerzeichen")
+      (end_list)
+      (set_tile "separator" "0")
+
+      (start_list "zmode")
+      (add_list "Absolut (m ue. A.)")
+      (add_list "Relativ (nach Bau-0)")
+      (end_list)
+      (set_tile "zmode" "0")
+
+      (start_list "ztarget")
+      (add_list "Absolut (Meereshoehe)")
+      (add_list "Relativ (nach Bau-0)")
+      (end_list)
+      (set_tile "ztarget" "0")
+
+      ;; Bau-0 aus DWG laden (0.0 als Fallback wenn nicht gesetzt)
+      (setq imp-bau0 (SBZ:get-bau0))
+      (if (not imp-bau0) (setq imp-bau0 0.0))
+      (set_tile "imp_bau0" (rtos imp-bau0 2 3))
+
+      ;; Datei-Browser Button
+      (action_tile "browse"
+        (strcat
+          "(progn"
+          "  (setq filepath (getfiled \"Leica Punktdatei\" \"\" \"txt;csv;asc\" 0))"
+          "  (if filepath"
+          "    (progn"
+          "      (set_tile \"filepath\" filepath)"
+          ;; Erste Zeile lesen fuer Preview + Auto-Detect
+          "      (setq fp-prev (open filepath \"r\"))"
+          "      (if fp-prev"
+          "        (progn"
+          "          (setq first-line (read-line fp-prev))"
+          "          (close fp-prev)"
+          "          (if first-line"
+          "            (progn"
+          "              (set_tile \"preview\" (strcat \"Vorschau: \" (substr first-line 1 60)))"
+          "              (set_tile \"separator\" (itoa (SBZ:detect-separator first-line)))"
+          "            )"
+          "          )"
+          "        )"
+          "      )"
+          "    )"
+          "  )"
+          ")"
+        )
+      )
+
+      ;; Buttons
+      (action_tile "accept"
+        (strcat
+          "(setq filepath (get_tile \"filepath\"))"
+          "(setq sep-idx (get_tile \"separator\"))"
+          "(setq coord-idx (get_tile \"coordorder\"))"
+          "(setq zmode-idx (get_tile \"zmode\"))"
+          "(setq ztarget-idx (get_tile \"ztarget\"))"
+          "(setq imp-bau0 (get_tile \"imp_bau0\"))"
+          "(done_dialog 1)"
+        )
+      )
+      (action_tile "cancel" "(done_dialog 0)")
+
+      (setq result (start_dialog))
+      (unload_dialog dcl-id)
+      (vl-file-delete dcl-file)
+
+      (if (= result 1)
+        (progn
+          ;; Trennzeichen auswerten
+          (setq sep-list '("," ";" "\t" " "))
+          (setq separator (nth (atoi sep-idx) sep-list))
+          ;; Koordinaten-Reihenfolge
+          (setq coord-order (if (= coord-idx "0") "ONH" "NOH"))
+          ;; Z-Modus (wie gemessen)
+          (setq z-mode (if (= zmode-idx "0") "ABS" "REL"))
+          ;; Z-Target (wohin Block-Z gesetzt wird)
+          (setq z-target (if (= ztarget-idx "0") "ABS" "REL"))
+          ;; Bau-0
+          (setq imp-bau0 (atof (vl-string-subst "." "," imp-bau0)))
+          ;; Datei pruefen
+          (if (and filepath (/= filepath "") (findfile filepath))
+            (progn
+              (SBZ:log-write "INFO"
+                (strcat "Import: " filepath
+                        " Sep=" separator " Coord=" coord-order
+                        " ZMode=" z-mode " ZTarget=" z-target
+                        " Bau0=" (rtos imp-bau0 2 3)))
+              ;; Datei parsen
+              (setq points (SBZ:parse-leica-file filepath separator coord-order))
+              (if points
+                (progn
+                  (princ (strcat "\n" (itoa (length points)) " Punkte gelesen. Erstelle Bloecke..."))
+                  (setq count (SBZ:import-create-blocks points imp-bau0 z-mode z-target))
+                  (princ (strcat "\n" (itoa count) " Bloecke importiert."))
+                  count
+                )
+                (progn
+                  (princ "\nKeine Punkte in der Datei gefunden.")
+                  0
+                )
+              )
+            )
+            (progn
+              (alert "Datei nicht gefunden.")
+              nil
+            )
+          )
+        )
+        nil
+      )
+    )
+  )
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; c:SBZIMPORT - Leica Punkte importieren
+;;; Eigenstaendiger Befehl fuer den Import von Vermessungspunkten
+;;; ----------------------------------------------------------------------------
+(defun c:SBZIMPORT ( / *error* old-cmdecho count)
+  (SBZ:ensure-init)
+  (defun *error* (msg)
+    (if (not (SBZ:cancel-p msg))
+      (progn
+        (princ (strcat "\nFehler: " msg))
+        (SBZ:log-write "ERROR" (strcat "SBZIMPORT Error: " msg))
+      )
+    )
+    (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
+    (princ)
+  )
+  (setq old-cmdecho (getvar "CMDECHO"))
+  (setvar "CMDECHO" 0)
+  (SBZ:log-write "INFO" "Befehl SBZIMPORT gestartet")
+
+  (setq count (SBZ:run-import-dialog))
+  (if (and count (> count 0))
+    (princ (strcat "\nImport abgeschlossen: " (itoa count) " Punkte."))
+    (princ "\nImport abgebrochen oder keine Punkte.")
+  )
+
+  (setvar "CMDECHO" old-cmdecho)
+  (SBZ:log-write "INFO" "Befehl SBZIMPORT beendet")
+  (princ)
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:update-group-visual
+;;; Aktualisiert Farbe, Layer, Schriftart, Freeze auf bestehenden Kopie-Bloecken
+;;; einer Gruppe OHNE sie zu loeschen. Fuer Import-Gruppen (kein Quell-Block).
+;;; Parameter:
+;;;   group-name - Gruppenname (String)
+;;; Rueckgabe: Anzahl aktualisierter Bloecke
+;;; ----------------------------------------------------------------------------
+(defun SBZ:update-group-visual (group-name / grp-ents ent ent-data
+                                 copy-blk-name copy-layer style-name
+                                 attrs attr tag-str att-ent att-data
+                                 count)
+  (setq grp-ents (SBZ:get-group-entities group-name))
+  (if (not grp-ents)
+    (progn
+      (SBZ:log-write "WARN" (strcat "Keine Entities fuer Gruppe '" group-name "'"))
+      0
+    )
+    (progn
+      (setq count 0)
+      (setq copy-blk-name (SBZ:build-copyblock-name group-name))
+      (setq copy-layer (SBZ:get-copy-layername "" 0.0 group-name))
+      (setq style-name (SBZ:ensure-textstyle (SBZ:get-font)))
+      ;; Layer + Sub-Layer sicherstellen
+      (SBZ:ensure-attr-layers copy-layer)
+      ;; Block-Definition neu erstellen (mit aktuellen Einstellungen)
+      (SBZ:ensure-copyblock-def copy-blk-name)
+      (foreach ent grp-ents
+        ;; Block-Entity: Layer + Farbe
+        (setq ent-data (entget ent))
+        (if (= (cdr (assoc 0 ent-data)) "INSERT")
+          (progn
+            ;; Block auf neuen Layer verschieben
+            (setq ent-data (subst (cons 8 copy-layer) (assoc 8 ent-data) ent-data))
+            ;; Block-Farbe setzen
+            (if (assoc 62 ent-data)
+              (setq ent-data (subst (cons 62 *SBZ:cfg-color-block*) (assoc 62 ent-data) ent-data))
+              (setq ent-data (append ent-data (list (cons 62 *SBZ:cfg-color-block*))))
+            )
+            (entmod ent-data)
+            ;; Attribute aktualisieren: Layer, Farbe, Schriftart
+            (setq attrs (vlax-invoke (vlax-ename->vla-object ent) 'GetAttributes))
+            (foreach attr attrs
+              (setq tag-str (strcase (vla-get-TagString attr)))
+              (setq att-ent (vlax-vla-object->ename attr))
+              (setq att-data (entget att-ent))
+              (cond
+                ((= tag-str "HOEHE_ABS")
+                  (setq att-data (subst (cons 8 (strcat copy-layer "-AttABS"))
+                                        (assoc 8 att-data) att-data))
+                  (setq att-data (subst (cons 7 style-name) (assoc 7 att-data) att-data))
+                  (if (/= *SBZ:cfg-color-abs* 0)
+                    (if (assoc 62 att-data)
+                      (setq att-data (subst (cons 62 *SBZ:cfg-color-abs*) (assoc 62 att-data) att-data))
+                      (setq att-data (append att-data (list (cons 62 *SBZ:cfg-color-abs*))))
+                    )
+                  )
+                  (entmod att-data) (entupd att-ent)
+                )
+                ((= tag-str "HOEHE_REL")
+                  (setq att-data (subst (cons 8 (strcat copy-layer "-AttREL"))
+                                        (assoc 8 att-data) att-data))
+                  (setq att-data (subst (cons 7 style-name) (assoc 7 att-data) att-data))
+                  (if (/= *SBZ:cfg-color-rel* 0)
+                    (if (assoc 62 att-data)
+                      (setq att-data (subst (cons 62 *SBZ:cfg-color-rel*) (assoc 62 att-data) att-data))
+                      (setq att-data (append att-data (list (cons 62 *SBZ:cfg-color-rel*))))
+                    )
+                  )
+                  (entmod att-data) (entupd att-ent)
+                )
+                ((= tag-str "HOEHE_BAU0")
+                  (setq att-data (subst (cons 8 (strcat copy-layer "-AttBAU0"))
+                                        (assoc 8 att-data) att-data))
+                  (setq att-data (subst (cons 7 style-name) (assoc 7 att-data) att-data))
+                  (if (/= *SBZ:cfg-color-bau0* 0)
+                    (if (assoc 62 att-data)
+                      (setq att-data (subst (cons 62 *SBZ:cfg-color-bau0*) (assoc 62 att-data) att-data))
+                      (setq att-data (append att-data (list (cons 62 *SBZ:cfg-color-bau0*))))
+                    )
+                  )
+                  (entmod att-data) (entupd att-ent)
+                )
+              )
+            )
+            (entupd ent)
+            (setq count (1+ count))
+          )
+        )
+      )
+      (SBZ:log-write "INFO"
+        (strcat "Gruppe '" group-name "': " (itoa count) " Bloecke visuell aktualisiert"))
+      count
+    )
+  )
+)
+
+
 ;;; --- Hauptfunktion SBZSETTINGS ---
 (defun c:SBZSETTINGS ( / *error* dcl-file dcl-id
                          bau0 scale suffix
@@ -2913,6 +3548,9 @@
       ;; Bloecke entfernen
       (action_tile "grp_remove" "(SBZ:dlg-grp-remove)")
 
+      ;; Import: Dialog schliessen, Import ausfuehren, Dialog wieder oeffnen
+      (action_tile "import" "(done_dialog 12)")
+
       ;; Standard: Setzt alle Felder auf Werkseinstellungen
       (action_tile "defaults" "(SBZ:reset-defaults)")
 
@@ -3068,6 +3706,14 @@
           )
         ) ;; end result=11
 
+        ;; === IMPORT (result=12) ===
+        ((= result 12)
+          (SBZ:log-write "INFO" "Settings: Import gestartet")
+          (SBZ:run-import-dialog)
+          ;; Gruppen-Liste aktualisieren nach Import
+          (setq group-names (SBZ:get-group-names))
+        ) ;; end result=12
+
         ;; === NORMAL: Save/Update/Close (result=0,1,3) → Schleife beenden ===
         (T (setq *SBZ:dlg-running* nil))
       ) ;; end cond
@@ -3203,6 +3849,31 @@
                       (SBZ:set-scale (atof dlg-scale)))
                     (if dlg-suffix (SBZ:set-suffix dlg-suffix))
 
+                    ;; Pruefen ob Import-Gruppe (kein Quell-Block)
+                    (if (= last-blk "IMPORT")
+                      (progn
+                        ;; IMPORT-GRUPPE: Bloecke direkt aktualisieren (nicht loeschen!)
+                        (SBZ:log-write "INFO"
+                          (strcat "Aendern Import-Gruppe '" sel-group "'"))
+                        ;; Gruppen-XRecord aktualisieren
+                        (SBZ:save-group sel-group
+                          (SBZ:group-data-from-current
+                            last-blk last-attr bau0-str
+                            (cdr (assoc "ZMODE" sel-group-data))
+                            sel-group))
+                        ;; Bau-0 fuer Recalc
+                        (if (and (= dlg-usegroupbau0 "1")
+                                 dlg-groupbau0 (/= dlg-groupbau0 ""))
+                          (setq bau0 (atof (vl-string-subst "." "," dlg-groupbau0)))
+                        )
+                        ;; Visuelle Eigenschaften aktualisieren
+                        (setq count (SBZ:update-group-visual sel-group))
+                        (princ (strcat "\n" (itoa count) " Bloecke in Gruppe '"
+                                       sel-group "' aktualisiert."))
+                      )
+                      (progn
+                        ;; NORMALE GRUPPE: Quell-Bloecke suchen, loeschen, neu erstellen
+
                     ;; 1. Quell-Bloecke dieser Gruppe finden (via Kopie-Positionen)
                     ;; MUSS VOR delete-group passieren!
                     (setq ss-work
@@ -3240,7 +3911,9 @@
                       )
                     )
 
-                    ;; 5. Globale Variablen WIEDERHERSTELLEN
+                    )) ;; end progn + if IMPORT check
+
+                    ;; 6. Globale Variablen WIEDERHERSTELLEN
                     (setq *SBZ:cfg-copyblock* old-copyblock)
                     (setq *SBZ:cfg-copylayer* *save-copylayer*)
                     (setq *SBZ:cfg-font* *save-font*)
@@ -3379,5 +4052,5 @@
 ;;; ============================================================================
 
 (princ (strcat "\nSetBlockZ.lsp v" *SBZ:version* " geladen."))
-(princ "\nBefehle: SETBLOCKZ | SBZSETTINGS | SBZPURGE | SBZDEBUG")
+(princ "\nBefehle: SETBLOCKZ | SBZSETTINGS | SBZIMPORT | SBZPURGE | SBZDEBUG")
 (princ)
