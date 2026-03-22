@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.14.0
+;;; Version: 1.14.1
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -35,7 +35,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.14.0")
+(setq *SBZ:version* "1.14.1")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -1815,6 +1815,40 @@
 )
 
 
+;;; --- Standard-Werte in Dialog-Felder zuruecksetzen (Dialog bleibt offen) ---
+;;; Wird vom "Standard" Button aufgerufen
+;;; Benoetigt font-names, block-colors, attr-colors als globale Variablen im Dialog-Scope
+(defun SBZ:reset-defaults ( / idx)
+  ;; Zeichnung
+  (set_tile "bau0" "0.000")
+  ;; Modus
+  (set_tile "copymode" "1")
+  ;; Block
+  (set_tile "copyblock" "VermesserGOK")
+  (set_tile "copylayer" "GOK")
+  (set_tile "suffix" "m ue. A.")
+  (set_tile "scale" "1.0000")
+  ;; Block-Farbe: 7 = Weiss
+  (setq idx (SBZ:color-to-index 7 block-colors))
+  (set_tile "colorblock" (itoa idx))
+  ;; Schriftart: Arial
+  (setq idx (vl-position "Arial" font-names))
+  (if (not idx) (setq idx 0))
+  (set_tile "font" (itoa idx))
+  ;; Attribut-Farben: Von Block (0)
+  (setq idx (SBZ:color-to-index 0 attr-colors))
+  (set_tile "colorabs" (itoa idx))
+  (set_tile "colorrel" (itoa idx))
+  (set_tile "colorbau0" (itoa idx))
+  ;; Freeze
+  (set_tile "freezeabs" "0")
+  (set_tile "freezerel" "0")
+  (set_tile "freezebau0" "1")
+  ;; Felder aktivieren (Kopie-Modus = ein)
+  (SBZ:settings-update-copyblock-state "1")
+)
+
+
 ;;; --- Hauptfunktion SBZSETTINGS ---
 (defun c:SBZSETTINGS ( / *error* dcl-file dcl-id
                          bau0 scale suffix
@@ -1920,36 +1954,9 @@
       ;; --- Action Tiles ---
       (action_tile "copymode" "(SBZ:settings-update-copyblock-state $value)")
 
-      ;; Standard: Alle Felder auf Default-Werte setzen (Dialog bleibt offen)
-      (action_tile "defaults"
-        (strcat
-          "(set_tile \"bau0\" \"0.000\")"
-          "(set_tile \"copymode\" \"1\")"
-          "(set_tile \"copyblock\" \"VermesserGOK\")"
-          "(set_tile \"copylayer\" \"GOK\")"
-          "(set_tile \"suffix\" \"m ue. A.\")"
-          "(set_tile \"scale\" \"1.0000\")"
-          "(set_tile \"colorblock\" \""
-          (itoa (SBZ:color-to-index 7 block-colors))
-          "\")"
-          "(set_tile \"font\" \""
-          (itoa (if (setq font-idx (vl-position \"Arial\" font-names)) font-idx 0))
-          "\")"
-          "(set_tile \"colorabs\" \""
-          (itoa (SBZ:color-to-index 0 attr-colors))
-          "\")"
-          "(set_tile \"colorrel\" \""
-          (itoa (SBZ:color-to-index 0 attr-colors))
-          "\")"
-          "(set_tile \"colorbau0\" \""
-          (itoa (SBZ:color-to-index 0 attr-colors))
-          "\")"
-          "(set_tile \"freezeabs\" \"0\")"
-          "(set_tile \"freezerel\" \"0\")"
-          "(set_tile \"freezebau0\" \"1\")"
-          "(SBZ:settings-update-copyblock-state \"1\")"
-        )
-      )
+      ;; Standard: Setzt alle Felder auf Werkseinstellungen
+      (action_tile "defaults" "(SBZ:reset-defaults)")
+
 
       ;; Alle get_tile Strings fuer save/update/recalc (Sub-Dialog-Bug!)
       ;; Gemeinsamer Block: alle Werte in globale Variablen lesen
