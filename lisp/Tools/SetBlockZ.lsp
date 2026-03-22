@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.14.1
+;;; Version: 1.14.2
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -35,7 +35,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.14.1")
+(setq *SBZ:version* "1.14.2")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -1727,7 +1727,7 @@
   ;; ===== BOX 2: MODUS =====
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"Modus\";" fp)
-  (write-line "    : toggle { key = \"copymode\"; label = \"Kopie-Block einfuegen (Original bleibt auf Z=0)\"; }" fp)
+  (write-line "    : toggle { key = \"copymode\"; label = \"Kopie-Block einfuegen (Original unveraendert)\"; }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
 
@@ -1759,7 +1759,7 @@
   (write-line "    : row {" fp)
   (write-line "      : text { width = 10; value = \"\"; }" fp)
   (write-line "      : text { width = 18; value = \"Farbe\"; }" fp)
-  (write-line "      : text { width = 10; value = \"Einfrieren\"; }" fp)
+  (write-line "      : text { width = 10; value = \"Frieren\"; }" fp)
   (write-line "    }" fp)
   ;; Absolut
   (write-line "    : row {" fp)
