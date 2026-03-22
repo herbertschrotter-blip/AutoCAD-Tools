@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.4.0
+;;; Version: 1.4.1
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -34,7 +34,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.4.0")
+(setq *SBZ:version* "1.4.1")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -990,21 +990,23 @@
       nil
     )
     (progn
-      ;; Absolut-Hoehe: Wert + Suffix (z.B. "320.180 m ue. A.")
-      (setq abs-str (strcat (rtos abs-h 2 3)
+      ;; Absolut-Hoehe: Wert + Suffix (z.B. "320.18 m ue. A.")
+      ;; 2 Nachkommastellen, Punkt als Dezimaltrenner
+      (setq abs-str (strcat (rtos abs-h 2 2)
                             (if (and suffix (/= suffix ""))
                               (strcat " " suffix) "")))
       ;; Relativ-Hoehe: Vorzeichen + Wert
+      ;; 2 Nachkommastellen
       ;; Positiv = "+", Negativ = "-" (kommt automatisch), Null = "%%P" (Plus-Minus)
       (cond
         ((> rel-z 0.001)
-          (setq rel-str (strcat "+" (rtos rel-z 2 3)))
+          (setq rel-str (strcat "+" (rtos rel-z 2 2)))
         )
         ((< rel-z -0.001)
-          (setq rel-str (rtos rel-z 2 3))  ;; Minus kommt automatisch von rtos
+          (setq rel-str (rtos rel-z 2 2))
         )
         (T
-          (setq rel-str (strcat "%%P" (rtos (abs rel-z) 2 3)))
+          (setq rel-str (strcat "%%P" (rtos (abs rel-z) 2 2)))
         )
       )
       ;; Attribute setzen
