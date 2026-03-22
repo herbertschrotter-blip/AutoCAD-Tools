@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.5.1
+;;; Version: 1.6.0
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -34,7 +34,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.5.1")
+(setq *SBZ:version* "1.6.0")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -62,6 +62,10 @@
 (setq *SBZ:cfg-target-layer* "")    ;; Ziel-Layer Name
 (setq *SBZ:cfg-copymode* 0)         ;; Kopie-Modus: Original beibehalten + Kopie-Block (0/1)
 (setq *SBZ:cfg-copyblock* "VermesserGOK") ;; Blockname fuer Kopie-Block
+(setq *SBZ:cfg-copylayer* "GOK")    ;; Basis-Layername fuer Kopie-Block (Suffix wird angehaengt)
+(setq *SBZ:cfg-show-abs* 1)         ;; Attribut HOEHE_ABS sichtbar (0/1)
+(setq *SBZ:cfg-show-rel* 1)         ;; Attribut HOEHE_REL sichtbar (0/1)
+(setq *SBZ:cfg-show-bau0* 0)        ;; Attribut HOEHE_BAU0 sichtbar (0/1)
 
 
 ;;; ============================================================================
@@ -190,6 +194,10 @@
               ((= key "TARGETLAYER")(setq *SBZ:cfg-target-layer* val))
               ((= key "COPYMODE")   (setq *SBZ:cfg-copymode* (atoi val)))
               ((= key "COPYBLOCK")  (setq *SBZ:cfg-copyblock* val))
+              ((= key "COPYLAYER")  (setq *SBZ:cfg-copylayer* val))
+              ((= key "SHOWABS")    (setq *SBZ:cfg-show-abs* (atoi val)))
+              ((= key "SHOWREL")    (setq *SBZ:cfg-show-rel* (atoi val)))
+              ((= key "SHOWBAU0")   (setq *SBZ:cfg-show-bau0* (atoi val)))
             )
           )
         )
@@ -219,6 +227,10 @@
       (write-line (strcat "TARGETLAYER=" *SBZ:cfg-target-layer*) fp)
       (write-line (strcat "COPYMODE=" (itoa *SBZ:cfg-copymode*)) fp)
       (write-line (strcat "COPYBLOCK=" *SBZ:cfg-copyblock*) fp)
+      (write-line (strcat "COPYLAYER=" *SBZ:cfg-copylayer*) fp)
+      (write-line (strcat "SHOWABS=" (itoa *SBZ:cfg-show-abs*)) fp)
+      (write-line (strcat "SHOWREL=" (itoa *SBZ:cfg-show-rel*)) fp)
+      (write-line (strcat "SHOWBAU0=" (itoa *SBZ:cfg-show-bau0*)) fp)
       (close fp)
       (SBZ:log-write "INFO" (strcat "Config gespeichert: " cfg-path))
     )
@@ -750,7 +762,7 @@
                     (setq ins-z (if (= z-mode "ABS") abs-h rel-z))
                     (if copy-mode
                       ;; === KOPIE-MODUS: Original beibehalten, Kopie-Block einfuegen ===
-                      (if (SBZ:insert-copyblock ent copy-blk-name abs-h rel-z ins-z target-layer)
+                      (if (SBZ:insert-copyblock ent copy-blk-name abs-h rel-z ins-z bau0 z-mode)
                         (progn
                           (setq count-ok (1+ count-ok))
                           (SBZ:log-write "DEBUG"
@@ -948,6 +960,22 @@
                         '(72 . 0)             ;; Links
                         '(74 . 3)             ;; Oben
                   ))
+          ;; ATTDEF: HOEHE_BAU0 (Bau-0-Hoehe) — unsichtbar, unter HOEHE_REL
+          ;; Justierung: Links Oben (72=0, 74=3)
+          ;; Position: unter HOEHE_REL, gleiche X-Position
+          (entmake (list '(0 . "ATTDEF")
+                        '(8 . "0")
+                        '(62 . 0) '(6 . "ByBlock") '(370 . -2)
+                        '(10 0.1 -0.05 0.0)
+                        '(11 0.1 -0.05 0.0)
+                        '(40 . 0.03)
+                        '(1 . "0.000")
+                        '(2 . "HOEHE_BAU0")
+                        '(3 . "Bau-0-Hoehe")
+                        '(70 . 1)             ;; Flags: Bit 1 = Invisible
+                        '(72 . 0)             ;; Links
+                        '(74 . 3)             ;; Oben
+                  ))
           ;; ENDBLK
           (if (entmake '((0 . "ENDBLK")))
             (progn
@@ -971,6 +999,44 @@
 
 
 ;;; ----------------------------------------------------------------------------
+;;; SBZ:ensure-layer
+;;; Erstellt Layer falls nicht vorhanden
+;;; Parameter: layer-name - Layername (String)
+;;; ----------------------------------------------------------------------------
+(defun SBZ:ensure-layer (layer-name / doc layers)
+  (setq doc (vla-get-activedocument (vlax-get-acad-object)))
+  (setq layers (vla-get-layers doc))
+  (if (vl-catch-all-error-p
+        (vl-catch-all-apply 'vla-item (list layers layer-name)))
+    (progn
+      (vla-add layers layer-name)
+      (SBZ:log-write "INFO" (strcat "Layer erstellt: '" layer-name "'"))
+    )
+  )
+  layer-name
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:get-copy-layername
+;;; Berechnet den Layer-Namen mit Suffix je nach Z-Modus
+;;; Parameter:
+;;;   z-mode - "ABS" oder "REL"
+;;;   bau0   - Bau-0-Hoehe (Real)
+;;; Rueckgabe: Layer-Name (z.B. "GOK_abs", "GOK_rel", "GOK")
+;;; ----------------------------------------------------------------------------
+(defun SBZ:get-copy-layername (z-mode bau0 / base)
+  (setq base *SBZ:cfg-copylayer*)
+  (cond
+    ((equal bau0 0.0 0.001) base)                ;; Bau-0=0 → kein Suffix
+    ((= z-mode "ABS") (strcat base "_abs"))       ;; Absolut
+    ((= z-mode "REL") (strcat base "_rel"))       ;; Relativ
+    (T base)
+  )
+)
+
+
+;;; ----------------------------------------------------------------------------
 ;;; SBZ:insert-copyblock
 ;;; Fuegt den Kopie-Block an der Position des Original-Blocks ein
 ;;; Parameter:
@@ -979,12 +1045,14 @@
 ;;;   abs-h     - Absolute Hoehe (Real, fuer Attribut-Text)
 ;;;   rel-z     - Relative Hoehe nach Bau-0 (Real, fuer Attribut-Text)
 ;;;   ins-z     - Z-Koordinate fuer Block-Insert (Real, ABS oder REL je nach Modus)
-;;;   layer     - Ziel-Layer (String, "" = aktueller Layer)
+;;;   bau0      - Bau-0-Hoehe (Real, fuer HOEHE_BAU0 Attribut)
+;;;   z-mode    - "ABS" oder "REL" (fuer Layer-Suffix)
 ;;; Rueckgabe: T bei Erfolg, nil bei Fehler
 ;;; ----------------------------------------------------------------------------
-(defun SBZ:insert-copyblock (orig-ent blk-name abs-h rel-z ins-z layer
+(defun SBZ:insert-copyblock (orig-ent blk-name abs-h rel-z ins-z bau0 z-mode
                              / orig-data orig-pt ins-pt new-ent attrs
-                               scale th suffix abs-str rel-str)
+                               scale th suffix copy-layer
+                               abs-str rel-str bau0-str tag-str)
   ;; XY vom Original, Z = je nach Modus (ABS oder REL)
   (setq orig-data (entget orig-ent))
   (setq orig-pt (cdr (assoc 10 orig-data)))
@@ -993,6 +1061,9 @@
   (setq scale (SBZ:get-scale))
   (setq th (SBZ:get-textheight))
   (setq suffix (SBZ:get-suffix))
+  ;; Layer mit Suffix berechnen und sicherstellen
+  (setq copy-layer (SBZ:get-copy-layername z-mode bau0))
+  (SBZ:ensure-layer copy-layer)
   ;; Block einfuegen
   (setq new-ent
     (vl-catch-all-apply
@@ -1001,8 +1072,8 @@
           (vla-get-modelspace (vla-get-activedocument (vlax-get-acad-object)))
           (vlax-3d-point ins-pt)
           blk-name
-          scale scale scale  ;; Scale X Y Z
-          0.0                ;; Rotation
+          scale scale scale
+          0.0
         )
       )
     )
@@ -1015,13 +1086,10 @@
     )
     (progn
       ;; Absolut-Hoehe: Wert + Suffix (z.B. "320.18 m ue. A.")
-      ;; 2 Nachkommastellen, DIMZIN=0 erzwingt trailing Zeros
       (setq abs-str (strcat (SBZ:rtos-fixed abs-h 2)
                             (if (and suffix (/= suffix ""))
                               (strcat " " suffix) "")))
       ;; Relativ-Hoehe: Vorzeichen + Wert
-      ;; 2 Nachkommastellen mit erzwungenen trailing Zeros
-      ;; Positiv = "+", Negativ = "-" (kommt automatisch), Null = "%%P" (Plus-Minus)
       (cond
         ((> rel-z 0.001)
           (setq rel-str (strcat "+" (SBZ:rtos-fixed rel-z 2)))
@@ -1033,28 +1101,36 @@
           (setq rel-str (strcat "%%P" (SBZ:rtos-fixed (abs rel-z) 2)))
         )
       )
-      ;; Attribute setzen
+      ;; Bau-0-Hoehe
+      (setq bau0-str (strcat "Bau-0: " (SBZ:rtos-fixed bau0 2)))
+      ;; Attribute setzen + Sichtbarkeit steuern
       (setq attrs (vlax-invoke new-ent 'GetAttributes))
       (foreach attr attrs
+        (setq tag-str (strcase (vla-get-TagString attr)))
         (cond
-          ((= (strcase (vla-get-TagString attr)) "HOEHE_ABS")
+          ((= tag-str "HOEHE_ABS")
             (vla-put-TextString attr abs-str)
-            ;; Texthoehe setzen (skaliert mit Block, also Basis-Wert)
             (vl-catch-all-apply 'vla-put-Height (list attr th))
+            ;; Sichtbarkeit: Invisible = NOT show-abs
+            (vla-put-Invisible attr (if (= *SBZ:cfg-show-abs* 1) :vlax-false :vlax-true))
           )
-          ((= (strcase (vla-get-TagString attr)) "HOEHE_REL")
+          ((= tag-str "HOEHE_REL")
             (vla-put-TextString attr rel-str)
             (vl-catch-all-apply 'vla-put-Height (list attr th))
+            (vla-put-Invisible attr (if (= *SBZ:cfg-show-rel* 1) :vlax-false :vlax-true))
+          )
+          ((= tag-str "HOEHE_BAU0")
+            (vla-put-TextString attr bau0-str)
+            (vl-catch-all-apply 'vla-put-Height (list attr th))
+            (vla-put-Invisible attr (if (= *SBZ:cfg-show-bau0* 1) :vlax-false :vlax-true))
           )
         )
       )
-      ;; Layer setzen falls angegeben
-      (if (and layer (/= layer ""))
-        (vl-catch-all-apply 'vla-put-Layer (list new-ent layer))
-      )
+      ;; Block auf Kopie-Layer setzen
+      (vl-catch-all-apply 'vla-put-Layer (list new-ent copy-layer))
       (SBZ:log-write "DEBUG"
         (strcat "Kopie-Block: ABS='" abs-str "' REL='" rel-str
-                "' Scale=" (rtos scale 2 2) " TH=" (rtos th 2 3)))
+                "' Layer='" copy-layer "'"))
       T
     )
   )
@@ -1218,14 +1294,22 @@
                               ;; Markierung aufheben
                               (sssetfirst nil nil)
 
-                              ;; Im Kopie-Modus: Z-Koordinate waehlen
                               ;; Z-Koordinate waehlen: Absolut oder Relativ
-                              (initget "Absolut Relativ")
-                              (setq z-mode
-                                (getkword "\nZ-Koordinate? [Absolut/Relativ] <Relativ>: "))
-                              (if (not z-mode) (setq z-mode "Relativ"))
-                              (setq z-mode (if (= z-mode "Absolut") "ABS" "REL"))
-                              (SBZ:log-write "INFO" (strcat "Z-Modus: " z-mode))
+                              ;; Bei Bau-0=0 sind beide gleich → automatisch ABS
+                              (if (equal bau0 0.0 0.001)
+                                (progn
+                                  (setq z-mode "ABS")
+                                  (SBZ:log-write "INFO" "Z-Modus: ABS (Bau-0=0, kein Unterschied)")
+                                )
+                                (progn
+                                  (initget "Absolut Relativ")
+                                  (setq z-mode
+                                    (getkword "\nZ-Koordinate? [Absolut/Relativ] <Relativ>: "))
+                                  (if (not z-mode) (setq z-mode "Relativ"))
+                                  (setq z-mode (if (= z-mode "Absolut") "ABS" "REL"))
+                                  (SBZ:log-write "INFO" (strcat "Z-Modus: " z-mode))
+                                )
+                              )
 
                               ;; Blockname + Attribut in DWG Custom Properties merken
                               (SBZ:set-last-blockname blk-name)
@@ -1349,6 +1433,18 @@
   (write-line "      label = \"Suffix Absoluthoehe:\";" fp)
   (write-line "      edit_width = 20;" fp)
   (write-line "    }" fp)
+  (write-line "    : edit_box {" fp)
+  (write-line "      key = \"copylayer\";" fp)
+  (write-line "      label = \"Basis-Layername:\";" fp)
+  (write-line "      edit_width = 20;" fp)
+  (write-line "    }" fp)
+  (write-line "    : text { key = \"layerinfo\"; value = \"(Suffix: _abs/_rel, kein Suffix bei Bau-0=0)\"; }" fp)
+  (write-line "    spacer;" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : toggle { key = \"showabs\"; label = \"Absolut\"; }" fp)
+  (write-line "      : toggle { key = \"showrel\"; label = \"Relativ\"; }" fp)
+  (write-line "      : toggle { key = \"showbau0\"; label = \"Bau-0\"; }" fp)
+  (write-line "    }" fp)
   (write-line "    : text { key = \"copyinfo\"; value = \"Relativ: +/- automatisch, %%P bei 0\"; }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
@@ -1407,13 +1503,17 @@
   (mode_tile "layerlist" (if (= toggle-val "1") 0 1))
 )
 
-;;; --- Kopie-Blockname + Skalierung + Text enabled/disabled je nach Toggle ---
+;;; --- Kopie-Modus Felder enabled/disabled je nach Toggle ---
 (defun SBZ:settings-update-copyblock-state (toggle-val / mode)
   (setq mode (if (= toggle-val "1") 0 1))
   (mode_tile "copyblock" mode)
   (mode_tile "scale" mode)
   (mode_tile "textheight" mode)
   (mode_tile "suffix" mode)
+  (mode_tile "copylayer" mode)
+  (mode_tile "showabs" mode)
+  (mode_tile "showrel" mode)
+  (mode_tile "showbau0" mode)
 )
 
 
@@ -1424,6 +1524,7 @@
                          ;; Werte die aus Dialog gelesen werden (vor done_dialog!)
                          dlg-bau0 dlg-byblock dlg-movelayer dlg-layer-idx
                          dlg-copymode dlg-copyblock dlg-scale dlg-textheight dlg-suffix
+                         dlg-copylayer dlg-showabs dlg-showrel dlg-showbau0
                          dlg-action result count)
   (SBZ:ensure-init)
   (defun *error* (msg)
@@ -1499,6 +1600,11 @@
       (set_tile "scale" (rtos scale 2 4))
       (set_tile "textheight" (rtos th 2 4))
       (set_tile "suffix" suffix)
+      (set_tile "copylayer" *SBZ:cfg-copylayer*)
+      ;; Attribut-Sichtbarkeit
+      (set_tile "showabs" (itoa *SBZ:cfg-show-abs*))
+      (set_tile "showrel" (itoa *SBZ:cfg-show-rel*))
+      (set_tile "showbau0" (itoa *SBZ:cfg-show-bau0*))
       (SBZ:settings-update-copyblock-state (itoa *SBZ:cfg-copymode*))
 
       ;; Letzte Verarbeitung (aus DWG Custom Properties)
@@ -1538,6 +1644,10 @@
           "(setq dlg-scale (get_tile \"scale\"))"
           "(setq dlg-textheight (get_tile \"textheight\"))"
           "(setq dlg-suffix (get_tile \"suffix\"))"
+          "(setq dlg-copylayer (get_tile \"copylayer\"))"
+          "(setq dlg-showabs (get_tile \"showabs\"))"
+          "(setq dlg-showrel (get_tile \"showrel\"))"
+          "(setq dlg-showbau0 (get_tile \"showbau0\"))"
           "(setq dlg-action \"save\")"
           "(done_dialog 1)"
         )
@@ -1555,6 +1665,10 @@
           "(setq dlg-scale (get_tile \"scale\"))"
           "(setq dlg-textheight (get_tile \"textheight\"))"
           "(setq dlg-suffix (get_tile \"suffix\"))"
+          "(setq dlg-copylayer (get_tile \"copylayer\"))"
+          "(setq dlg-showabs (get_tile \"showabs\"))"
+          "(setq dlg-showrel (get_tile \"showrel\"))"
+          "(setq dlg-showbau0 (get_tile \"showbau0\"))"
           "(setq dlg-action \"recalc\")"
           "(done_dialog 2)"
         )
@@ -1620,12 +1734,21 @@
           (if dlg-suffix
             (SBZ:set-suffix dlg-suffix)
           )
+          ;; Kopie-Layer speichern
+          (if (and dlg-copylayer (/= dlg-copylayer ""))
+            (setq *SBZ:cfg-copylayer* dlg-copylayer)
+          )
+          ;; Attribut-Sichtbarkeit speichern
+          (setq *SBZ:cfg-show-abs* (atoi dlg-showabs))
+          (setq *SBZ:cfg-show-rel* (atoi dlg-showrel))
+          (setq *SBZ:cfg-show-bau0* (atoi dlg-showbau0))
           (SBZ:log-write "INFO"
             (strcat "Settings: CopyMode=" dlg-copymode
                     " CopyBlock='" *SBZ:cfg-copyblock*
-                    "' Scale=" (rtos (SBZ:get-scale) 2 4)
-                    " TH=" (rtos (SBZ:get-textheight) 2 4)
-                    " Suffix='" (SBZ:get-suffix) "'"))
+                    "' Layer='" *SBZ:cfg-copylayer*
+                    "' Show: ABS=" (itoa *SBZ:cfg-show-abs*)
+                    " REL=" (itoa *SBZ:cfg-show-rel*)
+                    " BAU0=" (itoa *SBZ:cfg-show-bau0*)))
 
           ;; Config schreiben
           (SBZ:save-config)
