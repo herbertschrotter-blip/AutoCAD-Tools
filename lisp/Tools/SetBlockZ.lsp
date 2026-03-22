@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.9.0
+;;; Version: 1.9.1
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -34,7 +34,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.9.0")
+(setq *SBZ:version* "1.9.1")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -1466,6 +1466,39 @@
 ;;;          letzte Verarbeitung anzeigen, Neu berechnen Button
 ;;; ----------------------------------------------------------------------------
 
+;;; --- Gaengige TTF-Schriftarten (kuratierte Liste) ---
+;;; Rueckgabe: Liste von Font-Namen (ohne .ttf Extension)
+(defun SBZ:get-font-list ( / )
+  (list
+    "arial"
+    "arialbd"
+    "ariali"
+    "arialbi"
+    "calibri"
+    "calibrib"
+    "calibril"
+    "cambria"
+    "consola"
+    "cour"
+    "courbd"
+    "georgia"
+    "impact"
+    "micross"
+    "pala"
+    "segoeui"
+    "segoeuib"
+    "tahoma"
+    "tahomab"
+    "times"
+    "timesbd"
+    "trebuc"
+    "trebucbd"
+    "verdana"
+    "verdanab"
+  )
+)
+
+
 ;;; --- DCL schreiben (Embedded, Temp-Datei) ---
 ;;; Layout: 3 Boxen (Zeichnung, Modus, Kopie-Block) + Buttons
 (defun SBZ:write-settings-dcl ( / dcl-file fp)
@@ -1548,10 +1581,10 @@
   (write-line "        edit_width = 14;" fp)
   (write-line "      }" fp)
   (write-line "    }" fp)
-  (write-line "    : edit_box {" fp)
+  (write-line "    : popup_list {" fp)
   (write-line "      key = \"font\";" fp)
-  (write-line "      label = \"Schriftart (TTF):\";" fp)
-  (write-line "      edit_width = 18;" fp)
+  (write-line "      label = \"Schriftart:\";" fp)
+  (write-line "      width = 25;" fp)
   (write-line "    }" fp)
   (write-line "    spacer;" fp)
   (write-line "    : text { value = \"Attribut-Layer einfrieren:\"; }" fp)
@@ -1622,6 +1655,7 @@
 ;;; --- Hauptfunktion SBZSETTINGS ---
 (defun c:SBZSETTINGS ( / *error* dcl-file dcl-id
                          bau0 scale suffix layer-names layer-idx
+                         font-names font-idx
                          last-blk last-attr
                          dlg-bau0 dlg-byblock dlg-movelayer dlg-layer-idx
                          dlg-copymode dlg-copyblock dlg-scale dlg-suffix
@@ -1653,6 +1687,9 @@
 
   ;; Layer-Liste aufbauen
   (setq layer-names (SBZ:get-layer-names))
+
+  ;; Font-Liste aufbauen
+  (setq font-names (SBZ:get-font-list))
 
   ;; DCL schreiben und laden
   (setq dcl-file (SBZ:write-settings-dcl))
@@ -1704,7 +1741,15 @@
       (setq suffix (SBZ:get-suffix))
       (set_tile "scale" (rtos scale 2 4))
       (set_tile "suffix" suffix)
-      (set_tile "font" (SBZ:get-font))
+      ;; Font-Popup fuellen und aktuellen Font vorselektieren
+      (start_list "font")
+      (foreach fn font-names (add_list fn))
+      (end_list)
+      (setq font-idx (vl-position (strcase (SBZ:get-font)) (mapcar 'strcase font-names)))
+      (if font-idx
+        (set_tile "font" (itoa font-idx))
+        (set_tile "font" "0")  ;; Default: erstes Element (arial)
+      )
       (set_tile "freezeabs" (itoa *SBZ:cfg-freeze-abs*))
       (set_tile "freezerel" (itoa *SBZ:cfg-freeze-rel*))
       (set_tile "freezebau0" (itoa *SBZ:cfg-freeze-bau0*))
@@ -1815,11 +1860,11 @@
           (if dlg-suffix
             (SBZ:set-suffix dlg-suffix)
           )
-          ;; Schriftart in DWG Custom Property + Config speichern
-          (if (and dlg-font (/= dlg-font ""))
+          ;; Schriftart: Index → Name auflösen, in DWG + Config speichern
+          (if (and dlg-font font-names)
             (progn
-              (setq *SBZ:cfg-font* dlg-font)
-              (SBZ:set-font dlg-font)
+              (setq *SBZ:cfg-font* (nth (atoi dlg-font) font-names))
+              (SBZ:set-font *SBZ:cfg-font*)
             )
           )
           ;; Kopie-Layer speichern
