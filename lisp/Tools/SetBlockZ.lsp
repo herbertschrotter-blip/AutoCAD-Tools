@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.8.0
+;;; Version: 1.8.2
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -34,7 +34,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.8.0")
+(setq *SBZ:version* "1.8.2")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -918,9 +918,9 @@
           (entmake (list '(0 . "ATTDEF")
                         '(8 . "0")
                         '(62 . 0) '(6 . "ByBlock") '(370 . -2)
-                        '(10 0.1 0.01 0.0)    ;; Startpunkt
-                        '(11 0.1 0.01 0.0)    ;; Ausrichtungspunkt
-                        '(40 . 0.03)          ;; Texthoehe (wird beim Insert skaliert)
+                        '(10 0.1 0.02 0.0)    ;; Startpunkt (Y = halbe Texthoehe ueber Mitte)
+                        '(11 0.1 0.02 0.0)    ;; Ausrichtungspunkt
+                        '(40 . 0.07)          ;; Texthoehe (wird beim Insert skaliert)
                         '(1 . "0.000")
                         '(2 . "HOEHE_ABS")
                         '(3 . "Absolute Hoehe")
@@ -934,9 +934,9 @@
           (entmake (list '(0 . "ATTDEF")
                         '(8 . "0")
                         '(62 . 0) '(6 . "ByBlock") '(370 . -2)
-                        '(10 0.1 -0.01 0.0)
-                        '(11 0.1 -0.01 0.0)
-                        '(40 . 0.03)
+                        '(10 0.1 -0.02 0.0)
+                        '(11 0.1 -0.02 0.0)
+                        '(40 . 0.07)
                         '(1 . "0.000")
                         '(2 . "HOEHE_REL")
                         '(3 . "Relative Hoehe (nach Bau-0)")
@@ -946,14 +946,14 @@
                   ))
           ;; ATTDEF: HOEHE_BAU0 (Bau-0-Hoehe) — unsichtbar, unter HOEHE_REL
           ;; Justierung: Links Oben (72=0, 74=3)
-          ;; Position: gleicher Abstand wie ABS↔REL (0.02 Einheiten)
-          ;; ABS=+0.01, REL=-0.01, BAU0=-0.03
+          ;; Position: REL.Y - 1.7*Texthoehe = -0.02 - 0.119 ≈ -0.14
+          ;; ABS=+0.02, REL=-0.02, BAU0=-0.14
           (entmake (list '(0 . "ATTDEF")
                         '(8 . "0")
                         '(62 . 0) '(6 . "ByBlock") '(370 . -2)
-                        '(10 0.1 -0.03 0.0)
-                        '(11 0.1 -0.03 0.0)
-                        '(40 . 0.03)
+                        '(10 0.1 -0.14 0.0)
+                        '(11 0.1 -0.14 0.0)
+                        '(40 . 0.07)
                         '(1 . "0.000")
                         '(2 . "HOEHE_BAU0")
                         '(3 . "Bau-0-Hoehe")
