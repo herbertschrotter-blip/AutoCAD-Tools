@@ -386,6 +386,24 @@
 ;;; ============================================================================
 
 ;;; ----------------------------------------------------------------------------
+;;; SBZ:rtos-fixed
+;;; rtos mit erzwungenen Nachkommastellen (DIMZIN wird temporaer auf 0 gesetzt)
+;;; AutoCADs rtos unterdrueckt trailing Zeros wenn DIMZIN Bit 8 gesetzt ist.
+;;; Parameter:
+;;;   val  - Zahl (Real)
+;;;   prec - Anzahl Nachkommastellen (Integer)
+;;; Rueckgabe: String mit exakt prec Nachkommastellen
+;;; ----------------------------------------------------------------------------
+(defun SBZ:rtos-fixed (val prec / old-dimzin result)
+  (setq old-dimzin (getvar "DIMZIN"))
+  (setvar "DIMZIN" 0)
+  (setq result (rtos val 2 prec))
+  (setvar "DIMZIN" old-dimzin)
+  result
+)
+
+
+;;; ----------------------------------------------------------------------------
 ;;; SBZ:safe-variant-value
 ;;; Sicheres Auslesen: String oder Variant
 ;;; GetCustomByIndex gibt manchmal Strings direkt, manchmal Variants zurueck
@@ -991,22 +1009,22 @@
     )
     (progn
       ;; Absolut-Hoehe: Wert + Suffix (z.B. "320.18 m ue. A.")
-      ;; 2 Nachkommastellen, Punkt als Dezimaltrenner
-      (setq abs-str (strcat (rtos abs-h 2 2)
+      ;; 2 Nachkommastellen, DIMZIN=0 erzwingt trailing Zeros
+      (setq abs-str (strcat (SBZ:rtos-fixed abs-h 2)
                             (if (and suffix (/= suffix ""))
                               (strcat " " suffix) "")))
       ;; Relativ-Hoehe: Vorzeichen + Wert
-      ;; 2 Nachkommastellen
+      ;; 2 Nachkommastellen mit erzwungenen trailing Zeros
       ;; Positiv = "+", Negativ = "-" (kommt automatisch), Null = "%%P" (Plus-Minus)
       (cond
         ((> rel-z 0.001)
-          (setq rel-str (strcat "+" (rtos rel-z 2 2)))
+          (setq rel-str (strcat "+" (SBZ:rtos-fixed rel-z 2)))
         )
         ((< rel-z -0.001)
-          (setq rel-str (rtos rel-z 2 2))
+          (setq rel-str (SBZ:rtos-fixed rel-z 2))
         )
         (T
-          (setq rel-str (strcat "%%P" (rtos (abs rel-z) 2 2)))
+          (setq rel-str (strcat "%%P" (SBZ:rtos-fixed (abs rel-z) 2)))
         )
       )
       ;; Attribute setzen
