@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.0.1
+;;; Version: 1.1.0
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -34,7 +34,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.0.1")
+(setq *SBZ:version* "1.1.0")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -57,6 +57,8 @@
 (setq *SBZ:cfg-byblock* 1)          ;; Farbe auf ByBlock setzen (0/1)
 (setq *SBZ:cfg-movelayer* 0)        ;; Block auf Ziel-Layer verschieben (0/1)
 (setq *SBZ:cfg-target-layer* "")    ;; Ziel-Layer Name
+(setq *SBZ:cfg-copymode* 0)         ;; Kopie-Modus: Original beibehalten + Kopie-Block (0/1)
+(setq *SBZ:cfg-copyblock* "VermesserGOK") ;; Blockname fuer Kopie-Block
 
 
 ;;; ============================================================================
@@ -183,6 +185,8 @@
               ((= key "BYBLOCK")    (setq *SBZ:cfg-byblock* (atoi val)))
               ((= key "MOVELAYER")  (setq *SBZ:cfg-movelayer* (atoi val)))
               ((= key "TARGETLAYER")(setq *SBZ:cfg-target-layer* val))
+              ((= key "COPYMODE")   (setq *SBZ:cfg-copymode* (atoi val)))
+              ((= key "COPYBLOCK")  (setq *SBZ:cfg-copyblock* val))
             )
           )
         )
@@ -210,6 +214,8 @@
       (write-line (strcat "BYBLOCK=" (itoa *SBZ:cfg-byblock*)) fp)
       (write-line (strcat "MOVELAYER=" (itoa *SBZ:cfg-movelayer*)) fp)
       (write-line (strcat "TARGETLAYER=" *SBZ:cfg-target-layer*) fp)
+      (write-line (strcat "COPYMODE=" (itoa *SBZ:cfg-copymode*)) fp)
+      (write-line (strcat "COPYBLOCK=" *SBZ:cfg-copyblock*) fp)
       (close fp)
       (SBZ:log-write "INFO" (strcat "Config gespeichert: " cfg-path))
     )
@@ -624,72 +630,110 @@
 ;;; Rueckgabe: Anzahl verarbeiteter Bloecke (Integer)
 ;;; ----------------------------------------------------------------------------
 (defun SBZ:process-blocks (blk-name attr-tag bau0
-                           / ss i ent val-str abs-h rel-z count-ok count-err)
+                           / ss i ent val-str abs-h rel-z count-ok count-err
+                             copy-mode copy-blk-name copy-def-ok target-layer)
   (setq count-ok 0)
   (setq count-err 0)
+  ;; Kopie-Modus Variablen lokal cachen
+  (setq copy-mode (= *SBZ:cfg-copymode* 1))
+  (setq copy-blk-name *SBZ:cfg-copyblock*)
+  (setq target-layer (if (and (= *SBZ:cfg-movelayer* 1)
+                               (/= *SBZ:cfg-target-layer* ""))
+                       *SBZ:cfg-target-layer* ""))
   ;; Alle Bloecke mit dem Namen im Modelspace suchen
-  ;; Filter (410 . "Model") stellt sicher dass nur Modelspace-Bloecke erfasst werden
   (setq ss (ssget "X" (list (cons 2 blk-name) (cons 410 "Model"))))
   (if (and ss (> (sslength ss) 0))
     (progn
       (SBZ:log-write "INFO"
         (strcat "Verarbeite " (itoa (sslength ss)) " Bloecke '"
                 blk-name "' mit Attribut '" attr-tag
-                "', Bau-0=" (rtos bau0 2 3)))
+                "', Bau-0=" (rtos bau0 2 3)
+                (if copy-mode (strcat ", Kopie-Modus → '" copy-blk-name "'") "")))
       ;; ByBlock auf Block-Definition setzen (einmal, nicht pro Instanz!)
-      (if (= *SBZ:cfg-byblock* 1)
+      (if (and (= *SBZ:cfg-byblock* 1) (not copy-mode))
         (SBZ:set-blockdef-byblock blk-name)
       )
-      ;; Dekrementierende Schleife (Lee Mac Performance-Pattern)
-      (setq i (sslength ss))
-      (while (> (setq i (1- i)) -1)
-        (setq ent (ssname ss i))
-        ;; Attributwert lesen
-        (setq val-str (SBZ:get-attr-value ent attr-tag))
-        (if val-str
+      ;; Im Kopie-Modus: Block-Definition sicherstellen
+      (setq copy-def-ok T)
+      (if copy-mode
+        (if (not (SBZ:ensure-copyblock-def copy-blk-name))
           (progn
-            (setq abs-h (SBZ:parse-height-string val-str))
-            (if abs-h
+            (SBZ:log-write "ERROR"
+              (strcat "Block-Definition '" copy-blk-name "' konnte nicht erstellt werden"))
+            (setq copy-def-ok nil)
+          )
+        )
+      )
+      (if copy-def-ok
+        (progn
+          ;; Dekrementierende Schleife (Lee Mac Performance-Pattern)
+          (setq i (sslength ss))
+          (while (> (setq i (1- i)) -1)
+            (setq ent (ssname ss i))
+            ;; Attributwert lesen
+            (setq val-str (SBZ:get-attr-value ent attr-tag))
+            (if val-str
               (progn
-                ;; Relative Hoehe berechnen (absolut minus Bau-0)
-                (setq rel-z (- abs-h bau0))
-                ;; Z-Koordinate setzen
-                (if (SBZ:set-block-z ent rel-z)
+                (setq abs-h (SBZ:parse-height-string val-str))
+                (if abs-h
                   (progn
-                    (setq count-ok (1+ count-ok))
-                    (SBZ:log-write "DEBUG"
-                      (strcat "Block " (itoa (1+ i)) ": Attr='" val-str
-                              "' abs=" (rtos abs-h 2 3)
-                              " rel=" (rtos rel-z 2 3) " → Z gesetzt"))
+                    ;; Relative Hoehe berechnen (absolut minus Bau-0)
+                    (setq rel-z (- abs-h bau0))
+                    (if copy-mode
+                      ;; === KOPIE-MODUS: Original beibehalten, Kopie-Block einfuegen ===
+                      (if (SBZ:insert-copyblock ent copy-blk-name abs-h rel-z target-layer)
+                        (progn
+                          (setq count-ok (1+ count-ok))
+                          (SBZ:log-write "DEBUG"
+                            (strcat "Block " (itoa (1+ i)) ": Kopie eingefuegt"
+                                    " ABS=" (rtos abs-h 2 3)
+                                    " REL=" (rtos rel-z 2 3)))
+                        )
+                        (progn
+                          (setq count-err (1+ count-err))
+                          (SBZ:log-write "ERROR"
+                            (strcat "Block " (itoa (1+ i)) ": Kopie-Insert fehlgeschlagen"))
+                        )
+                      )
+                      ;; === STANDARD-MODUS: Original verschieben ===
+                      (if (SBZ:set-block-z ent rel-z)
+                        (progn
+                          (setq count-ok (1+ count-ok))
+                          (SBZ:log-write "DEBUG"
+                            (strcat "Block " (itoa (1+ i)) ": Attr='" val-str
+                                    "' abs=" (rtos abs-h 2 3)
+                                    " rel=" (rtos rel-z 2 3) " → Z gesetzt"))
+                          ;; Layer verschieben (nur Standard-Modus)
+                          (if (/= target-layer "")
+                            (vl-catch-all-apply 'vla-put-Layer
+                              (list (vlax-ename->vla-object ent) target-layer))
+                          )
+                        )
+                        (progn
+                          (setq count-err (1+ count-err))
+                          (SBZ:log-write "ERROR"
+                            (strcat "Block " (itoa (1+ i)) ": vla-Move fehlgeschlagen"))
+                        )
+                      )
+                    )
                   )
                   (progn
                     (setq count-err (1+ count-err))
-                    (SBZ:log-write "ERROR"
-                      (strcat "Block " (itoa (1+ i)) ": entmod fehlgeschlagen"))
+                    (SBZ:log-write "WARN"
+                      (strcat "Block " (itoa (1+ i))
+                              ": Attribut '" val-str "' ist keine gueltige Zahl"))
                   )
                 )
               )
               (progn
                 (setq count-err (1+ count-err))
                 (SBZ:log-write "WARN"
-                  (strcat "Block " (itoa (1+ i))
-                          ": Attribut '" val-str "' ist keine gueltige Zahl"))
+                  (strcat "Block " (itoa (1+ i)) ": Attribut '" attr-tag "' nicht gefunden"))
               )
             )
-          )
-          (progn
-            (setq count-err (1+ count-err))
-            (SBZ:log-write "WARN"
-              (strcat "Block " (itoa (1+ i)) ": Attribut '" attr-tag "' nicht gefunden"))
-          )
+          ) ;end while
         )
-        ;; Layer verschieben (falls aktiviert)
-        (if (and (= *SBZ:cfg-movelayer* 1)
-                 (/= *SBZ:cfg-target-layer* ""))
-          (vl-catch-all-apply 'vla-put-Layer
-            (list (vlax-ename->vla-object ent) *SBZ:cfg-target-layer*))
-        )
-      ) ;end while
+      ) ;end copy-def-ok
       ;; Zusammenfassung
       (SBZ:log-write "INFO"
         (strcat "Fertig: " (itoa count-ok) " OK, " (itoa count-err) " Fehler"))
@@ -702,6 +746,153 @@
     (progn
       (SBZ:log-write "WARN" (strcat "Keine Bloecke '" blk-name "' im Modelspace gefunden"))
       0
+    )
+  )
+)
+
+
+;;; ============================================================================
+;;; KOPIE-BLOCK: DEFINITION ERSTELLEN + EINFUEGEN
+;;; ============================================================================
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:ensure-copyblock-def
+;;; Erstellt die Block-Definition fuer den Kopie-Block falls nicht vorhanden.
+;;; Block enthaelt: Punkt-Marker + 2 Attribute (HOEHE_ABS, HOEHE_REL)
+;;; Parameter: blk-name - Blockname (String)
+;;; Rueckgabe: T wenn vorhanden/erstellt, nil bei Fehler
+;;; ----------------------------------------------------------------------------
+(defun SBZ:ensure-copyblock-def (blk-name / blocks blk-exists)
+  (setq blocks (vla-get-blocks (vla-get-activedocument (vlax-get-acad-object))))
+  ;; Pruefen ob Block schon existiert
+  (setq blk-exists
+    (not (vl-catch-all-error-p
+      (vl-catch-all-apply 'vla-item (list blocks blk-name)))))
+  (if blk-exists
+    (progn
+      (SBZ:log-write "DEBUG" (strcat "Block-Definition '" blk-name "' existiert bereits"))
+      T
+    )
+    ;; Block-Definition erstellen via entmake
+    (progn
+      (SBZ:log-write "INFO" (strcat "Erstelle Block-Definition '" blk-name "'"))
+      ;; BLOCK-Header
+      (if (entmake (list '(0 . "BLOCK")
+                         (cons 2 blk-name)
+                         '(10 0.0 0.0 0.0)
+                         '(70 . 2)))    ;; Bit 2 = hat Attribute
+        (progn
+          ;; Punkt-Marker (Kreuz)
+          (entmake (list '(0 . "LINE") '(8 . "0") '(62 . 256)
+                        '(10 -0.5 0.0 0.0) '(11 0.5 0.0 0.0)))
+          (entmake (list '(0 . "LINE") '(8 . "0") '(62 . 256)
+                        '(10 0.0 -0.5 0.0) '(11 0.0 0.5 0.0)))
+          ;; ATTDEF: HOEHE_ABS (absolut) — sichtbar, rechts vom Marker
+          (entmake (list '(0 . "ATTDEF")
+                        '(8 . "0")
+                        '(62 . 256)           ;; Farbe ByBlock
+                        '(10 0.8 0.3 0.0)     ;; Position rechts oben
+                        '(40 . 0.5)           ;; Texthoehe
+                        '(1 . "0.000")        ;; Default-Wert
+                        '(2 . "HOEHE_ABS")    ;; Tag
+                        '(3 . "Absolute Hoehe") ;; Prompt
+                        '(70 . 0)             ;; Flags: sichtbar
+                        '(72 . 0)             ;; Horizontale Justierung
+                  ))
+          ;; ATTDEF: HOEHE_REL (relativ) — sichtbar, rechts unter ABS
+          (entmake (list '(0 . "ATTDEF")
+                        '(8 . "0")
+                        '(62 . 256)
+                        '(10 0.8 -0.4 0.0)    ;; Position rechts unten
+                        '(40 . 0.5)
+                        '(1 . "0.000")
+                        '(2 . "HOEHE_REL")
+                        '(3 . "Relative Hoehe (nach Bau-0)")
+                        '(70 . 0)
+                        '(72 . 0)
+                  ))
+          ;; ENDBLK
+          (if (entmake '((0 . "ENDBLK")))
+            (progn
+              (SBZ:log-write "INFO" (strcat "Block-Definition '" blk-name "' erstellt"))
+              T
+            )
+            (progn
+              (SBZ:log-write "ERROR" (strcat "ENDBLK fehlgeschlagen fuer '" blk-name "'"))
+              nil
+            )
+          )
+        )
+        (progn
+          (SBZ:log-write "ERROR" (strcat "BLOCK-Header fehlgeschlagen fuer '" blk-name "'"))
+          nil
+        )
+      )
+    )
+  )
+)
+
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:insert-copyblock
+;;; Fuegt den Kopie-Block an der Position des Original-Blocks ein
+;;; Parameter:
+;;;   orig-ent  - Entity-Name des Original-Blocks (ename)
+;;;   blk-name  - Name des Kopie-Blocks (String)
+;;;   abs-h     - Absolute Hoehe (Real)
+;;;   rel-z     - Relative Hoehe nach Bau-0 (Real)
+;;;   layer     - Ziel-Layer (String, "" = aktueller Layer)
+;;; Rueckgabe: T bei Erfolg, nil bei Fehler
+;;; ----------------------------------------------------------------------------
+(defun SBZ:insert-copyblock (orig-ent blk-name abs-h rel-z layer
+                             / orig-data orig-pt ins-pt new-ent blk-ref attrs)
+  ;; XY vom Original, Z = relative Hoehe
+  (setq orig-data (entget orig-ent))
+  (setq orig-pt (cdr (assoc 10 orig-data)))
+  (setq ins-pt (list (car orig-pt) (cadr orig-pt) rel-z))
+  ;; Block einfuegen via command (zuverlaessig fuer Attribut-Bloecke)
+  (setq new-ent
+    (vl-catch-all-apply
+      '(lambda ()
+        (vla-InsertBlock
+          (vla-get-modelspace (vla-get-activedocument (vlax-get-acad-object)))
+          (vlax-3d-point ins-pt)
+          blk-name
+          1.0 1.0 1.0  ;; Scale X Y Z
+          0.0           ;; Rotation
+        )
+      )
+    )
+  )
+  (if (vl-catch-all-error-p new-ent)
+    (progn
+      (SBZ:log-write "ERROR"
+        (strcat "Kopie-Block Insert fehlgeschlagen: " (vl-catch-all-error-message new-ent)))
+      nil
+    )
+    (progn
+      ;; Attribute setzen
+      (setq attrs (vlax-invoke new-ent 'GetAttributes))
+      (foreach attr attrs
+        (cond
+          ((= (strcase (vla-get-TagString attr)) "HOEHE_ABS")
+            (vla-put-TextString attr (rtos abs-h 2 3))
+          )
+          ((= (strcase (vla-get-TagString attr)) "HOEHE_REL")
+            (vla-put-TextString attr (rtos rel-z 2 3))
+          )
+        )
+      )
+      ;; Layer setzen falls angegeben
+      (if (and layer (/= layer ""))
+        (vl-catch-all-apply 'vla-put-Layer (list new-ent layer))
+      )
+      (SBZ:log-write "DEBUG"
+        (strcat "Kopie-Block eingefuegt bei "
+                (rtos (car ins-pt) 2 3) "," (rtos (cadr ins-pt) 2 3)
+                ",Z=" (rtos rel-z 2 3)
+                " ABS=" (rtos abs-h 2 3) " REL=" (rtos rel-z 2 3)))
+      T
     )
   )
 )
@@ -957,6 +1148,21 @@
   (write-line "    }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
+  ;; --- Kopie-Modus ---
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Kopie-Modus\";" fp)
+  (write-line "    : toggle {" fp)
+  (write-line "      key = \"copymode\";" fp)
+  (write-line "      label = \"Original beibehalten + Kopie-Block einfuegen\";" fp)
+  (write-line "    }" fp)
+  (write-line "    : edit_box {" fp)
+  (write-line "      key = \"copyblock\";" fp)
+  (write-line "      label = \"Kopie-Blockname:\";" fp)
+  (write-line "      edit_width = 25;" fp)
+  (write-line "    }" fp)
+  (write-line "    : text { key = \"copyinfo\"; value = \"(Block mit HOEHE_ABS + HOEHE_REL Attributen)\"; }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
   ;; --- Letzte Verarbeitung ---
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"Letzte Verarbeitung\";" fp)
@@ -1009,8 +1215,12 @@
 
 ;;; --- Popup-Liste aktualisieren (Layer enabled/disabled je nach Toggle) ---
 (defun SBZ:settings-update-layer-state (toggle-val / )
-  ;; toggle-val: "1" = aktiv, "0" = inaktiv
   (mode_tile "layerlist" (if (= toggle-val "1") 0 1))
+)
+
+;;; --- Kopie-Blockname enabled/disabled je nach Toggle ---
+(defun SBZ:settings-update-copyblock-state (toggle-val / )
+  (mode_tile "copyblock" (if (= toggle-val "1") 0 1))
 )
 
 
@@ -1020,6 +1230,7 @@
                          last-blk last-attr
                          ;; Werte die aus Dialog gelesen werden (vor done_dialog!)
                          dlg-bau0 dlg-byblock dlg-movelayer dlg-layer-idx
+                         dlg-copymode dlg-copyblock
                          dlg-action result count)
   (SBZ:ensure-init)
   (defun *error* (msg)
@@ -1085,6 +1296,11 @@
       ;; Layer-Popup aktivieren/deaktivieren
       (SBZ:settings-update-layer-state (itoa *SBZ:cfg-movelayer*))
 
+      ;; Kopie-Modus
+      (set_tile "copymode" (itoa *SBZ:cfg-copymode*))
+      (set_tile "copyblock" *SBZ:cfg-copyblock*)
+      (SBZ:settings-update-copyblock-state (itoa *SBZ:cfg-copymode*))
+
       ;; Letzte Verarbeitung (aus DWG Custom Properties)
       (if last-blk
         (set_tile "last_block" (strcat "Block: " last-blk))
@@ -1105,6 +1321,10 @@
       (action_tile "movelayer"
         "(SBZ:settings-update-layer-state $value)"
       )
+      ;; Kopie-Toggle steuert Blockname-Feld
+      (action_tile "copymode"
+        "(SBZ:settings-update-copyblock-state $value)"
+      )
 
       ;; Speichern: Werte in globale Variablen BEVOR done_dialog (Sub-Dialog-Bug!)
       (action_tile "save"
@@ -1113,6 +1333,8 @@
           "(setq dlg-byblock (get_tile \"byblock\"))"
           "(setq dlg-movelayer (get_tile \"movelayer\"))"
           "(setq dlg-layer-idx (get_tile \"layerlist\"))"
+          "(setq dlg-copymode (get_tile \"copymode\"))"
+          "(setq dlg-copyblock (get_tile \"copyblock\"))"
           "(setq dlg-action \"save\")"
           "(done_dialog 1)"
         )
@@ -1125,6 +1347,8 @@
           "(setq dlg-byblock (get_tile \"byblock\"))"
           "(setq dlg-movelayer (get_tile \"movelayer\"))"
           "(setq dlg-layer-idx (get_tile \"layerlist\"))"
+          "(setq dlg-copymode (get_tile \"copymode\"))"
+          "(setq dlg-copyblock (get_tile \"copyblock\"))"
           "(setq dlg-action \"recalc\")"
           "(done_dialog 2)"
         )
@@ -1160,6 +1384,15 @@
                 (strcat "Settings: Ziel-Layer = '" *SBZ:cfg-target-layer* "'"))
             )
           )
+
+          ;; Kopie-Modus speichern
+          (setq *SBZ:cfg-copymode* (atoi dlg-copymode))
+          (if (and dlg-copyblock (/= dlg-copyblock ""))
+            (setq *SBZ:cfg-copyblock* dlg-copyblock)
+          )
+          (SBZ:log-write "INFO"
+            (strcat "Settings: CopyMode=" dlg-copymode
+                    " CopyBlock='" *SBZ:cfg-copyblock* "'"))
 
           ;; Config schreiben
           (SBZ:save-config)
