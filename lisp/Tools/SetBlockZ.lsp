@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.13.3
+;;; Version: 1.13.4
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -35,7 +35,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.13.3")
+(setq *SBZ:version* "1.13.4")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -1732,17 +1732,19 @@
   (write-line "  spacer;" fp)
 
   ;; ===== BOX 3: BLOCK =====
-  ;; Labels gepadded: linke Spalte 7 Zeichen, rechte Spalte 12 Zeichen
+  ;; Vertikale Ausrichtung durch identische column-Struktur
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"Block\";" fp)
   (write-line "    : edit_box { key = \"copyblock\"; label = \"Name:\"; }" fp)
-  (write-line "    : row {" fp)
-  (write-line "      : edit_box { key = \"copylayer\"; label = \"Layer: \"; edit_width = 12; }" fp)
-  (write-line "      : edit_box { key = \"suffix\"; label = \"Suffix:     \"; edit_width = 12; }" fp)
-  (write-line "    }" fp)
-  (write-line "    : row {" fp)
-  (write-line "      : popup_list { key = \"colorblock\"; label = \"Farbe: \"; width = 12; }" fp)
-  (write-line "      : edit_box { key = \"scale\"; label = \"Skalierung:\"; edit_width = 12; }" fp)
+  (write-line "    : concatenation {" fp)
+  (write-line "      : column { fixed_width = true; width = 23;" fp)
+  (write-line "        : edit_box { key = \"copylayer\"; label = \"Layer:\"; }" fp)
+  (write-line "        : popup_list { key = \"colorblock\"; label = \"Farbe:\"; }" fp)
+  (write-line "      }" fp)
+  (write-line "      : column { fixed_width = true; width = 23;" fp)
+  (write-line "        : edit_box { key = \"suffix\"; label = \"Suffix:\"; }" fp)
+  (write-line "        : edit_box { key = \"scale\"; label = \"Skalierung:\"; }" fp)
+  (write-line "      }" fp)
   (write-line "    }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
