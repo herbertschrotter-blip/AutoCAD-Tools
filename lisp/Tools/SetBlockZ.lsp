@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.6.0
+;;; Version: 1.6.1
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -34,7 +34,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.6.0")
+(setq *SBZ:version* "1.6.1")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -962,12 +962,13 @@
                   ))
           ;; ATTDEF: HOEHE_BAU0 (Bau-0-Hoehe) — unsichtbar, unter HOEHE_REL
           ;; Justierung: Links Oben (72=0, 74=3)
-          ;; Position: unter HOEHE_REL, gleiche X-Position
+          ;; Position: gleicher Abstand wie ABS↔REL (0.02 Einheiten)
+          ;; ABS=+0.01, REL=-0.01, BAU0=-0.03
           (entmake (list '(0 . "ATTDEF")
                         '(8 . "0")
                         '(62 . 0) '(6 . "ByBlock") '(370 . -2)
-                        '(10 0.1 -0.05 0.0)
-                        '(11 0.1 -0.05 0.0)
+                        '(10 0.1 -0.03 0.0)
+                        '(11 0.1 -0.03 0.0)
                         '(40 . 0.03)
                         '(1 . "0.000")
                         '(2 . "HOEHE_BAU0")
@@ -1101,8 +1102,9 @@
           (setq rel-str (strcat "%%P" (SBZ:rtos-fixed (abs rel-z) 2)))
         )
       )
-      ;; Bau-0-Hoehe
-      (setq bau0-str (strcat "Bau-0: " (SBZ:rtos-fixed bau0 2)))
+      ;; Bau-0 Zeile: "±rel = abs suffix" z.B. "±0.02 = 320.73 m ü. A."
+      ;; Verwendet rel-str (schon formatiert mit +/-/%%P) und abs-str (mit Suffix)
+      (setq bau0-str (strcat rel-str " = " abs-str))
       ;; Attribute setzen + Sichtbarkeit steuern
       (setq attrs (vlax-invoke new-ent 'GetAttributes))
       (foreach attr attrs
