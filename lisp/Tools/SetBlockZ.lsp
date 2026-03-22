@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.9.1
+;;; Version: 1.9.2
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -34,7 +34,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.9.1")
+(setq *SBZ:version* "1.9.2")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -1189,8 +1189,12 @@
         ((< rel-z -0.001) (setq rel-str (SBZ:rtos-fixed rel-z 2)))
         (T                (setq rel-str (strcat "%%P" (SBZ:rtos-fixed (abs rel-z) 2))))
       )
-      ;; Bau-0 Zeile
-      (setq bau0-str (strcat rel-str " = " abs-str))
+      ;; Bau-0 Zeile: "±0.00 = <Bau-0-Hoehe> <Suffix>"
+      ;; Zeigt die Bau-0-Hoehe als fixe Info (gleich fuer ALLE Bloecke!)
+      ;; ±0.00 ist symbolisch (= Nulllinie), dahinter der eingegebene Bau-0-Wert
+      (setq bau0-str (strcat "%%P0.00 = " (SBZ:rtos-fixed bau0 2)
+                             (if (and suffix (/= suffix ""))
+                               (strcat " " suffix) "")))
       ;; Attribute: Text setzen + Layer per entmod (DXF 8)
       ;; Positionen bleiben aus Block-Definition (Skalierung regelt Groesse)
       ;; Sichtbarkeit ueber Layer Freeze/Thaw, nicht Invisible-Flag
