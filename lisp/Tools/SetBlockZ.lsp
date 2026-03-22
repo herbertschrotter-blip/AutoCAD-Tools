@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.11.0
+;;; Version: 1.12.0
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -35,7 +35,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.11.0")
+(setq *SBZ:version* "1.12.0")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -1675,7 +1675,7 @@
 
 
 ;;; --- DCL schreiben (Embedded, Temp-Datei) ---
-;;; Layout: 3 Boxen (Zeichnung, Modus, Kopie-Block) + Buttons
+;;; Layout: 4 Boxen (Zeichnung, Modus, Block, Attribut) + 3 Buttons
 (defun SBZ:write-settings-dcl ( / dcl-file fp)
   (setq dcl-file (vl-filename-mktemp "sbz_set" nil ".dcl"))
   (setq fp (open dcl-file "w"))
@@ -1683,141 +1683,65 @@
   (write-line "  label = \"SetBlockZ - Einstellungen\";" fp)
   (write-line "  spacer;" fp)
 
-  ;; ===== BOX 1: ZEICHNUNG (DWG-spezifisch) =====
+  ;; ===== BOX 1: ZEICHNUNG =====
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"Zeichnung\";" fp)
-  (write-line "    : row {" fp)
-  (write-line "      : edit_box {" fp)
-  (write-line "        key = \"bau0\";" fp)
-  (write-line "        label = \"Bau-0-Hoehe (m):\";" fp)
-  (write-line "        edit_width = 12;" fp)
-  (write-line "      }" fp)
-  (write-line "    }" fp)
+  (write-line "    : edit_box { key = \"bau0\"; label = \"Bau-0-Hoehe (m):\"; edit_width = 12; }" fp)
   (write-line "    : text { key = \"last_info\"; value = \"\"; }" fp)
-  (write-line "    : row {" fp)
-  (write-line "      : button {" fp)
-  (write-line "        key = \"recalc\";" fp)
-  (write-line "        label = \"Neu berechnen\";" fp)
-  (write-line "        width = 16;" fp)
-  (write-line "        fixed_width = true;" fp)
-  (write-line "      }" fp)
-  (write-line "    }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
 
-  ;; ===== BOX 2: MODUS + OPTIONEN =====
+  ;; ===== BOX 2: MODUS =====
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"Modus\";" fp)
-  (write-line "    : toggle {" fp)
-  (write-line "      key = \"copymode\";" fp)
-  (write-line "      label = \"Kopie-Block einfuegen (Original bleibt auf Z=0)\";" fp)
+  (write-line "    : toggle { key = \"copymode\"; label = \"Kopie-Block einfuegen (Original bleibt auf Z=0)\"; }" fp)
+  (write-line "    : toggle { key = \"byblock\"; label = \"Farbe auf Von Block setzen\"; }" fp)
+  (write-line "  }" fp)
+  (write-line "  spacer;" fp)
+
+  ;; ===== BOX 3: BLOCK =====
+  (write-line "  : boxed_column {" fp)
+  (write-line "    label = \"Block\";" fp)
+  (write-line "    : popup_list { key = \"colorblock\"; label = \"Farbe:\"; width = 22; }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : edit_box { key = \"copyblock\"; label = \"Name:\"; edit_width = 16; }" fp)
+  (write-line "      : edit_box { key = \"copylayer\"; label = \"Basis-Layer:\"; edit_width = 10; }" fp)
   (write-line "    }" fp)
-  (write-line "    spacer;" fp)
-  (write-line "    : toggle {" fp)
-  (write-line "      key = \"byblock\";" fp)
-  (write-line "      label = \"Farbe auf ByBlock setzen\";" fp)
-  (write-line "    }" fp)
-  (write-line "    : toggle {" fp)
-  (write-line "      key = \"movelayer\";" fp)
-  (write-line "      label = \"Bloecke auf Ziel-Layer verschieben\";" fp)
-  (write-line "    }" fp)
-  (write-line "    : popup_list {" fp)
-  (write-line "      key = \"layerlist\";" fp)
-  (write-line "      label = \"Ziel-Layer:\";" fp)
-  (write-line "      width = 30;" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : edit_box { key = \"scale\"; label = \"Skalierung:\"; edit_width = 8; }" fp)
+  (write-line "      : edit_box { key = \"suffix\"; label = \"Suffix (abs):\"; edit_width = 12; }" fp)
   (write-line "    }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
 
-  ;; ===== BOX 3: KOPIE-BLOCK (deaktiviert wenn Kopie-Modus aus) =====
+  ;; ===== BOX 4: ATTRIBUT =====
   (write-line "  : boxed_column {" fp)
-  (write-line "    label = \"Kopie-Block\";" fp)
-  (write-line "    : row {" fp)
-  (write-line "      : edit_box {" fp)
-  (write-line "        key = \"copyblock\";" fp)
-  (write-line "        label = \"Blockname:\";" fp)
-  (write-line "        edit_width = 18;" fp)
-  (write-line "      }" fp)
-  (write-line "      : edit_box {" fp)
-  (write-line "        key = \"copylayer\";" fp)
-  (write-line "        label = \"Basis-Layer:\";" fp)
-  (write-line "        edit_width = 12;" fp)
-  (write-line "      }" fp)
-  (write-line "    }" fp)
-  (write-line "    : row {" fp)
-  (write-line "      : edit_box {" fp)
-  (write-line "        key = \"scale\";" fp)
-  (write-line "        label = \"Skalierung:\";" fp)
-  (write-line "        edit_width = 10;" fp)
-  (write-line "      }" fp)
-  (write-line "      : edit_box {" fp)
-  (write-line "        key = \"suffix\";" fp)
-  (write-line "        label = \"Suffix (abs):\";" fp)
-  (write-line "        edit_width = 14;" fp)
-  (write-line "      }" fp)
-  (write-line "    }" fp)
-  (write-line "    : popup_list {" fp)
-  (write-line "      key = \"font\";" fp)
-  (write-line "      label = \"Schriftart:\";" fp)
-  (write-line "      width = 25;" fp)
-  (write-line "    }" fp)
-  (write-line "    spacer;" fp)
-  (write-line "    : popup_list {" fp)
-  (write-line "      key = \"colorblock\";" fp)
-  (write-line "      label = \"Block-Farbe:\";" fp)
-  (write-line "      width = 20;" fp)
-  (write-line "    }" fp)
-  (write-line "    : row {" fp)
-  (write-line "      : popup_list {" fp)
-  (write-line "        key = \"colorabs\";" fp)
-  (write-line "        label = \"Absolut:\";" fp)
-  (write-line "        width = 16;" fp)
-  (write-line "      }" fp)
-  (write-line "      : popup_list {" fp)
-  (write-line "        key = \"colorrel\";" fp)
-  (write-line "        label = \"Relativ:\";" fp)
-  (write-line "        width = 16;" fp)
-  (write-line "      }" fp)
-  (write-line "      : popup_list {" fp)
-  (write-line "        key = \"colorbau0\";" fp)
-  (write-line "        label = \"Bau-0:\";" fp)
-  (write-line "        width = 16;" fp)
-  (write-line "      }" fp)
-  (write-line "    }" fp)
-  (write-line "    spacer;" fp)
-  (write-line "    : text { value = \"Attribut-Layer einfrieren:\"; }" fp)
+  (write-line "    label = \"Attribut\";" fp)
+  (write-line "    : text { key = \"copyinfo\"; value = \"\"; }" fp)
+  (write-line "    : text { value = \"Einfrieren:\"; }" fp)
   (write-line "    : row {" fp)
   (write-line "      : toggle { key = \"freezeabs\"; label = \"Absolut\"; }" fp)
   (write-line "      : toggle { key = \"freezerel\"; label = \"Relativ\"; }" fp)
   (write-line "      : toggle { key = \"freezebau0\"; label = \"Bau-0\"; }" fp)
   (write-line "    }" fp)
-  (write-line "    : text { key = \"copyinfo\"; value = \"Layer: GOK_abs-AttABS, -AttREL, -AttBAU0\"; }" fp)
   (write-line "    spacer;" fp)
-  (write-line "    : button {" fp)
-  (write-line "      key = \"update\";" fp)
-  (write-line "      label = \"Auf bestehende Bloecke aendern\";" fp)
-  (write-line "      width = 35;" fp)
-  (write-line "      fixed_width = true;" fp)
+  (write-line "    : text { value = \"Farbe:\"; }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : popup_list { key = \"colorabs\"; label = \"Absolut:\"; width = 14; }" fp)
+  (write-line "      : popup_list { key = \"colorrel\"; label = \"Relativ:\"; width = 14; }" fp)
+  (write-line "      : popup_list { key = \"colorbau0\"; label = \"Bau-0:\"; width = 14; }" fp)
   (write-line "    }" fp)
+  (write-line "    spacer;" fp)
+  (write-line "    : popup_list { key = \"font\"; label = \"Schriftart:\"; width = 22; }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
 
   ;; ===== BUTTONS =====
   (write-line "  : row {" fp)
-  (write-line "    : button {" fp)
-  (write-line "      key = \"save\";" fp)
-  (write-line "      label = \"Speichern\";" fp)
-  (write-line "      is_default = true;" fp)
-  (write-line "      width = 14;" fp)
-  (write-line "      fixed_width = true;" fp)
-  (write-line "    }" fp)
-  (write-line "    : button {" fp)
-  (write-line "      key = \"close\";" fp)
-  (write-line "      label = \"Schliessen\";" fp)
-  (write-line "      is_cancel = true;" fp)
-  (write-line "      width = 14;" fp)
-  (write-line "      fixed_width = true;" fp)
-  (write-line "    }" fp)
+  (write-line "    : button { key = \"update\"; label = \"Aendern\"; width = 12; fixed_width = true; }" fp)
+  (write-line "    : spacer { width = 1; }" fp)
+  (write-line "    : button { key = \"save\"; label = \"Speichern\"; is_default = true; width = 12; fixed_width = true; }" fp)
+  (write-line "    : button { key = \"close\"; label = \"Schliessen\"; is_cancel = true; width = 12; fixed_width = true; }" fp)
   (write-line "  }" fp)
   (write-line "}" fp)
   (close fp)
@@ -1825,36 +1749,18 @@
 )
 
 
-;;; --- Layer-Liste fuer Popup aufbauen ---
-(defun SBZ:get-layer-names ( / doc layers result)
-  (setq doc (vla-get-activedocument (vlax-get-acad-object)))
-  (setq layers (vla-get-layers doc))
-  (setq result nil)
-  (vlax-for lay layers
-    (setq result (cons (vla-get-Name lay) result))
-  )
-  (setq result (vl-sort (reverse result) '<))
-  result
-)
-
-
-;;; --- Popup-Liste aktualisieren (Layer enabled/disabled je nach Toggle) ---
-(defun SBZ:settings-update-layer-state (toggle-val / )
-  (mode_tile "layerlist" (if (= toggle-val "1") 0 1))
-)
-
 ;;; --- Kopie-Modus Felder enabled/disabled je nach Toggle ---
 (defun SBZ:settings-update-copyblock-state (toggle-val / mode)
   (setq mode (if (= toggle-val "1") 0 1))
   (mode_tile "copyblock" mode)
+  (mode_tile "copylayer" mode)
   (mode_tile "scale" mode)
   (mode_tile "suffix" mode)
-  (mode_tile "font" mode)
   (mode_tile "colorblock" mode)
+  (mode_tile "font" mode)
   (mode_tile "colorabs" mode)
   (mode_tile "colorrel" mode)
   (mode_tile "colorbau0" mode)
-  (mode_tile "copylayer" mode)
   (mode_tile "freezeabs" mode)
   (mode_tile "freezerel" mode)
   (mode_tile "freezebau0" mode)
@@ -1864,16 +1770,16 @@
 
 ;;; --- Hauptfunktion SBZSETTINGS ---
 (defun c:SBZSETTINGS ( / *error* dcl-file dcl-id
-                         bau0 scale suffix layer-names layer-idx
+                         bau0 scale suffix
                          font-names font-idx
                          block-colors attr-colors
                          last-blk last-attr
-                         dlg-bau0 dlg-byblock dlg-movelayer dlg-layer-idx
+                         dlg-bau0 dlg-byblock
                          dlg-copymode dlg-copyblock dlg-scale dlg-suffix
                          dlg-copylayer dlg-font
                          dlg-colorblock dlg-colorabs dlg-colorrel dlg-colorbau0
                          dlg-freezeabs dlg-freezerel dlg-freezebau0
-                         dlg-action result count)
+                         dlg-action result count ss blocks blk-def)
   (SBZ:ensure-init)
   (defun *error* (msg)
     (if (not (SBZ:cancel-p msg))
@@ -1882,7 +1788,6 @@
         (SBZ:log-write "ERROR" (strcat "SBZSETTINGS Error-Handler: " msg))
       )
     )
-    ;; Cleanup DCL
     (if (and dcl-id (< 0 dcl-id)) (unload_dialog dcl-id))
     (if (and dcl-file (findfile dcl-file)) (vl-file-delete dcl-file))
     (princ)
@@ -1890,21 +1795,12 @@
 
   (SBZ:log-write "INFO" "Befehl SBZSETTINGS gestartet")
 
-  ;; Bau-0 aus Custom Property lesen
+  ;; Werte lesen
   (setq bau0 (SBZ:get-bau0))
   (if (not bau0) (setq bau0 0.0))
-
-  ;; Letzter Block/Attr aus DWG Custom Properties lesen
   (setq last-blk (SBZ:get-last-blockname))
   (setq last-attr (SBZ:get-last-attrtag))
-
-  ;; Layer-Liste aufbauen
-  (setq layer-names (SBZ:get-layer-names))
-
-  ;; Font-Liste aufbauen
   (setq font-names (SBZ:get-font-list))
-
-  ;; Farblisten aufbauen
   (setq block-colors (SBZ:get-block-color-list))
   (setq attr-colors (SBZ:get-attr-color-list))
 
@@ -1921,59 +1817,39 @@
       (princ)
     )
     (progn
-      ;; --- Werte in Dialog setzen ---
-
       ;; === BOX 1: Zeichnung ===
       (set_tile "bau0" (rtos bau0 2 3))
-      ;; Letzte Verarbeitung als Info-Zeile
       (if (and last-blk last-attr)
-        (set_tile "last_info"
-          (strcat "Letzter Lauf: " last-blk " / " last-attr))
+        (set_tile "last_info" (strcat "Letzter Lauf: " last-blk " / " last-attr))
         (set_tile "last_info" "Noch nicht ausgefuehrt")
-      )
-      ;; Neu-Berechnen Button nur aktiv wenn letzte Werte vorhanden
-      (if (or (not last-blk) (not last-attr))
-        (mode_tile "recalc" 1)
       )
 
       ;; === BOX 2: Modus ===
       (set_tile "copymode" (itoa *SBZ:cfg-copymode*))
       (set_tile "byblock" (itoa *SBZ:cfg-byblock*))
-      (set_tile "movelayer" (itoa *SBZ:cfg-movelayer*))
-      ;; Layer-Popup fuellen
-      (start_list "layerlist")
-      (foreach ln layer-names (add_list ln))
-      (end_list)
-      (setq layer-idx (vl-position *SBZ:cfg-target-layer* layer-names))
-      (if layer-idx
-        (set_tile "layerlist" (itoa layer-idx))
-        (set_tile "layerlist" "0")
-      )
-      (SBZ:settings-update-layer-state (itoa *SBZ:cfg-movelayer*))
 
-      ;; === BOX 3: Kopie-Block ===
+      ;; === BOX 3: Block ===
+      ;; Block-Farbe Popup
+      (start_list "colorblock")
+      (foreach c block-colors (add_list (car c)))
+      (end_list)
+      (set_tile "colorblock" (itoa (SBZ:color-to-index *SBZ:cfg-color-block* block-colors)))
       (set_tile "copyblock" *SBZ:cfg-copyblock*)
       (set_tile "copylayer" *SBZ:cfg-copylayer*)
       (setq scale (SBZ:get-scale))
       (setq suffix (SBZ:get-suffix))
       (set_tile "scale" (rtos scale 2 4))
       (set_tile "suffix" suffix)
-      ;; Font-Popup fuellen und aktuellen Font vorselektieren
-      (start_list "font")
-      (foreach fn font-names (add_list fn))
-      (end_list)
-      (setq font-idx (vl-position (strcase (SBZ:get-font)) (mapcar 'strcase font-names)))
-      (if font-idx
-        (set_tile "font" (itoa font-idx))
-        (set_tile "font" "0")
-      )
-      ;; Farb-Popups fuellen und vorselektieren
-      ;; Block-Farbe (ohne "Von Block")
-      (start_list "colorblock")
-      (foreach c block-colors (add_list (car c)))
-      (end_list)
-      (set_tile "colorblock" (itoa (SBZ:color-to-index *SBZ:cfg-color-block* block-colors)))
-      ;; Attribut-Farben (mit "Von Block" am Anfang)
+
+      ;; === BOX 4: Attribut ===
+      ;; Layer-Info Text
+      (set_tile "copyinfo"
+        (strcat "Layer: " *SBZ:cfg-copylayer* "_abs-AttABS, -AttREL, -AttBAU0"))
+      ;; Freeze Toggles
+      (set_tile "freezeabs" (itoa *SBZ:cfg-freeze-abs*))
+      (set_tile "freezerel" (itoa *SBZ:cfg-freeze-rel*))
+      (set_tile "freezebau0" (itoa *SBZ:cfg-freeze-bau0*))
+      ;; Attribut-Farben
       (start_list "colorabs")
       (foreach c attr-colors (add_list (car c)))
       (end_list)
@@ -1986,99 +1862,52 @@
       (foreach c attr-colors (add_list (car c)))
       (end_list)
       (set_tile "colorbau0" (itoa (SBZ:color-to-index *SBZ:cfg-color-bau0* attr-colors)))
-      ;; Freeze-Toggles
-      (set_tile "freezeabs" (itoa *SBZ:cfg-freeze-abs*))
-      (set_tile "freezerel" (itoa *SBZ:cfg-freeze-rel*))
-      (set_tile "freezebau0" (itoa *SBZ:cfg-freeze-bau0*))
-      ;; Kopie-Block Box deaktivieren wenn Kopie-Modus aus
+      ;; Schriftart
+      (start_list "font")
+      (foreach fn font-names (add_list fn))
+      (end_list)
+      (setq font-idx (vl-position (strcase (SBZ:get-font)) (mapcar 'strcase font-names)))
+      (if font-idx
+        (set_tile "font" (itoa font-idx))
+        (set_tile "font" "0")
+      )
+      ;; Kopie-Block Felder deaktivieren wenn Modus aus
       (SBZ:settings-update-copyblock-state (itoa *SBZ:cfg-copymode*))
 
       ;; --- Action Tiles ---
-      ;; Layer-Toggle steuert Popup-Status
-      (action_tile "movelayer"
-        "(SBZ:settings-update-layer-state $value)"
-      )
-      ;; Kopie-Toggle steuert Blockname-Feld
-      (action_tile "copymode"
-        "(SBZ:settings-update-copyblock-state $value)"
+      (action_tile "copymode" "(SBZ:settings-update-copyblock-state $value)")
+
+      ;; Alle get_tile Strings fuer save/update/recalc (Sub-Dialog-Bug!)
+      ;; Gemeinsamer Block: alle Werte in globale Variablen lesen
+      (setq *SBZ:dlg-get-all*
+        (strcat
+          "(setq dlg-bau0 (get_tile \"bau0\"))"
+          "(setq dlg-byblock (get_tile \"byblock\"))"
+          "(setq dlg-copymode (get_tile \"copymode\"))"
+          "(setq dlg-copyblock (get_tile \"copyblock\"))"
+          "(setq dlg-copylayer (get_tile \"copylayer\"))"
+          "(setq dlg-scale (get_tile \"scale\"))"
+          "(setq dlg-suffix (get_tile \"suffix\"))"
+          "(setq dlg-colorblock (get_tile \"colorblock\"))"
+          "(setq dlg-font (get_tile \"font\"))"
+          "(setq dlg-colorabs (get_tile \"colorabs\"))"
+          "(setq dlg-colorrel (get_tile \"colorrel\"))"
+          "(setq dlg-colorbau0 (get_tile \"colorbau0\"))"
+          "(setq dlg-freezeabs (get_tile \"freezeabs\"))"
+          "(setq dlg-freezerel (get_tile \"freezerel\"))"
+          "(setq dlg-freezebau0 (get_tile \"freezebau0\"))"
+        )
       )
 
-      ;; Speichern: Werte in globale Variablen BEVOR done_dialog (Sub-Dialog-Bug!)
+      ;; Speichern
       (action_tile "save"
-        (strcat
-          "(setq dlg-bau0 (get_tile \"bau0\"))"
-          "(setq dlg-byblock (get_tile \"byblock\"))"
-          "(setq dlg-movelayer (get_tile \"movelayer\"))"
-          "(setq dlg-layer-idx (get_tile \"layerlist\"))"
-          "(setq dlg-copymode (get_tile \"copymode\"))"
-          "(setq dlg-copyblock (get_tile \"copyblock\"))"
-          "(setq dlg-scale (get_tile \"scale\"))"
-          "(setq dlg-suffix (get_tile \"suffix\"))"
-          
-          "(setq dlg-font (get_tile \"font\"))"
-          "(setq dlg-copylayer (get_tile \"copylayer\"))"
-          "(setq dlg-colorblock (get_tile \"colorblock\"))"
-          "(setq dlg-colorabs (get_tile \"colorabs\"))"
-          "(setq dlg-colorrel (get_tile \"colorrel\"))"
-          "(setq dlg-colorbau0 (get_tile \"colorbau0\"))"
-          "(setq dlg-freezeabs (get_tile \"freezeabs\"))"
-          "(setq dlg-freezerel (get_tile \"freezerel\"))"
-          "(setq dlg-freezebau0 (get_tile \"freezebau0\"))"
-          "(setq dlg-action \"save\")"
-          "(done_dialog 1)"
-        )
-      )
+        (strcat *SBZ:dlg-get-all*
+          "(setq dlg-action \"save\")(done_dialog 1)"))
 
-      ;; Neu berechnen: Werte speichern + Aktion merken
-      (action_tile "recalc"
-        (strcat
-          "(setq dlg-bau0 (get_tile \"bau0\"))"
-          "(setq dlg-byblock (get_tile \"byblock\"))"
-          "(setq dlg-movelayer (get_tile \"movelayer\"))"
-          "(setq dlg-layer-idx (get_tile \"layerlist\"))"
-          "(setq dlg-copymode (get_tile \"copymode\"))"
-          "(setq dlg-copyblock (get_tile \"copyblock\"))"
-          "(setq dlg-scale (get_tile \"scale\"))"
-          "(setq dlg-suffix (get_tile \"suffix\"))"
-          
-          "(setq dlg-font (get_tile \"font\"))"
-          "(setq dlg-copylayer (get_tile \"copylayer\"))"
-          "(setq dlg-colorblock (get_tile \"colorblock\"))"
-          "(setq dlg-colorabs (get_tile \"colorabs\"))"
-          "(setq dlg-colorrel (get_tile \"colorrel\"))"
-          "(setq dlg-colorbau0 (get_tile \"colorbau0\"))"
-          "(setq dlg-freezeabs (get_tile \"freezeabs\"))"
-          "(setq dlg-freezerel (get_tile \"freezerel\"))"
-          "(setq dlg-freezebau0 (get_tile \"freezebau0\"))"
-          "(setq dlg-action \"recalc\")"
-          "(done_dialog 2)"
-        )
-      )
-
-      ;; Aendern: Settings auf bestehende Bloecke anwenden
+      ;; Aendern (= Speichern + bestehende Bloecke loeschen + neu erstellen)
       (action_tile "update"
-        (strcat
-          "(setq dlg-bau0 (get_tile \"bau0\"))"
-          "(setq dlg-byblock (get_tile \"byblock\"))"
-          "(setq dlg-movelayer (get_tile \"movelayer\"))"
-          "(setq dlg-layer-idx (get_tile \"layerlist\"))"
-          "(setq dlg-copymode (get_tile \"copymode\"))"
-          "(setq dlg-copyblock (get_tile \"copyblock\"))"
-          "(setq dlg-scale (get_tile \"scale\"))"
-          "(setq dlg-suffix (get_tile \"suffix\"))"
-          "(setq dlg-font (get_tile \"font\"))"
-          "(setq dlg-copylayer (get_tile \"copylayer\"))"
-          "(setq dlg-colorblock (get_tile \"colorblock\"))"
-          "(setq dlg-colorabs (get_tile \"colorabs\"))"
-          "(setq dlg-colorrel (get_tile \"colorrel\"))"
-          "(setq dlg-colorbau0 (get_tile \"colorbau0\"))"
-          "(setq dlg-freezeabs (get_tile \"freezeabs\"))"
-          "(setq dlg-freezerel (get_tile \"freezerel\"))"
-          "(setq dlg-freezebau0 (get_tile \"freezebau0\"))"
-          "(setq dlg-action \"update\")"
-          "(done_dialog 3)"
-        )
-      )
+        (strcat *SBZ:dlg-get-all*
+          "(setq dlg-action \"update\")(done_dialog 3)"))
 
       ;; Schliessen
       (action_tile "close" "(setq dlg-action \"close\")(done_dialog 0)")
@@ -2089,59 +1918,28 @@
       ;; --- Dialog geschlossen, Werte auswerten ---
       (if (and dlg-action (/= dlg-action "close"))
         (progn
-          ;; Bau-0 auswerten und speichern
+          ;; Bau-0
           (setq bau0 (atof (vl-string-subst "." "," dlg-bau0)))
           (SBZ:set-bau0 bau0)
-          (SBZ:log-write "INFO" (strcat "Settings: Bau-0 = " (rtos bau0 2 3)))
-
-          ;; Toggles speichern
+          ;; Toggles
           (setq *SBZ:cfg-byblock* (atoi dlg-byblock))
-          (setq *SBZ:cfg-movelayer* (atoi dlg-movelayer))
-          (SBZ:log-write "INFO"
-            (strcat "Settings: ByBlock=" dlg-byblock
-                    " MoveLayer=" dlg-movelayer))
-
-          ;; Ziel-Layer speichern
-          (if (and dlg-layer-idx layer-names)
-            (progn
-              (setq *SBZ:cfg-target-layer*
-                (nth (atoi dlg-layer-idx) layer-names))
-              (SBZ:log-write "INFO"
-                (strcat "Settings: Ziel-Layer = '" *SBZ:cfg-target-layer* "'"))
-            )
-          )
-
-          ;; Kopie-Modus speichern
           (setq *SBZ:cfg-copymode* (atoi dlg-copymode))
+          ;; Block-Settings
           (if (and dlg-copyblock (/= dlg-copyblock ""))
-            (setq *SBZ:cfg-copyblock* dlg-copyblock)
-          )
-          ;; Skalierung in DWG Custom Property speichern
+            (setq *SBZ:cfg-copyblock* dlg-copyblock))
+          (if (and dlg-copylayer (/= dlg-copylayer ""))
+            (setq *SBZ:cfg-copylayer* dlg-copylayer))
           (if (and dlg-scale (/= dlg-scale ""))
             (progn
               (setq scale (atof dlg-scale))
-              (if (> scale 0.0)
-                (SBZ:set-scale scale)
-                (SBZ:log-write "WARN" (strcat "Ungueltige Skalierung: " dlg-scale))
-              )
-            )
-          )
-          ;; Suffix in DWG Custom Property speichern
-          (if dlg-suffix
-            (SBZ:set-suffix dlg-suffix)
-          )
-          ;; Schriftart: Index → Name auflösen, in DWG + Config speichern
+              (if (> scale 0.0) (SBZ:set-scale scale))))
+          (if dlg-suffix (SBZ:set-suffix dlg-suffix))
+          ;; Schriftart
           (if (and dlg-font font-names)
             (progn
               (setq *SBZ:cfg-font* (nth (atoi dlg-font) font-names))
-              (SBZ:set-font *SBZ:cfg-font*)
-            )
-          )
-          ;; Kopie-Layer speichern
-          (if (and dlg-copylayer (/= dlg-copylayer ""))
-            (setq *SBZ:cfg-copylayer* dlg-copylayer)
-          )
-          ;; Farben: Index → ACI-Code auflösen
+              (SBZ:set-font *SBZ:cfg-font*)))
+          ;; Farben
           (if dlg-colorblock
             (setq *SBZ:cfg-color-block* (cdr (nth (atoi dlg-colorblock) block-colors))))
           (if dlg-colorabs
@@ -2150,47 +1948,56 @@
             (setq *SBZ:cfg-color-rel* (cdr (nth (atoi dlg-colorrel) attr-colors))))
           (if dlg-colorbau0
             (setq *SBZ:cfg-color-bau0* (cdr (nth (atoi dlg-colorbau0) attr-colors))))
-          ;; Attribut-Sichtbarkeit speichern
+          ;; Freeze
           (setq *SBZ:cfg-freeze-abs* (atoi dlg-freezeabs))
           (setq *SBZ:cfg-freeze-rel* (atoi dlg-freezerel))
           (setq *SBZ:cfg-freeze-bau0* (atoi dlg-freezebau0))
+
+          ;; Logging
           (SBZ:log-write "INFO"
-            (strcat "Settings: CopyMode=" dlg-copymode
-                    " CopyBlock='" *SBZ:cfg-copyblock*
-                    "' Layer='" *SBZ:cfg-copylayer*
-                    "' Freeze: ABS=" (itoa *SBZ:cfg-freeze-abs*)
-                    " REL=" (itoa *SBZ:cfg-freeze-rel*)
-                    " BAU0=" (itoa *SBZ:cfg-freeze-bau0*)))
+            (strcat "Settings gespeichert: Bau0=" (rtos bau0 2 3)
+                    " CopyMode=" (itoa *SBZ:cfg-copymode*)
+                    " Block='" *SBZ:cfg-copyblock* "'"
+                    " Font='" *SBZ:cfg-font* "'"))
 
           ;; Config schreiben
           (SBZ:save-config)
           (princ "\nEinstellungen gespeichert.")
 
-          ;; Neu berechnen?
-          (if (= dlg-action "recalc")
+          ;; Aendern? → Alle Kopie-Bloecke loeschen + neu erstellen
+          (if (= dlg-action "update")
             (if (and last-blk last-attr)
               (progn
                 (SBZ:log-write "INFO"
-                  (strcat "Neuberechnung: Block='" last-blk
-                          "' Attr='" last-attr
-                          "' Bau-0=" (rtos bau0 2 3)))
-                (setq count
-                  (SBZ:process-blocks last-blk last-attr bau0 "REL"))
-                (princ (strcat "\nNeuberechnung: " (itoa count) " Bloecke verarbeitet."))
+                  (strcat "Aendern: Loesche + Neu erstellen mit Block='"
+                          last-blk "' Attr='" last-attr "'"))
+                ;; 1. Alte Kopie-Bloecke loeschen
+                (setq count 0)
+                (setq ss (ssget "X" (list (cons 2 *SBZ:cfg-copyblock*) (cons 410 "Model"))))
+                (if (and ss (> (sslength ss) 0))
+                  (progn
+                    (setq count (sslength ss))
+                    (command "._erase" ss "")
+                    (SBZ:log-write "INFO" (strcat (itoa count) " alte Kopie-Bloecke geloescht"))
+                  )
+                )
+                ;; 2. Block-Definition purgen (damit neue Settings wirken)
+                (setq blocks (vla-get-blocks
+                  (vla-get-activedocument (vlax-get-acad-object))))
+                (if (not (vl-catch-all-error-p
+                      (setq blk-def (vl-catch-all-apply 'vla-item
+                        (list blocks *SBZ:cfg-copyblock*)))))
+                  (vl-catch-all-apply 'vla-delete (list blk-def))
+                )
+                ;; 3. Neu erstellen mit process-blocks
+                (setq count (SBZ:process-blocks last-blk last-attr bau0 "REL"))
+                (princ (strcat "\n" (itoa count) " Bloecke neu erstellt."))
               )
               (progn
-                (princ "\nNeuberechnung nicht moeglich: Kein Block/Attribut in Zeichnung gespeichert.")
-                (SBZ:log-write "WARN" "Neuberechnung: Keine gespeicherten Block/Attr-Daten")
+                (princ "\nAendern nicht moeglich: Kein Block/Attribut gespeichert.")
+                (princ "\nFuehre zuerst SETBLOCKZ aus.")
+                (SBZ:log-write "WARN" "Aendern: Keine gespeicherten Block/Attr-Daten")
               )
-            )
-          )
-
-          ;; Aendern: Settings auf bestehende Bloecke anwenden?
-          (if (= dlg-action "update")
-            (progn
-              (SBZ:log-write "INFO" "Aendern: Bestehende Bloecke aktualisieren")
-              (setq count (SBZ:update-existing-blocks))
-              (princ (strcat "\n" (itoa count) " Bloecke aktualisiert (Schriftart, Farben, Layer)."))
             )
           )
         )
