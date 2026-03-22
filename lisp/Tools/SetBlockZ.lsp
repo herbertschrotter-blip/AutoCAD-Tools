@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.18.4
+;;; Version: 1.18.5
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -35,7 +35,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.18.4")
+(setq *SBZ:version* "1.18.5")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -1915,62 +1915,6 @@
 ;;; ============================================================================
 
 ;;; ----------------------------------------------------------------------------
-;;; SBZ:get-polygon-points
-;;; User zeichnet eine temporaere geschlossene Polylinie (PLINE command)
-;;; Die Vertices werden ausgelesen, dann wird die Polylinie geloescht.
-;;; Verwendet command statt getpoint → kein Input-Buffer Konflikt!
-;;; Rueckgabe: Liste von 2D-Punkten oder nil
-;;; ----------------------------------------------------------------------------
-(defun SBZ:get-polygon-points ( / old-cmdecho old-osmode ent pts)
-  ;; Systemvariablen sichern
-  (setq old-cmdecho (getvar "CMDECHO"))
-  (setq old-osmode (getvar "OSMODE"))
-  (setvar "CMDECHO" 1)  ;; Sichtbar fuer User
-  (setvar "OSMODE" 0)   ;; Kein OSNAP bei Bereichs-Zeichnung
-  ;; User zeichnet Polylinie — command wartet auf User-Input
-  (princ "\nAuswahlbereich zeichnen (min. 3 Punkte, C=Schliessen): ")
-  (command "._PLINE")
-  ;; PLINE laeuft interaktiv bis User Enter oder C drueckt
-  (while (> (getvar "CMDACTIVE") 0) (command pause))
-  ;; Letzte Entity = die Polylinie
-  (setq ent (entlast))
-  (setvar "CMDECHO" old-cmdecho)
-  (setvar "OSMODE" old-osmode)
-  ;; Pruefen ob es eine LWPOLYLINE ist
-  (if (and ent (= (cdr (assoc 0 (entget ent))) "LWPOLYLINE"))
-    (progn
-      ;; Vertices aus LWPOLYLINE lesen (DXF 10 = Vertex-Punkt)
-      (setq pts nil)
-      (foreach item (entget ent)
-        (if (= (car item) 10)
-          (setq pts (cons (list (cadr item) (caddr item)) pts))
-        )
-      )
-      (setq pts (reverse pts))
-      ;; Polylinie loeschen (temporaer)
-      (entdel ent)
-      ;; Mindestens 3 Punkte?
-      (if (>= (length pts) 3)
-        (progn
-          (SBZ:log-write "INFO"
-            (strcat "Polygon: " (itoa (length pts)) " Punkte"))
-          pts
-        )
-        (progn
-          (princ "\nMindestens 3 Punkte noetig.")
-          nil
-        )
-      )
-    )
-    (progn
-      (SBZ:log-write "WARN" "Fenster: Keine gueltige Polylinie erstellt")
-      nil
-    )
-  )
-)
-
-
-;;; ----------------------------------------------------------------------------
 ;;; c:SETBLOCKZ - Hauptbefehl
 ;;; Workflow:
 ;;;   1. Block anklicken → Blockname + Attribute ermitteln
@@ -1982,7 +1926,7 @@
 (defun c:SETBLOCKZ ( / *error* old-cmdecho
                        sel blk-ent blk-name attr-tags selected-attr
                        bau0 bau0-input bau0-str dwg-bau0 ss-preview ss-work
-                       ss-filtered i ent ent-data poly-pts temp-ent
+                       ss-filtered i ent ent-data
                        num-found confirm sel-mode
                        z-mode count group-name)
   (SBZ:ensure-init)
@@ -2122,11 +2066,11 @@
                             (strcat (itoa num-found) " Bloecke '" blk-name "' im Modelspace"))
 
                           ;; Auswahl-Modus abfragen
-                          (initget "Fortfahren Waehlen Fenster Abbruch")
+                          (initget "Fortfahren Waehlen Abbruch")
                           (setq sel-mode
                             (getkword
                               (strcat "\n" (itoa num-found) " Bloecke '" blk-name
-                                      "' gefunden. [Fortfahren/Waehlen/Fenster/Abbruch] <Fortfahren>: ")))
+                                      "' gefunden. [Fortfahren/Waehlen/Abbruch] <Fortfahren>: ")))
                           (if (not sel-mode) (setq sel-mode "Fortfahren"))
                           (SBZ:log-write "INFO" (strcat "Auswahl-Modus: " sel-mode))
 
@@ -2175,69 +2119,6 @@
                                 (progn
                                   (princ "\nKeine Objekte gewaehlt.")
                                   (SBZ:log-write "INFO" "Waehlen: Keine Auswahl")
-                                  (setq ss-work nil)
-                                )
-                              )
-                            )
-
-                            ;; --- FENSTER: User zeichnet Polylinie, Bloecke darin waehlen ---
-                            ((= sel-mode "Fenster")
-                              (princ "\nPolylinie zeichnen (Punkte klicken, C = schliessen): ")
-                              ;; User zeichnet temporaere geschlossene Polylinie
-                              ;; command startet eigenen Input-Modus → kein Buffer-Problem!
-                              (command "._PLINE")
-                              ;; Warte bis PLINE-Befehl fertig
-                              (while (> (getvar "CMDACTIVE") 0) (command ""))
-                              ;; Letzte Entity = die gezeichnete Polylinie
-                              (setq temp-ent (entlast))
-                              (if (and temp-ent
-                                       (wcmatch (cdr (assoc 0 (entget temp-ent)))
-                                                "LWPOLYLINE,POLYLINE"))
-                                (progn
-                                  ;; Vertices sammeln
-                                  (setq poly-pts nil)
-                                  (setq ent-data (entget temp-ent))
-                                  (foreach item ent-data
-                                    (if (= (car item) 10)
-                                      (setq poly-pts
-                                        (cons (list (car (cdr item)) (cadr (cdr item))) poly-pts))
-                                    )
-                                  )
-                                  (setq poly-pts (reverse poly-pts))
-                                  (SBZ:log-write "INFO"
-                                    (strcat "Fenster: Polylinie mit "
-                                            (itoa (length poly-pts)) " Punkten"))
-                                  ;; Polylinie loeschen (war nur temporaer)
-                                  (entdel temp-ent)
-                                  ;; Bloecke innerhalb Polygon waehlen
-                                  (if (>= (length poly-pts) 3)
-                                    (progn
-                                      (setq ss-work
-                                        (ssget "_CP" poly-pts
-                                          (list (cons 0 "INSERT")
-                                                (cons 2 blk-name)
-                                                (cons 410 "Model"))))
-                                      (if ss-work
-                                        (SBZ:log-write "INFO"
-                                          (strcat "Fenster: " (itoa (sslength ss-work))
-                                                  " Bloecke gewaehlt"))
-                                        (progn
-                                          (princ "\nKeine Bloecke im Bereich.")
-                                          (SBZ:log-write "INFO"
-                                            "Fenster: Keine Bloecke im Bereich")
-                                        )
-                                      )
-                                    )
-                                    (progn
-                                      (princ "\nMindestens 3 Punkte noetig.")
-                                      (SBZ:log-write "WARN"
-                                        "Fenster: Weniger als 3 Punkte")
-                                    )
-                                  )
-                                )
-                                (progn
-                                  (princ "\nKeine gueltige Polylinie erstellt.")
-                                  (SBZ:log-write "WARN" "Fenster: Keine Polylinie")
                                   (setq ss-work nil)
                                 )
                               )
