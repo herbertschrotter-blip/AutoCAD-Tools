@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.8.2
+;;; Version: 1.9.0
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -34,7 +34,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.8.2")
+(setq *SBZ:version* "1.9.0")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -45,6 +45,7 @@
 (setq *SBZ:cp-attrtag* "SetBlockZ_AttrTag")
 (setq *SBZ:cp-scale* "SetBlockZ_Scale")
 (setq *SBZ:cp-suffix* "SetBlockZ_Suffix")
+(setq *SBZ:cp-font* "SetBlockZ_Font")
 
 
 ;;; ============================================================================
@@ -65,6 +66,7 @@
 (setq *SBZ:cfg-freeze-abs* 0)       ;; AttABS Layer einfrieren (0=sichtbar, 1=gefroren)
 (setq *SBZ:cfg-freeze-rel* 0)       ;; AttREL Layer einfrieren (0=sichtbar, 1=gefroren)
 (setq *SBZ:cfg-freeze-bau0* 1)      ;; AttBAU0 Layer einfrieren (0=sichtbar, 1=gefroren)
+(setq *SBZ:cfg-font* "Arial")       ;; Schriftart fuer Attribute (TTF-Name)
 
 
 ;;; ============================================================================
@@ -197,6 +199,7 @@
               ((= key "FREEZEABS") (setq *SBZ:cfg-freeze-abs* (atoi val)))
               ((= key "FREEZEREL") (setq *SBZ:cfg-freeze-rel* (atoi val)))
               ((= key "FREEZEBAU0")(setq *SBZ:cfg-freeze-bau0* (atoi val)))
+              ((= key "FONT")      (setq *SBZ:cfg-font* val))
             )
           )
         )
@@ -230,6 +233,7 @@
       (write-line (strcat "FREEZEABS=" (itoa *SBZ:cfg-freeze-abs*)) fp)
       (write-line (strcat "FREEZEREL=" (itoa *SBZ:cfg-freeze-rel*)) fp)
       (write-line (strcat "FREEZEBAU0=" (itoa *SBZ:cfg-freeze-bau0*)) fp)
+      (write-line (strcat "FONT=" *SBZ:cfg-font*) fp)
       (close fp)
       (SBZ:log-write "INFO" (strcat "Config gespeichert: " cfg-path))
     )
@@ -374,6 +378,21 @@
 (defun SBZ:set-suffix (s)
   (SBZ:set-custom-prop *SBZ:cp-suffix* s)
   (SBZ:log-write "INFO" (strcat "Suffix gespeichert: '" s "'"))
+)
+
+;;; Schriftart lesen (String, Default "Arial")
+(defun SBZ:get-font ( / val)
+  (setq val (SBZ:get-custom-prop *SBZ:cp-font*))
+  (if (and val (/= val ""))
+    val
+    *SBZ:cfg-font*
+  )
+)
+
+;;; Schriftart schreiben
+(defun SBZ:set-font (f)
+  (SBZ:set-custom-prop *SBZ:cp-font* f)
+  (SBZ:log-write "INFO" (strcat "Schriftart gespeichert: '" f "'"))
 )
 
 
@@ -543,6 +562,36 @@
 ;;; ============================================================================
 ;;; BLOCK-VERARBEITUNG
 ;;; ============================================================================
+
+;;; ----------------------------------------------------------------------------
+;;; SBZ:ensure-textstyle
+;;; Erstellt einen Text Style fuer die angegebene TTF-Schriftart
+;;; Style-Name: "SBZ_<FontName>" (z.B. "SBZ_Arial")
+;;; Parameter: font-name - TTF-Schriftname (z.B. "Arial")
+;;; Rueckgabe: Style-Name (String)
+;;; ----------------------------------------------------------------------------
+(defun SBZ:ensure-textstyle (font-name / style-name doc styles style-obj)
+  (setq style-name (strcat "SBZ_" font-name))
+  (setq doc (vla-get-activedocument (vlax-get-acad-object)))
+  (setq styles (vla-get-textstyles doc))
+  ;; Pruefen ob Style schon existiert
+  (if (vl-catch-all-error-p
+        (vl-catch-all-apply 'vla-item (list styles style-name)))
+    ;; Nicht vorhanden → erstellen
+    (progn
+      (setq style-obj (vla-add styles style-name))
+      ;; TTF-Dateiname setzen (AutoCAD sucht automatisch in Fonts-Ordner)
+      (vl-catch-all-apply 'vla-put-fontFile
+        (list style-obj (strcat font-name ".ttf")))
+      (SBZ:log-write "INFO"
+        (strcat "Text Style erstellt: '" style-name
+                "' → " font-name ".ttf"))
+    )
+    (SBZ:log-write "DEBUG"
+      (strcat "Text Style '" style-name "' existiert bereits"))
+  )
+  style-name
+)
 
 ;;; ----------------------------------------------------------------------------
 ;;; SBZ:get-attr-tags
@@ -864,8 +913,10 @@
 ;;; Parameter: blk-name - Blockname (String)
 ;;; Rueckgabe: T wenn vorhanden/erstellt, nil bei Fehler
 ;;; ----------------------------------------------------------------------------
-(defun SBZ:ensure-copyblock-def (blk-name / blocks blk-exists)
+(defun SBZ:ensure-copyblock-def (blk-name / blocks blk-exists style-name)
   (setq blocks (vla-get-blocks (vla-get-activedocument (vlax-get-acad-object))))
+  ;; Text Style fuer Schriftart sicherstellen
+  (setq style-name (SBZ:ensure-textstyle (SBZ:get-font)))
   ;; Pruefen ob Block schon existiert
   (setq blk-exists
     (not (vl-catch-all-error-p
@@ -918,6 +969,7 @@
           (entmake (list '(0 . "ATTDEF")
                         '(8 . "0")
                         '(62 . 0) '(6 . "ByBlock") '(370 . -2)
+                        (cons 7 style-name)    ;; Text Style (Schriftart)
                         '(10 0.1 0.02 0.0)    ;; Startpunkt (Y = halbe Texthoehe ueber Mitte)
                         '(11 0.1 0.02 0.0)    ;; Ausrichtungspunkt
                         '(40 . 0.07)          ;; Texthoehe (wird beim Insert skaliert)
@@ -934,6 +986,7 @@
           (entmake (list '(0 . "ATTDEF")
                         '(8 . "0")
                         '(62 . 0) '(6 . "ByBlock") '(370 . -2)
+                        (cons 7 style-name)
                         '(10 0.1 -0.02 0.0)
                         '(11 0.1 -0.02 0.0)
                         '(40 . 0.07)
@@ -951,6 +1004,7 @@
           (entmake (list '(0 . "ATTDEF")
                         '(8 . "0")
                         '(62 . 0) '(6 . "ByBlock") '(370 . -2)
+                        (cons 7 style-name)
                         '(10 0.1 -0.14 0.0)
                         '(11 0.1 -0.14 0.0)
                         '(40 . 0.07)
@@ -1089,7 +1143,7 @@
 ;;; ----------------------------------------------------------------------------
 (defun SBZ:insert-copyblock (orig-ent blk-name abs-h rel-z ins-z bau0 z-mode
                              / orig-data orig-pt ins-pt new-ent attrs
-                               scale suffix copy-layer
+                               scale suffix copy-layer style-name
                                abs-str rel-str bau0-str tag-str
                                att-ent att-data)
   ;; XY vom Original, Z = je nach Modus (ABS oder REL)
@@ -1099,6 +1153,8 @@
   ;; Einstellungen lesen
   (setq scale (SBZ:get-scale))
   (setq suffix (SBZ:get-suffix))
+  ;; Text Style sicherstellen
+  (setq style-name (SBZ:ensure-textstyle (SBZ:get-font)))
   ;; Layer + Attribut-Sub-Layer erstellen
   (setq copy-layer (SBZ:get-copy-layername z-mode bau0))
   (SBZ:ensure-attr-layers copy-layer)
@@ -1147,6 +1203,7 @@
           ((= tag-str "HOEHE_ABS")
             (setq att-data (subst (cons 1 abs-str) (assoc 1 att-data) att-data))
             (setq att-data (subst (cons 70 0) (assoc 70 att-data) att-data))
+            (setq att-data (subst (cons 7 style-name) (assoc 7 att-data) att-data))
             (setq att-data (subst (cons 8 (strcat copy-layer "-AttABS"))
                                   (assoc 8 att-data) att-data))
             (entmod att-data) (entupd att-ent)
@@ -1154,6 +1211,7 @@
           ((= tag-str "HOEHE_REL")
             (setq att-data (subst (cons 1 rel-str) (assoc 1 att-data) att-data))
             (setq att-data (subst (cons 70 0) (assoc 70 att-data) att-data))
+            (setq att-data (subst (cons 7 style-name) (assoc 7 att-data) att-data))
             (setq att-data (subst (cons 8 (strcat copy-layer "-AttREL"))
                                   (assoc 8 att-data) att-data))
             (entmod att-data) (entupd att-ent)
@@ -1161,6 +1219,7 @@
           ((= tag-str "HOEHE_BAU0")
             (setq att-data (subst (cons 1 bau0-str) (assoc 1 att-data) att-data))
             (setq att-data (subst (cons 70 0) (assoc 70 att-data) att-data))
+            (setq att-data (subst (cons 7 style-name) (assoc 7 att-data) att-data))
             (setq att-data (subst (cons 8 (strcat copy-layer "-AttBAU0"))
                                   (assoc 8 att-data) att-data))
             (entmod att-data) (entupd att-ent)
@@ -1489,6 +1548,11 @@
   (write-line "        edit_width = 14;" fp)
   (write-line "      }" fp)
   (write-line "    }" fp)
+  (write-line "    : edit_box {" fp)
+  (write-line "      key = \"font\";" fp)
+  (write-line "      label = \"Schriftart (TTF):\";" fp)
+  (write-line "      edit_width = 18;" fp)
+  (write-line "    }" fp)
   (write-line "    spacer;" fp)
   (write-line "    : text { value = \"Attribut-Layer einfrieren:\"; }" fp)
   (write-line "    : row {" fp)
@@ -1547,6 +1611,7 @@
   (mode_tile "copyblock" mode)
   (mode_tile "scale" mode)
   (mode_tile "suffix" mode)
+  (mode_tile "font" mode)
   (mode_tile "copylayer" mode)
   (mode_tile "freezeabs" mode)
   (mode_tile "freezerel" mode)
@@ -1560,7 +1625,7 @@
                          last-blk last-attr
                          dlg-bau0 dlg-byblock dlg-movelayer dlg-layer-idx
                          dlg-copymode dlg-copyblock dlg-scale dlg-suffix
-                         dlg-copylayer dlg-freezeabs dlg-freezerel dlg-freezebau0
+                         dlg-copylayer dlg-font dlg-freezeabs dlg-freezerel dlg-freezebau0
                          dlg-action result count)
   (SBZ:ensure-init)
   (defun *error* (msg)
@@ -1639,6 +1704,7 @@
       (setq suffix (SBZ:get-suffix))
       (set_tile "scale" (rtos scale 2 4))
       (set_tile "suffix" suffix)
+      (set_tile "font" (SBZ:get-font))
       (set_tile "freezeabs" (itoa *SBZ:cfg-freeze-abs*))
       (set_tile "freezerel" (itoa *SBZ:cfg-freeze-rel*))
       (set_tile "freezebau0" (itoa *SBZ:cfg-freeze-bau0*))
@@ -1666,6 +1732,8 @@
           "(setq dlg-copyblock (get_tile \"copyblock\"))"
           "(setq dlg-scale (get_tile \"scale\"))"
           "(setq dlg-suffix (get_tile \"suffix\"))"
+          
+          "(setq dlg-font (get_tile \"font\"))"
           "(setq dlg-copylayer (get_tile \"copylayer\"))"
           "(setq dlg-freezeabs (get_tile \"freezeabs\"))"
           "(setq dlg-freezerel (get_tile \"freezerel\"))"
@@ -1686,6 +1754,8 @@
           "(setq dlg-copyblock (get_tile \"copyblock\"))"
           "(setq dlg-scale (get_tile \"scale\"))"
           "(setq dlg-suffix (get_tile \"suffix\"))"
+          
+          "(setq dlg-font (get_tile \"font\"))"
           "(setq dlg-copylayer (get_tile \"copylayer\"))"
           "(setq dlg-freezeabs (get_tile \"freezeabs\"))"
           "(setq dlg-freezerel (get_tile \"freezerel\"))"
@@ -1744,6 +1814,13 @@
           ;; Suffix in DWG Custom Property speichern
           (if dlg-suffix
             (SBZ:set-suffix dlg-suffix)
+          )
+          ;; Schriftart in DWG Custom Property + Config speichern
+          (if (and dlg-font (/= dlg-font ""))
+            (progn
+              (setq *SBZ:cfg-font* dlg-font)
+              (SBZ:set-font dlg-font)
+            )
           )
           ;; Kopie-Layer speichern
           (if (and dlg-copylayer (/= dlg-copylayer ""))
