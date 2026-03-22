@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.17.4
+;;; Version: 1.17.6
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -35,7 +35,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.17.4")
+(setq *SBZ:version* "1.17.6")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -1861,7 +1861,7 @@
 ;;; ----------------------------------------------------------------------------
 (defun c:SETBLOCKZ ( / *error* old-cmdecho
                        sel blk-ent blk-name attr-tags selected-attr
-                       bau0 bau0-input bau0-str ss-preview num-found confirm
+                       bau0 bau0-input bau0-str dwg-bau0 ss-preview num-found confirm
                        z-mode count group-name)
   (SBZ:ensure-init)
   ;; Lokaler Error-Handler
@@ -1936,6 +1936,8 @@
                   ;; --- Schritt 4: Bau-0-Hoehe ---
                   ;; Zuerst aus Custom Property lesen
                   (setq bau0 (SBZ:get-bau0))
+                  ;; DWG-Standard merken (fuer Gruppen-Vergleich spaeter)
+                  (setq dwg-bau0 (if bau0 bau0 0.0))
                   (if bau0
                     ;; Custom Property vorhanden → anzeigen, aenderbar
                     (progn
@@ -2070,8 +2072,13 @@
                                   (princ (strcat "\n" (itoa count) " Bloecke verarbeitet."))
 
                                   ;; Gruppe als XRecord speichern
-                                  ;; Bau-0 immer als Gruppen-Wert speichern
-                                  (setq bau0-str (rtos bau0 2 3))
+                                  ;; Bau-0: nur als Gruppen-Wert wenn anders als DWG-Standard
+                                  (setq bau0-str
+                                    (if (equal bau0 dwg-bau0 0.001)
+                                      ""  ;; Gleich wie DWG-Standard → leer
+                                      (rtos bau0 2 3)  ;; Eigener Wert
+                                    )
+                                  )
                                   (SBZ:save-group group-name
                                     (SBZ:group-data-from-current
                                       blk-name selected-attr bau0-str z-mode group-name))
@@ -2323,6 +2330,11 @@
 (defun SBZ:reset-defaults ( / idx)
   ;; Zeichnung
   (set_tile "bau0" "0.000")
+  (set_tile "groupbau0" "")
+  (set_tile "usegroupbau0" "0")
+  (mode_tile "groupbau0" 1)
+  ;; Gruppe: zurueck auf "(keine Gruppe)"
+  (set_tile "group" "0")
   ;; Modus
   (set_tile "copymode" "1")
   ;; Block
@@ -2616,54 +2628,6 @@
       ;; --- Dialog geschlossen, Werte auswerten ---
       (if (and dlg-action (/= dlg-action "close"))
         (progn
-          ;; ALTEN Blocknamen merken BEVOR er ueberschrieben wird
-          ;; Noetig damit Aendern die alten Bloecke mit altem Namen findet
-          (setq old-copyblock *SBZ:cfg-copyblock*)
-          ;; Bau-0
-          (setq bau0 (atof (vl-string-subst "." "," dlg-bau0)))
-          (SBZ:set-bau0 bau0)
-          ;; Toggles
-          (setq *SBZ:cfg-copymode* (atoi dlg-copymode))
-          ;; Block-Settings
-          (if (and dlg-copyblock (/= dlg-copyblock ""))
-            (setq *SBZ:cfg-copyblock* dlg-copyblock))
-          (if (and dlg-copylayer (/= dlg-copylayer ""))
-            (setq *SBZ:cfg-copylayer* dlg-copylayer))
-          (if (and dlg-scale (/= dlg-scale ""))
-            (progn
-              (setq scale (atof dlg-scale))
-              (if (> scale 0.0) (SBZ:set-scale scale))))
-          (if dlg-suffix (SBZ:set-suffix dlg-suffix))
-          ;; Schriftart
-          (if (and dlg-font font-names)
-            (progn
-              (setq *SBZ:cfg-font* (nth (atoi dlg-font) font-names))
-              (SBZ:set-font *SBZ:cfg-font*)))
-          ;; Farben
-          (if dlg-colorblock
-            (setq *SBZ:cfg-color-block* (cdr (nth (atoi dlg-colorblock) block-colors))))
-          (if dlg-colorabs
-            (setq *SBZ:cfg-color-abs* (cdr (nth (atoi dlg-colorabs) attr-colors))))
-          (if dlg-colorrel
-            (setq *SBZ:cfg-color-rel* (cdr (nth (atoi dlg-colorrel) attr-colors))))
-          (if dlg-colorbau0
-            (setq *SBZ:cfg-color-bau0* (cdr (nth (atoi dlg-colorbau0) attr-colors))))
-          ;; Freeze
-          (setq *SBZ:cfg-freeze-abs* (atoi dlg-freezeabs))
-          (setq *SBZ:cfg-freeze-rel* (atoi dlg-freezerel))
-          (setq *SBZ:cfg-freeze-bau0* (atoi dlg-freezebau0))
-
-          ;; Logging
-          (SBZ:log-write "INFO"
-            (strcat "Settings gespeichert: Bau0=" (rtos bau0 2 3)
-                    " CopyMode=" (itoa *SBZ:cfg-copymode*)
-                    " Block='" *SBZ:cfg-copyblock* "'"
-                    " Font='" *SBZ:cfg-font* "'"))
-
-          ;; Config schreiben
-          (SBZ:save-config)
-          (princ "\nEinstellungen gespeichert.")
-
           ;; Gewaehlte Gruppe ermitteln
           (setq sel-group
             (if (and dlg-group (> (atoi dlg-group) 0) group-names)
@@ -2671,108 +2635,167 @@
               nil
             )
           )
+          ;; DWG Bau-0 aus Dialog lesen
+          (setq bau0 (atof (vl-string-subst "." "," dlg-bau0)))
 
-          ;; Wenn Gruppe gewaehlt: Gruppen-XRecord aktualisieren
-          (if sel-group
+          ;; =============================================================
+          ;; SPEICHERN: Globale Settings + Config-Datei + Gruppe (optional)
+          ;; =============================================================
+          (if (= dlg-action "save")
             (progn
-              ;; Gruppen-Bau0 bestimmen
-              (setq bau0-str
-                (if (= dlg-usegroupbau0 "1")
-                  dlg-groupbau0  ;; Eigener Wert
-                  ""             ;; Leer = DWG-Standard
+              ;; DWG Bau-0 als Custom Property speichern
+              (SBZ:set-bau0 bau0)
+              ;; Globale Variablen aus Dialog-Werten setzen
+              (setq *SBZ:cfg-copymode* (atoi dlg-copymode))
+              (if (and dlg-copyblock (/= dlg-copyblock ""))
+                (setq *SBZ:cfg-copyblock* dlg-copyblock))
+              (if (and dlg-copylayer (/= dlg-copylayer ""))
+                (setq *SBZ:cfg-copylayer* dlg-copylayer))
+              (if (and dlg-scale (/= dlg-scale ""))
+                (progn
+                  (setq scale (atof dlg-scale))
+                  (if (> scale 0.0) (SBZ:set-scale scale))))
+              (if dlg-suffix (SBZ:set-suffix dlg-suffix))
+              (if (and dlg-font font-names)
+                (progn
+                  (setq *SBZ:cfg-font* (nth (atoi dlg-font) font-names))
+                  (SBZ:set-font *SBZ:cfg-font*)))
+              (if dlg-colorblock
+                (setq *SBZ:cfg-color-block* (cdr (nth (atoi dlg-colorblock) block-colors))))
+              (if dlg-colorabs
+                (setq *SBZ:cfg-color-abs* (cdr (nth (atoi dlg-colorabs) attr-colors))))
+              (if dlg-colorrel
+                (setq *SBZ:cfg-color-rel* (cdr (nth (atoi dlg-colorrel) attr-colors))))
+              (if dlg-colorbau0
+                (setq *SBZ:cfg-color-bau0* (cdr (nth (atoi dlg-colorbau0) attr-colors))))
+              (setq *SBZ:cfg-freeze-abs* (atoi dlg-freezeabs))
+              (setq *SBZ:cfg-freeze-rel* (atoi dlg-freezerel))
+              (setq *SBZ:cfg-freeze-bau0* (atoi dlg-freezebau0))
+              ;; Config-Datei schreiben
+              (SBZ:save-config)
+              (SBZ:log-write "INFO" "Globale Settings + Config gespeichert")
+              (princ "\nEinstellungen gespeichert.")
+              ;; Wenn Gruppe gewaehlt: Gruppen-XRecord auch aktualisieren
+              (if sel-group
+                (progn
+                  (setq bau0-str
+                    (if (= dlg-usegroupbau0 "1") dlg-groupbau0 ""))
+                  (setq sel-group-data (SBZ:load-group sel-group))
+                  (SBZ:save-group sel-group
+                    (SBZ:group-data-from-current
+                      (if sel-group-data (cdr (assoc "QUELLBLOCK" sel-group-data)) "")
+                      (if sel-group-data (cdr (assoc "ATTRTAG" sel-group-data)) "")
+                      bau0-str
+                      (if sel-group-data (cdr (assoc "ZMODE" sel-group-data)) "REL")
+                      sel-group))
+                  (SBZ:log-write "INFO"
+                    (strcat "Gruppe '" sel-group "' XRecord aktualisiert"))
+                  (princ (strcat "\nGruppe '" sel-group "' aktualisiert."))
                 )
               )
-              ;; Gruppen-Settings laden (fuer QuellBlock, AttrTag, ZMode)
-              (setq sel-group-data (SBZ:load-group sel-group))
-              ;; XRecord aktualisieren mit aktuellen Dialog-Werten
-              (SBZ:save-group sel-group
-                (SBZ:group-data-from-current
-                  (if sel-group-data (cdr (assoc "QUELLBLOCK" sel-group-data)) "")
-                  (if sel-group-data (cdr (assoc "ATTRTAG" sel-group-data)) "")
-                  bau0-str
-                  (if sel-group-data (cdr (assoc "ZMODE" sel-group-data)) "REL")
-                  sel-group
-                )
-              )
-              (SBZ:log-write "INFO" (strcat "Gruppe '" sel-group "' XRecord aktualisiert"))
             )
           )
 
-          ;; Aendern? → Gruppen-Bloecke loeschen + neu erstellen
+          ;; =============================================================
+          ;; AENDERN: NUR Gruppe aktualisieren + Bloecke neu erstellen
+          ;; Globale Variablen werden NICHT dauerhaft geaendert!
+          ;; =============================================================
           (if (= dlg-action "update")
             (if sel-group
-              ;; === GRUPPEN-MODUS: Gruppe loeschen + neu erstellen ===
+              ;; === GRUPPEN-MODUS: Gruppe aendern ===
               (progn
                 (setq sel-group-data (SBZ:load-group sel-group))
                 (if sel-group-data
                   (progn
                     (setq last-blk (cdr (assoc "QUELLBLOCK" sel-group-data)))
                     (setq last-attr (cdr (assoc "ATTRTAG" sel-group-data)))
+                    (setq bau0-str
+                      (if (= dlg-usegroupbau0 "1") dlg-groupbau0 ""))
                     (SBZ:log-write "INFO"
                       (strcat "Aendern Gruppe '" sel-group "': Block='"
                               last-blk "' Attr='" last-attr "'"))
-                    ;; 1. Alle Entities dieser Gruppe loeschen (via XData)
-                    (setq count (SBZ:delete-group sel-group))
-                    ;; 2. Gruppe neu speichern (wurde oben schon gemacht, delete hat es geloescht)
-                    (setq bau0-str
-                      (if (= dlg-usegroupbau0 "1") dlg-groupbau0 ""))
+
+                    ;; Globale Variablen SICHERN
+                    (setq old-copyblock *SBZ:cfg-copyblock*)
+                    (setq *save-copylayer* *SBZ:cfg-copylayer*)
+                    (setq *save-font* *SBZ:cfg-font*)
+                    (setq *save-color-block* *SBZ:cfg-color-block*)
+                    (setq *save-color-abs* *SBZ:cfg-color-abs*)
+                    (setq *save-color-rel* *SBZ:cfg-color-rel*)
+                    (setq *save-color-bau0* *SBZ:cfg-color-bau0*)
+                    (setq *save-freeze-abs* *SBZ:cfg-freeze-abs*)
+                    (setq *save-freeze-rel* *SBZ:cfg-freeze-rel*)
+                    (setq *save-freeze-bau0* *SBZ:cfg-freeze-bau0*)
+
+                    ;; Dialog-Werte TEMPORAER in globale Vars laden
+                    (if (and dlg-copylayer (/= dlg-copylayer ""))
+                      (setq *SBZ:cfg-copylayer* dlg-copylayer))
+                    (if (and dlg-font font-names)
+                      (progn
+                        (setq *SBZ:cfg-font* (nth (atoi dlg-font) font-names))
+                        (SBZ:set-font *SBZ:cfg-font*)))
+                    (if dlg-colorblock
+                      (setq *SBZ:cfg-color-block* (cdr (nth (atoi dlg-colorblock) block-colors))))
+                    (if dlg-colorabs
+                      (setq *SBZ:cfg-color-abs* (cdr (nth (atoi dlg-colorabs) attr-colors))))
+                    (if dlg-colorrel
+                      (setq *SBZ:cfg-color-rel* (cdr (nth (atoi dlg-colorrel) attr-colors))))
+                    (if dlg-colorbau0
+                      (setq *SBZ:cfg-color-bau0* (cdr (nth (atoi dlg-colorbau0) attr-colors))))
+                    (setq *SBZ:cfg-freeze-abs* (atoi dlg-freezeabs))
+                    (setq *SBZ:cfg-freeze-rel* (atoi dlg-freezerel))
+                    (setq *SBZ:cfg-freeze-bau0* (atoi dlg-freezebau0))
+                    (if (and dlg-scale (/= dlg-scale ""))
+                      (SBZ:set-scale (atof dlg-scale)))
+                    (if dlg-suffix (SBZ:set-suffix dlg-suffix))
+
+                    ;; 1. Alte Entities dieser Gruppe loeschen
+                    (SBZ:delete-group sel-group)
+
+                    ;; 2. Gruppen-XRecord mit Dialog-Werten speichern
                     (SBZ:save-group sel-group
                       (SBZ:group-data-from-current
                         last-blk last-attr bau0-str
                         (cdr (assoc "ZMODE" sel-group-data))
-                        sel-group
-                      )
-                    )
-                    ;; 3. Bau-0 fuer process-blocks: Gruppen-Bau0 oder DWG-Standard
+                        sel-group))
+
+                    ;; 3. Bau-0 fuer process-blocks bestimmen
                     (if (and (= dlg-usegroupbau0 "1")
                              dlg-groupbau0 (/= dlg-groupbau0 ""))
                       (setq bau0 (atof (vl-string-subst "." "," dlg-groupbau0)))
                     )
-                    ;; 4. Neu erstellen
+
+                    ;; 4. Bloecke neu erstellen
                     (setq count
                       (SBZ:process-blocks last-blk last-attr bau0
                         (cdr (assoc "ZMODE" sel-group-data)) sel-group))
-                    (princ (strcat "\n" (itoa count) " Bloecke in Gruppe '" sel-group "' neu erstellt."))
+                    (princ (strcat "\n" (itoa count) " Bloecke in Gruppe '"
+                                   sel-group "' neu erstellt."))
+
+                    ;; 5. Globale Variablen WIEDERHERSTELLEN
+                    (setq *SBZ:cfg-copyblock* old-copyblock)
+                    (setq *SBZ:cfg-copylayer* *save-copylayer*)
+                    (setq *SBZ:cfg-font* *save-font*)
+                    (setq *SBZ:cfg-color-block* *save-color-block*)
+                    (setq *SBZ:cfg-color-abs* *save-color-abs*)
+                    (setq *SBZ:cfg-color-rel* *save-color-rel*)
+                    (setq *SBZ:cfg-color-bau0* *save-color-bau0*)
+                    (setq *SBZ:cfg-freeze-abs* *save-freeze-abs*)
+                    (setq *SBZ:cfg-freeze-rel* *save-freeze-rel*)
+                    (setq *SBZ:cfg-freeze-bau0* *save-freeze-bau0*)
+                    (SBZ:log-write "INFO" "Globale Settings wiederhergestellt")
                   )
                   (progn
                     (princ "\nGruppen-Daten nicht gefunden.")
-                    (SBZ:log-write "ERROR" (strcat "Gruppe '" sel-group "' Daten nicht lesbar"))
+                    (SBZ:log-write "ERROR"
+                      (strcat "Gruppe '" sel-group "' Daten nicht lesbar"))
                   )
                 )
               )
-              ;; === KEIN GRUPPEN-MODUS: Altes Verhalten (ohne Gruppe) ===
-              (if (and last-blk last-attr)
-                (progn
-                  (SBZ:log-write "INFO"
-                    (strcat "Aendern ohne Gruppe: Block='"
-                            last-blk "' Attr='" last-attr "'"))
-                  ;; 1. Alte Kopie-Bloecke loeschen (mit ALTEM Blocknamen!)
-                  (setq count 0)
-                  (setq ss (ssget "X" (list (cons 2 old-copyblock) (cons 410 "Model"))))
-                  (if (and ss (> (sslength ss) 0))
-                    (progn
-                      (setq count (sslength ss))
-                      (command "._erase" ss "")
-                      (SBZ:log-write "INFO" (strcat (itoa count) " alte Bloecke geloescht"))
-                    )
-                  )
-                  ;; 2. Block-Definition purgen
-                  (setq blocks (vla-get-blocks
-                    (vla-get-activedocument (vlax-get-acad-object))))
-                  (if (not (vl-catch-all-error-p
-                        (setq blk-def (vl-catch-all-apply 'vla-item
-                          (list blocks old-copyblock)))))
-                    (vl-catch-all-apply 'vla-delete (list blk-def))
-                  )
-                  ;; 3. Neu erstellen
-                  (setq count (SBZ:process-blocks last-blk last-attr bau0 "REL" nil))
-                  (princ (strcat "\n" (itoa count) " Bloecke neu erstellt."))
-                )
-                (progn
-                  (princ "\nAendern nicht moeglich: Kein Block/Attribut gespeichert.")
-                  (princ "\nFuehre zuerst SETBLOCKZ aus.")
-                  (SBZ:log-write "WARN" "Aendern: Keine gespeicherten Block/Attr-Daten")
-                )
+              ;; === KEINE GRUPPE GEWAEHLT: Hinweis ===
+              (progn
+                (princ "\nAendern: Bitte zuerst eine Gruppe waehlen.")
+                (SBZ:log-write "WARN" "Aendern ohne Gruppe nicht moeglich")
               )
             )
           )
