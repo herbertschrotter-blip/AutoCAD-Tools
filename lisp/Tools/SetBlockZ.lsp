@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.19.0
+;;; Version: 1.19.1
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -35,7 +35,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.19.0")
+(setq *SBZ:version* "1.19.1")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -778,22 +778,32 @@
 ;;; Loescht: Basis-Layer + _abs/_rel Varianten + Attribut-Sub-Layer
 ;;; Parameter: group-data - Assoziationsliste der Gruppe
 ;;; ----------------------------------------------------------------------------
-(defun SBZ:cleanup-group-layers (group-data / base-layer zmode layer-names
+(defun SBZ:cleanup-group-layers (group-data / base-layer group-name vlay layer-names
                                               doc layers lay-obj lay-name)
   (setq base-layer (cdr (assoc "COPYLAYER" group-data)))
-  (setq zmode (cdr (assoc "ZMODE" group-data)))
+  ;; Gruppenname aus COPYBLOCK ableiten (letzter Teil nach letztem _)
+  ;; Oder direkt aus group-data lesen wenn vorhanden
+  (setq group-name (cdr (assoc "GROUPNAME" group-data)))
   (if (not base-layer) (setq base-layer ""))
-  (if (= base-layer "") nil ;; Kein Layer → nichts zu tun
+  (if (= base-layer "") nil
     (progn
-      ;; Alle moeglichen Layer-Namen dieser Gruppe sammeln
+      ;; V_<Layer>_<Gruppenname> + Attribut-Sub-Layer
+      (setq vlay
+        (if (and group-name (/= group-name ""))
+          (strcat "V_" base-layer "_" group-name)
+          (strcat "V_" base-layer)
+        )
+      )
       (setq layer-names
         (list
+          vlay
+          (strcat vlay "-AttABS")
+          (strcat vlay "-AttREL")
+          (strcat vlay "-AttBAU0")
+          ;; Auch alte Layer-Formate aufraeumen (vor v1.19.1)
           base-layer
           (strcat base-layer "_abs")
           (strcat base-layer "_rel")
-          (strcat base-layer "-AttABS")
-          (strcat base-layer "-AttREL")
-          (strcat base-layer "-AttBAU0")
           (strcat base-layer "_abs-AttABS")
           (strcat base-layer "_abs-AttREL")
           (strcat base-layer "_abs-AttBAU0")
@@ -805,18 +815,14 @@
       (setq doc (vla-get-activedocument (vlax-get-acad-object)))
       (setq layers (vla-get-layers doc))
       (foreach lay-name layer-names
-        ;; Pruefen ob Layer existiert
         (if (not (vl-catch-all-error-p
               (setq lay-obj (vl-catch-all-apply 'vla-item (list layers lay-name)))))
           (progn
-            ;; Pruefen ob Layer leer ist (keine Entities)
             (if (not (ssget "X" (list (cons 8 lay-name))))
-              ;; Layer ist leer → loeschen
               (if (not (vl-catch-all-error-p
                     (vl-catch-all-apply 'vla-delete (list lay-obj))))
                 (SBZ:log-write "INFO"
                   (strcat "Leerer Layer '" lay-name "' geloescht"))
-                ;; Kann nicht geloescht werden (z.B. aktueller Layer)
                 (SBZ:log-write "DEBUG"
                   (strcat "Layer '" lay-name "' konnte nicht geloescht werden"))
               )
@@ -978,6 +984,7 @@
 ;;; ----------------------------------------------------------------------------
 (defun SBZ:group-data-from-current (quell-block attr-tag bau0-str z-mode group-name / )
   (list
+    (cons "GROUPNAME"  group-name)
     (cons "QUELLBLOCK" quell-block)
     (cons "ATTRTAG"    attr-tag)
     (cons "BAU0"       bau0-str)
@@ -1433,7 +1440,7 @@
                       ;; === KOPIE-MODUS: Original beibehalten, Kopie-Block einfuegen ===
                       (progn
                         (setq new-ent-name
-                          (SBZ:insert-copyblock ent copy-blk-name abs-h rel-z ins-z bau0 z-mode))
+                          (SBZ:insert-copyblock ent copy-blk-name abs-h rel-z ins-z bau0 z-mode group-name))
                         (if new-ent-name
                           (progn
                             ;; XData mit Gruppenname + Quell-Handle setzen
@@ -1758,19 +1765,19 @@
 
 ;;; ----------------------------------------------------------------------------
 ;;; SBZ:get-copy-layername
-;;; Berechnet den Layer-Namen mit Suffix je nach Z-Modus
+;;; Berechnet den Layer-Namen fuer Vermessungs-Hoehenpunkte
+;;; Format: V_<Layer>_<Gruppenname>
 ;;; Parameter:
-;;;   z-mode - "ABS" oder "REL"
-;;;   bau0   - Bau-0-Hoehe (Real)
-;;; Rueckgabe: Layer-Name (z.B. "GOK_abs", "GOK_rel", "GOK")
+;;;   z-mode     - "ABS" oder "REL" (nicht mehr fuer Layer-Name verwendet)
+;;;   bau0       - Bau-0-Hoehe (Real, nicht mehr fuer Layer-Name verwendet)
+;;;   group-name - Gruppenname (String, oder nil)
+;;; Rueckgabe: Layer-Name (z.B. "V_GOK_STAB137")
 ;;; ----------------------------------------------------------------------------
-(defun SBZ:get-copy-layername (z-mode bau0 / base)
+(defun SBZ:get-copy-layername (z-mode bau0 group-name / base)
   (setq base *SBZ:cfg-copylayer*)
-  (cond
-    ((equal bau0 0.0 0.001) base)                ;; Bau-0=0 → kein Suffix
-    ((= z-mode "ABS") (strcat base "_abs"))       ;; Absolut
-    ((= z-mode "REL") (strcat base "_rel"))       ;; Relativ
-    (T base)
+  (if (and group-name (/= group-name ""))
+    (strcat "V_" base "_" group-name)
+    (strcat "V_" base)
   )
 )
 
@@ -1779,16 +1786,17 @@
 ;;; SBZ:insert-copyblock
 ;;; Fuegt den Kopie-Block an der Position des Original-Blocks ein
 ;;; Parameter:
-;;;   orig-ent  - Entity-Name des Original-Blocks (ename)
-;;;   blk-name  - Name des Kopie-Blocks (String)
-;;;   abs-h     - Absolute Hoehe (Real, fuer Attribut-Text)
-;;;   rel-z     - Relative Hoehe nach Bau-0 (Real, fuer Attribut-Text)
-;;;   ins-z     - Z-Koordinate fuer Block-Insert (Real, ABS oder REL je nach Modus)
-;;;   bau0      - Bau-0-Hoehe (Real, fuer HOEHE_BAU0 Attribut)
-;;;   z-mode    - "ABS" oder "REL" (fuer Layer-Suffix)
-;;; Rueckgabe: T bei Erfolg, nil bei Fehler
+;;;   orig-ent    - Entity-Name des Original-Blocks (ename)
+;;;   blk-name    - Name des Kopie-Blocks (String)
+;;;   abs-h       - Absolute Hoehe (Real, fuer Attribut-Text)
+;;;   rel-z       - Relative Hoehe nach Bau-0 (Real, fuer Attribut-Text)
+;;;   ins-z       - Z-Koordinate fuer Block-Insert (Real, ABS oder REL je nach Modus)
+;;;   bau0        - Bau-0-Hoehe (Real, fuer HOEHE_BAU0 Attribut)
+;;;   z-mode      - "ABS" oder "REL"
+;;;   group-name  - Gruppenname (String oder nil, fuer Layer-Name)
+;;; Rueckgabe: VLA-Objekt bei Erfolg, nil bei Fehler
 ;;; ----------------------------------------------------------------------------
-(defun SBZ:insert-copyblock (orig-ent blk-name abs-h rel-z ins-z bau0 z-mode
+(defun SBZ:insert-copyblock (orig-ent blk-name abs-h rel-z ins-z bau0 z-mode group-name
                              / orig-data orig-pt ins-pt new-ent attrs
                                scale suffix copy-layer style-name
                                abs-str rel-str bau0-str tag-str
@@ -1802,8 +1810,8 @@
   (setq suffix (SBZ:get-suffix))
   ;; Text Style sicherstellen
   (setq style-name (SBZ:ensure-textstyle (SBZ:get-font)))
-  ;; Layer + Attribut-Sub-Layer erstellen
-  (setq copy-layer (SBZ:get-copy-layername z-mode bau0))
+  ;; Layer: V_<Layer>_<Gruppenname> + Attribut-Sub-Layer
+  (setq copy-layer (SBZ:get-copy-layername z-mode bau0 group-name))
   (SBZ:ensure-attr-layers copy-layer)
   ;; Block einfuegen
   (setq new-ent
