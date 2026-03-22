@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.18.0
+;;; Version: 1.18.1
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -35,7 +35,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.18.0")
+(setq *SBZ:version* "1.18.1")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -1939,39 +1939,6 @@
 
 
 ;;; ----------------------------------------------------------------------------
-;;; SBZ:select-by-polygon
-;;; Laesst User ein Polygon zeichnen und waehlt alle Bloecke innerhalb
-;;; Verwendet ssget "CP" (Crossing Polygon)
-;;; Parameter: blk-name - Blockname fuer Filter (String)
-;;; Rueckgabe: Selection Set oder nil
-;;; ----------------------------------------------------------------------------
-(defun SBZ:select-by-polygon (blk-name / pts pt-list ss)
-  (setq pts (SBZ:get-polygon-points))
-  (if pts
-    (progn
-      ;; Punkte als flache Liste fuer ssget "CP"
-      ;; ssget "CP" erwartet eine Punktliste
-      (setq ss (ssget "CP" pts
-        (list (cons 0 "INSERT") (cons 2 blk-name) (cons 410 "Model"))))
-      (if (and ss (> (sslength ss) 0))
-        (progn
-          (SBZ:log-write "INFO"
-            (strcat "Polygon-Auswahl: " (itoa (sslength ss))
-                    " Bloecke in " (itoa (length pts)) "-Punkt Polygon"))
-          ss
-        )
-        (progn
-          (SBZ:log-write "INFO" "Polygon-Auswahl: Keine Bloecke im Polygon")
-          nil
-        )
-      )
-    )
-    nil
-  )
-)
-
-
-;;; ----------------------------------------------------------------------------
 ;;; c:SETBLOCKZ - Hauptbefehl
 ;;; Workflow:
 ;;;   1. Block anklicken → Blockname + Attribute ermitteln
@@ -1983,6 +1950,7 @@
 (defun c:SETBLOCKZ ( / *error* old-cmdecho
                        sel blk-ent blk-name attr-tags selected-attr
                        bau0 bau0-input bau0-str dwg-bau0 ss-preview ss-work
+                       ss-filtered i ent ent-data poly-pts
                        num-found confirm sel-mode
                        z-mode count group-name)
   (SBZ:ensure-init)
@@ -2140,28 +2108,67 @@
 
                             ;; --- WAEHLEN: User waehlt einzeln oder Fenster ---
                             ((= sel-mode "Waehlen")
-                              (princ "\nBloecke waehlen (Klick oder Fenster, Enter zum Beenden): ")
-                              (setq ss-work
-                                (ssget (list (cons 0 "INSERT") (cons 2 blk-name) (cons 410 "Model"))))
-                              (if (not ss-work)
+                              (princ (strcat "\nBloecke '" blk-name "' waehlen (Klick/Fenster, Enter = Ende): "))
+                              ;; Interaktives ssget OHNE Filter (sonst kein Picking!)
+                              ;; AutoCAD zeigt nur INSERT-Entities als waehlbar
+                              (setq ss-work (ssget))
+                              ;; Nachtraeglich filtern: nur passende Bloecke behalten
+                              (if (and ss-work (> (sslength ss-work) 0))
                                 (progn
-                                  (princ "\nKeine Bloecke gewaehlt.")
+                                  ;; Neues SS mit nur passenden Bloecken
+                                  (setq ss-filtered (ssadd))
+                                  (setq i (sslength ss-work))
+                                  (while (> (setq i (1- i)) -1)
+                                    (setq ent (ssname ss-work i))
+                                    (setq ent-data (entget ent))
+                                    (if (and (= (cdr (assoc 0 ent-data)) "INSERT")
+                                             (= (strcase (cdr (assoc 2 ent-data))) (strcase blk-name))
+                                             (= (cdr (assoc 410 ent-data)) "Model"))
+                                      (ssadd ent ss-filtered)
+                                    )
+                                  )
+                                  (if (> (sslength ss-filtered) 0)
+                                    (progn
+                                      (setq ss-work ss-filtered)
+                                      (SBZ:log-write "INFO"
+                                        (strcat "Waehlen: " (itoa (sslength ss-work)) " passende Bloecke"))
+                                    )
+                                    (progn
+                                      (princ (strcat "\nKeine '" blk-name "' Bloecke in der Auswahl."))
+                                      (SBZ:log-write "INFO" "Waehlen: Keine passenden Bloecke in Auswahl")
+                                      (setq ss-work nil)
+                                    )
+                                  )
+                                )
+                                (progn
+                                  (princ "\nKeine Objekte gewaehlt.")
                                   (SBZ:log-write "INFO" "Waehlen: Keine Auswahl")
+                                  (setq ss-work nil)
                                 )
                               )
                             )
 
                             ;; --- FENSTER: Crossing-Polygon zeichnen ---
                             ((= sel-mode "Fenster")
-                              (princ "\nPunkte fuer Auswahlbereich klicken (Enter zum Schliessen): ")
-                              (setq ss-work
-                                (ssget "_CP"
-                                  (SBZ:get-polygon-points)
-                                  (list (cons 0 "INSERT") (cons 2 blk-name) (cons 410 "Model"))))
-                              (if (not ss-work)
+                              (setq poly-pts (SBZ:get-polygon-points))
+                              (if poly-pts
                                 (progn
-                                  (princ "\nKeine Bloecke im Bereich gefunden.")
-                                  (SBZ:log-write "INFO" "Fenster: Keine Bloecke im Bereich")
+                                  (setq ss-work
+                                    (ssget "_CP" poly-pts
+                                      (list (cons 0 "INSERT") (cons 2 blk-name) (cons 410 "Model"))))
+                                  (if (not ss-work)
+                                    (progn
+                                      (princ "\nKeine Bloecke im Bereich gefunden.")
+                                      (SBZ:log-write "INFO" "Fenster: Keine Bloecke im Bereich")
+                                    )
+                                    (SBZ:log-write "INFO"
+                                      (strcat "Fenster: " (itoa (sslength ss-work)) " Bloecke gewaehlt"))
+                                  )
+                                )
+                                (progn
+                                  (princ "\nKein gueltiges Polygon.")
+                                  (SBZ:log-write "INFO" "Fenster: Kein gueltiges Polygon")
+                                  (setq ss-work nil)
                                 )
                               )
                             )
