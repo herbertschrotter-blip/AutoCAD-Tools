@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.10.0
+;;; Version: 1.11.0
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -26,6 +26,7 @@
 ;;; Befehle:
 ;;; SETBLOCKZ    - Hauptbefehl: Blöcke nach Attribut auf Z setzen
 ;;; SBZSETTINGS  - Einstellungen (Bau-0, Toggles, Neuberechnung)
+;;; SBZPURGE     - Kopie-Blöcke löschen + Block-Definition purgen
 ;;; SBZDEBUG     - Debug-Modus ein/aus
 ;;; ============================================================================
 
@@ -34,7 +35,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.10.0")
+(setq *SBZ:version* "1.11.0")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -1264,6 +1265,112 @@
 )
 
 
+;;; ----------------------------------------------------------------------------
+;;; SBZ:update-existing-blocks
+;;; Aktualisiert alle bestehenden Kopie-Bloecke mit den aktuellen Settings:
+;;; Schriftart (DXF 7), Farbe (DXF 62), Layer (DXF 8), Block-Farbe
+;;; Aendert NICHT die Hoehenwerte — nur visuelle Einstellungen.
+;;; Rueckgabe: Anzahl aktualisierter Bloecke
+;;; ----------------------------------------------------------------------------
+(defun SBZ:update-existing-blocks ( / blk-name style-name ss i ent
+                                      blk-ref attrs att-ent att-data tag-str
+                                      copy-layer count)
+  (setq blk-name *SBZ:cfg-copyblock*)
+  (setq style-name (SBZ:ensure-textstyle (SBZ:get-font)))
+  (setq count 0)
+  ;; Alle Kopie-Bloecke im Modelspace suchen
+  (setq ss (ssget "X" (list (cons 2 blk-name) (cons 410 "Model"))))
+  (if (and ss (> (sslength ss) 0))
+    (progn
+      (SBZ:log-write "INFO"
+        (strcat "Update: " (itoa (sslength ss)) " '" blk-name "' Bloecke gefunden"))
+      ;; Dekrementierende Schleife
+      (setq i (sslength ss))
+      (while (> (setq i (1- i)) -1)
+        (setq ent (ssname ss i))
+        (setq blk-ref (vlax-ename->vla-object ent))
+        ;; Block-Farbe setzen
+        (vl-catch-all-apply 'vla-put-Color (list blk-ref *SBZ:cfg-color-block*))
+        ;; Attribute durchlaufen
+        (setq attrs (vlax-invoke blk-ref 'GetAttributes))
+        (foreach attr attrs
+          (setq tag-str (strcase (vla-get-TagString attr)))
+          (setq att-ent (vlax-vla-object->ename attr))
+          (setq att-data (entget att-ent))
+          ;; Layer-Name vom aktuellen Attribut-Layer ableiten
+          ;; Bestehender Layer = aktueller DXF 8 Wert → Basis extrahieren
+          (setq copy-layer (cdr (assoc 8 (entget ent))))
+          (cond
+            ((= tag-str "HOEHE_ABS")
+              ;; Schriftart
+              (if (assoc 7 att-data)
+                (setq att-data (subst (cons 7 style-name) (assoc 7 att-data) att-data))
+                (setq att-data (append att-data (list (cons 7 style-name))))
+              )
+              ;; Farbe
+              (if (/= *SBZ:cfg-color-abs* 0)
+                (if (assoc 62 att-data)
+                  (setq att-data (subst (cons 62 *SBZ:cfg-color-abs*) (assoc 62 att-data) att-data))
+                  (setq att-data (append att-data (list (cons 62 *SBZ:cfg-color-abs*))))
+                )
+                ;; Von Block: Farbe auf 0 (ByBlock)
+                (if (assoc 62 att-data)
+                  (setq att-data (subst (cons 62 0) (assoc 62 att-data) att-data))
+                )
+              )
+              ;; Layer
+              (setq att-data (subst (cons 8 (strcat copy-layer "-AttABS"))
+                                    (assoc 8 att-data) att-data))
+              (entmod att-data) (entupd att-ent)
+            )
+            ((= tag-str "HOEHE_REL")
+              (if (assoc 7 att-data)
+                (setq att-data (subst (cons 7 style-name) (assoc 7 att-data) att-data))
+                (setq att-data (append att-data (list (cons 7 style-name))))
+              )
+              (if (/= *SBZ:cfg-color-rel* 0)
+                (if (assoc 62 att-data)
+                  (setq att-data (subst (cons 62 *SBZ:cfg-color-rel*) (assoc 62 att-data) att-data))
+                  (setq att-data (append att-data (list (cons 62 *SBZ:cfg-color-rel*))))
+                )
+                (if (assoc 62 att-data)
+                  (setq att-data (subst (cons 62 0) (assoc 62 att-data) att-data))
+                )
+              )
+              (setq att-data (subst (cons 8 (strcat copy-layer "-AttREL"))
+                                    (assoc 8 att-data) att-data))
+              (entmod att-data) (entupd att-ent)
+            )
+            ((= tag-str "HOEHE_BAU0")
+              (if (assoc 7 att-data)
+                (setq att-data (subst (cons 7 style-name) (assoc 7 att-data) att-data))
+                (setq att-data (append att-data (list (cons 7 style-name))))
+              )
+              (if (/= *SBZ:cfg-color-bau0* 0)
+                (if (assoc 62 att-data)
+                  (setq att-data (subst (cons 62 *SBZ:cfg-color-bau0*) (assoc 62 att-data) att-data))
+                  (setq att-data (append att-data (list (cons 62 *SBZ:cfg-color-bau0*))))
+                )
+                (if (assoc 62 att-data)
+                  (setq att-data (subst (cons 62 0) (assoc 62 att-data) att-data))
+                )
+              )
+              (setq att-data (subst (cons 8 (strcat copy-layer "-AttBAU0"))
+                                    (assoc 8 att-data) att-data))
+              (entmod att-data) (entupd att-ent)
+            )
+          )
+        )
+        (setq count (1+ count))
+      )
+      (SBZ:log-write "INFO" (strcat "Update: " (itoa count) " Bloecke aktualisiert"))
+    )
+    (SBZ:log-write "INFO" (strcat "Update: Keine '" blk-name "' Bloecke gefunden"))
+  )
+  count
+)
+
+
 ;;; ============================================================================
 ;;; BEFEHLE
 ;;; ============================================================================
@@ -1685,6 +1792,13 @@
   (write-line "      : toggle { key = \"freezebau0\"; label = \"Bau-0\"; }" fp)
   (write-line "    }" fp)
   (write-line "    : text { key = \"copyinfo\"; value = \"Layer: GOK_abs-AttABS, -AttREL, -AttBAU0\"; }" fp)
+  (write-line "    spacer;" fp)
+  (write-line "    : button {" fp)
+  (write-line "      key = \"update\";" fp)
+  (write-line "      label = \"Auf bestehende Bloecke aendern\";" fp)
+  (write-line "      width = 35;" fp)
+  (write-line "      fixed_width = true;" fp)
+  (write-line "    }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
 
@@ -1744,6 +1858,7 @@
   (mode_tile "freezeabs" mode)
   (mode_tile "freezerel" mode)
   (mode_tile "freezebau0" mode)
+  (mode_tile "update" mode)
 )
 
 
@@ -1940,6 +2055,31 @@
         )
       )
 
+      ;; Aendern: Settings auf bestehende Bloecke anwenden
+      (action_tile "update"
+        (strcat
+          "(setq dlg-bau0 (get_tile \"bau0\"))"
+          "(setq dlg-byblock (get_tile \"byblock\"))"
+          "(setq dlg-movelayer (get_tile \"movelayer\"))"
+          "(setq dlg-layer-idx (get_tile \"layerlist\"))"
+          "(setq dlg-copymode (get_tile \"copymode\"))"
+          "(setq dlg-copyblock (get_tile \"copyblock\"))"
+          "(setq dlg-scale (get_tile \"scale\"))"
+          "(setq dlg-suffix (get_tile \"suffix\"))"
+          "(setq dlg-font (get_tile \"font\"))"
+          "(setq dlg-copylayer (get_tile \"copylayer\"))"
+          "(setq dlg-colorblock (get_tile \"colorblock\"))"
+          "(setq dlg-colorabs (get_tile \"colorabs\"))"
+          "(setq dlg-colorrel (get_tile \"colorrel\"))"
+          "(setq dlg-colorbau0 (get_tile \"colorbau0\"))"
+          "(setq dlg-freezeabs (get_tile \"freezeabs\"))"
+          "(setq dlg-freezerel (get_tile \"freezerel\"))"
+          "(setq dlg-freezebau0 (get_tile \"freezebau0\"))"
+          "(setq dlg-action \"update\")"
+          "(done_dialog 3)"
+        )
+      )
+
       ;; Schliessen
       (action_tile "close" "(setq dlg-action \"close\")(done_dialog 0)")
 
@@ -2044,6 +2184,15 @@
               )
             )
           )
+
+          ;; Aendern: Settings auf bestehende Bloecke anwenden?
+          (if (= dlg-action "update")
+            (progn
+              (SBZ:log-write "INFO" "Aendern: Bestehende Bloecke aktualisieren")
+              (setq count (SBZ:update-existing-blocks))
+              (princ (strcat "\n" (itoa count) " Bloecke aktualisiert (Schriftart, Farben, Layer)."))
+            )
+          )
         )
         ;; Schliessen ohne Speichern
         (progn
@@ -2077,10 +2226,80 @@
 )
 
 
+;;; ----------------------------------------------------------------------------
+;;; c:SBZPURGE - Kopie-Bloecke loeschen + Block-Definition purgen
+;;; Loescht alle Instanzen des Kopie-Blocks und entfernt die Definition.
+;;; Beim naechsten SETBLOCKZ wird die Definition mit aktuellen Settings
+;;; (Schriftart, Farben, Texthoehe) neu erstellt.
+;;; ----------------------------------------------------------------------------
+(defun c:SBZPURGE ( / *error* old-cmdecho blk-name ss count blocks blk-def)
+  (SBZ:ensure-init)
+  (defun *error* (msg)
+    (if (not (SBZ:cancel-p msg))
+      (progn
+        (princ (strcat "\nFehler: " msg))
+        (SBZ:log-write "ERROR" (strcat "SBZPURGE Error-Handler: " msg))
+      )
+    )
+    (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
+    (princ)
+  )
+  (setq old-cmdecho (getvar "CMDECHO"))
+  (setvar "CMDECHO" 0)
+
+  (setq blk-name *SBZ:cfg-copyblock*)
+  (SBZ:log-write "INFO" (strcat "SBZPURGE: Starte fuer Block '" blk-name "'"))
+
+  ;; Schritt 1: Alle Instanzen im Modelspace loeschen
+  (setq ss (ssget "X" (list (cons 2 blk-name) (cons 410 "Model"))))
+  (if (and ss (> (sslength ss) 0))
+    (progn
+      (setq count (sslength ss))
+      (command "._erase" ss "")
+      (princ (strcat "\n" (itoa count) " '" blk-name "' Bloecke geloescht."))
+      (SBZ:log-write "INFO" (strcat (itoa count) " Instanzen geloescht"))
+    )
+    (progn
+      (princ (strcat "\nKeine '" blk-name "' Bloecke im Modelspace gefunden."))
+      (SBZ:log-write "INFO" "Keine Instanzen gefunden")
+    )
+  )
+
+  ;; Schritt 2: Block-Definition purgen
+  (setq blocks (vla-get-blocks (vla-get-activedocument (vlax-get-acad-object))))
+  (if (not (vl-catch-all-error-p
+        (setq blk-def (vl-catch-all-apply 'vla-item (list blocks blk-name)))))
+    (progn
+      (if (not (vl-catch-all-error-p
+            (vl-catch-all-apply 'vla-delete (list blk-def))))
+        (progn
+          (princ (strcat "\nBlock-Definition '" blk-name "' geloescht."))
+          (SBZ:log-write "INFO" (strcat "Block-Definition '" blk-name "' geloescht"))
+        )
+        (progn
+          (princ (strcat "\nBlock-Definition konnte nicht geloescht werden (noch in Verwendung?)."))
+          (princ "\nVersuche: PURGE → Bloecke → " blk-name)
+          (SBZ:log-write "WARN" "Block-Definition konnte nicht geloescht werden")
+        )
+      )
+    )
+    (progn
+      (princ (strcat "\nBlock-Definition '" blk-name "' existiert nicht."))
+      (SBZ:log-write "INFO" "Block-Definition existiert nicht")
+    )
+  )
+
+  (princ "\nBeim naechsten SETBLOCKZ wird der Block mit aktuellen Settings neu erstellt.")
+  (if old-cmdecho (setvar "CMDECHO" old-cmdecho))
+  (SBZ:log-write "INFO" "SBZPURGE beendet")
+  (princ)
+)
+
+
 ;;; ============================================================================
 ;;; INITIALISIERUNG (NUR PRINC!)
 ;;; ============================================================================
 
 (princ (strcat "\nSetBlockZ.lsp v" *SBZ:version* " geladen."))
-(princ "\nBefehle: SETBLOCKZ | SBZSETTINGS | SBZDEBUG")
+(princ "\nBefehle: SETBLOCKZ | SBZSETTINGS | SBZPURGE | SBZDEBUG")
 (princ)
