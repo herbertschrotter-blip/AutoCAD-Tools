@@ -2,7 +2,7 @@
 ;;; SetBlockZ.lsp
 ;;; Setzt Block-Z-Koordinaten aus Attributwerten (Vermessungshöhen)
 ;;;
-;;; Version: 1.14.2
+;;; Version: 1.15.1
 ;;; Datum: 2026-03-22
 ;;; Autor: Herbert Schrotter
 ;;; Namespace: SBZ (SetBlockZ)
@@ -35,7 +35,7 @@
 ;;; KONFIGURATION (KONSTANTEN)
 ;;; ============================================================================
 
-(setq *SBZ:version* "1.14.2")
+(setq *SBZ:version* "1.15.1")
 (setq *SBZ:namespace* "SBZ")
 (setq *SBZ:appdata-folder* "SetBlockZ")
 
@@ -1732,52 +1732,48 @@
   (write-line "  spacer;" fp)
 
   ;; ===== BOX 3: BLOCK =====
-  ;; Vertikale Ausrichtung durch identische column-Struktur
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"Block\";" fp)
   (write-line "    : edit_box { key = \"copyblock\"; label = \"Name:\"; }" fp)
-  (write-line "    : concatenation {" fp)
-  (write-line "      : column { fixed_width = true; width = 23;" fp)
-  (write-line "        : edit_box { key = \"copylayer\"; label = \"Layer:\"; }" fp)
-  (write-line "        : popup_list { key = \"colorblock\"; label = \"Farbe:\"; }" fp)
-  (write-line "      }" fp)
-  (write-line "      : column { fixed_width = true; width = 23;" fp)
-  (write-line "        : edit_box { key = \"suffix\"; label = \"Suffix:        \"; }" fp)
-  (write-line "        : edit_box { key = \"scale\"; label = \"Skalierung:\"; }" fp)
-  (write-line "      }" fp)
+  (write-line "    : row {" fp)
+  (write-line "      : edit_box { key = \"copylayer\"; label = \"Layer:\"; edit_width = 10; }" fp)
+  (write-line "      : edit_box { key = \"scale\"; label = \"Skalierung:\"; edit_width = 10; }" fp)
   (write-line "    }" fp)
+  (write-line "    : popup_list { key = \"colorblock\"; label = \"Farbe:\"; }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
 
   ;; ===== BOX 4: ATTRIBUT =====
-  ;; Schriftart oben, dann Tabelle: pro Attribut Farbe + Einfrieren
+  ;; Schriftart oben, dann Tabelle (Farbe + Frieren + Suffix in Absolut-Zeile)
   (write-line "  : boxed_column {" fp)
   (write-line "    label = \"Attribut\";" fp)
   (write-line "    : popup_list { key = \"font\"; label = \"Schriftart:\"; }" fp)
   (write-line "    spacer;" fp)
   ;; Spalten-Header
   (write-line "    : row {" fp)
-  (write-line "      : text { width = 10; value = \"\"; }" fp)
-  (write-line "      : text { width = 18; value = \"Farbe\"; }" fp)
-  (write-line "      : text { width = 10; value = \"Frieren\"; }" fp)
+  (write-line "      : text { width = 8; value = \"\"; }" fp)
+  (write-line "      : text { width = 14; value = \"Farbe\"; }" fp)
+  (write-line "      : text { width = 6; value = \"Frieren\"; }" fp)
+  (write-line "      : text { width = 14; value = \"Suffix\"; }" fp)
   (write-line "    }" fp)
-  ;; Absolut
+  ;; Absolut (mit Suffix)
   (write-line "    : row {" fp)
-  (write-line "      : text { width = 10; value = \"Absolut\"; }" fp)
-  (write-line "      : popup_list { key = \"colorabs\"; width = 18; }" fp)
-  (write-line "      : toggle { key = \"freezeabs\"; label = \"\"; width = 10; }" fp)
+  (write-line "      : text { width = 8; value = \"Absolut\"; }" fp)
+  (write-line "      : popup_list { key = \"colorabs\"; width = 14; }" fp)
+  (write-line "      : toggle { key = \"freezeabs\"; label = \"\"; width = 6; }" fp)
+  (write-line "      : edit_box { key = \"suffix\"; label = \"\"; edit_width = 10; }" fp)
   (write-line "    }" fp)
   ;; Relativ
   (write-line "    : row {" fp)
-  (write-line "      : text { width = 10; value = \"Relativ\"; }" fp)
-  (write-line "      : popup_list { key = \"colorrel\"; width = 18; }" fp)
-  (write-line "      : toggle { key = \"freezerel\"; label = \"\"; width = 10; }" fp)
+  (write-line "      : text { width = 8; value = \"Relativ\"; }" fp)
+  (write-line "      : popup_list { key = \"colorrel\"; width = 14; }" fp)
+  (write-line "      : toggle { key = \"freezerel\"; label = \"\"; width = 6; }" fp)
   (write-line "    }" fp)
   ;; Bau-0
   (write-line "    : row {" fp)
-  (write-line "      : text { width = 10; value = \"Bau-0\"; }" fp)
-  (write-line "      : popup_list { key = \"colorbau0\"; width = 18; }" fp)
-  (write-line "      : toggle { key = \"freezebau0\"; label = \"\"; width = 10; }" fp)
+  (write-line "      : text { width = 8; value = \"Bau-0\"; }" fp)
+  (write-line "      : popup_list { key = \"colorbau0\"; width = 14; }" fp)
+  (write-line "      : toggle { key = \"freezebau0\"; label = \"\"; width = 6; }" fp)
   (write-line "    }" fp)
   (write-line "  }" fp)
   (write-line "  spacer;" fp)
